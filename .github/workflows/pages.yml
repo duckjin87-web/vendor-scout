@@ -1,14 +1,11 @@
 name: Deploy site to GitHub Pages
 
 # site/ 정적 데모를 GitHub Pages로 배포한다.
-# main 병합 없이 테스트 배포할 수 있도록 개발 브랜치 push에서도 트리거.
-# (검증 끝나면 branches를 [main]만 남기고 정리 권장)
+# main 브랜치 push(site/ 또는 이 워크플로우 변경 시) 또는 Actions 탭 수동 실행으로 트리거.
 
 on:
   push:
-    branches:
-      - main
-      - claude/github-test-site-329rjs
+    branches: [main]
     paths:
       - 'site/**'
       - '.github/workflows/pages.yml'
