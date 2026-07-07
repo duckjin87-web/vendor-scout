@@ -1,0 +1,7 @@
+{
+  "name": "vendor-scout",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { "collect": "node src/index.js" },
+  "engines": { "node": ">=20" }
+}
