@@ -87,6 +87,16 @@ a:hover { text-decoration: underline; }
 .report { padding: 8px 0 60px; scroll-margin-top: 76px; }
 .hidden { display: none !important; }
 
+.actions { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.actions .act-hint { font-size: 12.5px; color: var(--faint); margin-right: auto; }
+.actions .act {
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 9px; cursor: pointer; transition: all .15s;
+}
+.actions .act:hover { border-color: var(--accent); color: var(--accent); }
+.actions .act.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.actions .act.primary:hover { filter: brightness(1.06); color: #fff; }
+
 .summary {
   display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center;
   background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
@@ -169,6 +179,24 @@ footer { border-top: 1px solid var(--border); color: var(--faint); font-size: 12
 footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
 
 .empty { text-align: center; color: var(--faint); padding: 50px 0; }
+
+/* 인쇄 / PDF 저장 — 방문용 리포트만 깔끔하게 남긴다 */
+@media print {
+  :root {
+    --bg: #fff; --panel: #fff; --panel-2: #fff; --border: #ccc; --text: #000;
+    --muted: #333; --faint: #666; --shadow: none;
+  }
+  .topbar, .hero, footer, .actions { display: none !important; }
+  .wrap { max-width: 100%; padding: 0; }
+  .report { padding: 0; }
+  .summary, .block, .riskbox { box-shadow: none; break-inside: avoid; }
+  .blocks { grid-template-columns: 1fr 1fr; }
+  .block.full { grid-column: 1 / -1; }
+  .grade-tag, .badge-A, .badge-B, .badge-C, .badge-D, .srcpill, .riskbox li .t {
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  @page { margin: 14mm; }
+}
 
 @media (max-width: 720px) {
   .blocks { grid-template-columns: 1fr; }

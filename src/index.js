@@ -3,6 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import { emptyReport, overallGrade } from './report/schema.js';
+import { buildMarkdown } from './report/build.js';
 import { collectCorpBasic } from './collectors/fsc_corp.js';
 import { collectFinance } from './collectors/fsc_finance.js';
 import { collectMfdsBiz } from './collectors/mfds_biz.js';
@@ -91,7 +92,12 @@ if (prev.length) {
 const file = path.join(dir, `${safe}_v${report.meta.version}.json`);
 fs.writeFileSync(file, JSON.stringify(report, null, 2));
 
+// 방문 전 읽기용 Markdown 리포트도 같은 버전으로 저장 (인쇄/공유용)
+const mdFile = path.join(dir, `${safe}_v${report.meta.version}.md`);
+fs.writeFileSync(mdFile, buildMarkdown(report));
+
 console.log(`✔ 스냅샷 저장: ${file}`);
+console.log(`✔ 방문 리포트: ${mdFile}`);
 console.log(`  전체신뢰도: ${report.meta.overall_grade}`);
 console.log(`  크로스체크 대상: ${report.crosscheck.length}건 / 리스크 플래그: ${report.risk_flags.length}건`);
 if (report.diff_from_prev?.length) console.log(`  직전 버전 대비 변경: ${report.diff_from_prev.length}건`);

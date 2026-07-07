@@ -12,6 +12,20 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 const GRADE_LABEL = { A: '공식 API', B: '공공DB 간접', C: '추정/프록시', D: '데이터 공백' };
 
+let currentReport = null;
+
+function downloadJSON() {
+  if (!currentReport) return;
+  const m = currentReport.meta;
+  const safe = (m.vendor_id || m.vendor_name).replace(/[^\w가-힣-]/g, '_');
+  const blob = new Blob([JSON.stringify(currentReport, null, 2)], { type: 'application/json' });
+  const a = el('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${safe}_v${m.version}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 function fieldRow(fld) {
   const row = el('div', 'field');
   row.appendChild(el('span', 'grade-tag g' + fld.grade, esc(fld.grade)));
@@ -82,11 +96,23 @@ function renderCrosscheck(rows) {
 }
 
 function render(report) {
+  currentReport = report;
   const root = $('#report');
   root.innerHTML = '';
   root.classList.remove('hidden');
 
   const m = report.meta;
+
+  // 방문 리포트 저장/인쇄 툴바
+  const actions = el('div', 'actions');
+  const dlBtn = el('button', 'act', '⬇ JSON 다운로드');
+  dlBtn.addEventListener('click', downloadJSON);
+  const printBtn = el('button', 'act primary', '🖨 인쇄 / PDF로 저장');
+  printBtn.addEventListener('click', () => window.print());
+  actions.appendChild(el('span', 'act-hint', '방문 전 리포트로 저장 →'));
+  actions.appendChild(dlBtn);
+  actions.appendChild(printBtn);
+  root.appendChild(actions);
   const allFields = [...report.basic, ...report.capacity, ...report.finance];
   const gapTotal = allFields.filter((f) => f.data_gap).length;
 
