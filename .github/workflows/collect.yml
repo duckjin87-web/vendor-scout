@@ -1,1 +1,51 @@
+name: Collect vendor snapshot
 
+# 업체명을 입력받아 공공 API를 조회하고 불변 스냅샷(data/snapshots/*.json)을 커밋한다.
+# 수동 실행 전용 — API 키(DATA_GO_KR_API_KEY)를 레포 Secret에 등록해야 동작.
+
+on:
+  workflow_dispatch:
+    inputs:
+      vendor_name:
+        description: '업체명 (예: 리니어코스메틱)'
+        required: true
+        type: string
+      corp_reg_no:
+        description: '법인등록번호 (선택 — 동명업체 식별용)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run collector
+        env:
+          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: node src/index.js "${{ inputs.vendor_name }}" "${{ inputs.corp_reg_no }}"
+
+      - name: Commit snapshot
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data/snapshots)" ]; then
+            git add data/snapshots
+            git commit -m "snapshot: ${{ inputs.vendor_name }} ($(date -u +%Y-%m-%d))"
+            git push
+          else
+            echo "변경된 스냅샷 없음 — 커밋 생략"
+          fi

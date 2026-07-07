@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vendor-scout · 화장품 제조업체 사전검증 리포트</title>
+  <meta name="description" content="업체명 입력 → 공공 API 실시간 조회 → 조회시점 스냅샷 리포트 → 방문 크로스체크. 화장품 제조업체 신규처 발굴용 사전 정보 확보·검증 서비스.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232f6df6'/><text x='50' y='70' font-size='60' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'>V</text></svg>">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <div class="logo">
+        <span class="mark">V</span>
+        <span>vendor-scout <small>화장품 제조업체 사전검증</small></span>
+      </div>
+      <span class="spacer"></span>
+      <span class="demo-badge">DEMO · 샘플 데이터</span>
+      <a class="ghlink" href="https://github.com/duckjin87-web/vendor-scout" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <h1>업체 하나로, 방문 전에 끝내는 사전검증</h1>
+      <p>업체명 입력 → 공공 API 실시간 조회 → <b>조회시점 스냅샷 리포트</b> → 방문 크로스체크.
+        필드마다 출처·신뢰도(A~D)를 기록하고, 조회 실패도 <code>data_gap</code>으로 명시합니다.</p>
+
+      <form id="searchForm" class="searchbar" autocomplete="off">
+        <input id="q" type="text" placeholder="업체명을 입력하세요 (예: 리니어코스메틱)" aria-label="업체명">
+        <button type="submit">사전검증 조회</button>
+      </form>
+
+      <div class="chips">
+        <span class="lbl">예시:</span>
+        <button type="button" class="chip" data-name="리니어코스메틱">리니어코스메틱 (A등급)</button>
+        <button type="button" class="chip" data-name="샘플뷰티랩">샘플뷰티랩 (공백 다수)</button>
+      </div>
+    </section>
+
+    <section id="report" class="report hidden"></section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>vendor-scout · 조회 1회 = 불변 스냅샷 1개. 이 페이지는 API 키 없이 동작하는 <b>정적 데모</b>입니다.</span>
+      <span>출처: 식약처 · 금융위 · 국민연금 · 관세청 (data.go.kr)</span>
+    </div>
+  </footer>
+
+  <script src="assets/samples.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>
