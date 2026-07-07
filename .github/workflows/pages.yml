@@ -36,6 +36,10 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        with:
+          # Public 레포에서 Pages가 아직 안 켜져 있으면 워크플로우가 자동으로 켠다
+          # (Settings → Pages 수동 설정 불필요)
+          enablement: true
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
