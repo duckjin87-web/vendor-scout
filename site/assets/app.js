@@ -26,21 +26,30 @@ function downloadJSON() {
   URL.revokeObjectURL(a.href);
 }
 
+// CGMP 적합업소 여부 — GMP 인증 필드가 CGMP 유효/적합이면 해당 행 음영
+function isCgmpField(fld) {
+  const v = String(fld.value || '');
+  return /cgmp/i.test(v) && /(적합|유효|인증)/.test(v);
+}
+
+// 3열 압축 행: [등급+항목] | [값] | [출처(우측 소형)]
 function fieldRow(fld) {
-  const row = el('div', 'field');
-  row.appendChild(el('span', 'grade-tag g' + fld.grade, esc(fld.grade)));
-  row.appendChild(el('div', 'k', esc(fld.key)));
-
-  const cell = el('div');
-  cell.style.flex = '1';
   const isGap = fld.data_gap || fld.value == null;
-  const stale = fld.fresh === false ? ' <span class="stale">⚠ 기간초과</span>' : '';
-  cell.appendChild(el('div', 'v' + (isGap ? ' gap' : ''), (isGap ? '데이터 없음 (gap)' : esc(fld.value)) + stale));
-  const src = [fld.source, fld.as_of].filter(Boolean).join(' · ');
-  const noteBits = [src, fld.note].filter(Boolean).join(' — ');
-  if (noteBits) cell.appendChild(el('div', 'note', esc(noteBits)));
+  const row = el('div', 'field' + (isCgmpField(fld) ? ' cgmp' : ''));
+  if (fld.note) row.title = fld.note;
 
-  row.appendChild(cell);
+  const k = el('div', 'k');
+  k.appendChild(el('span', 'gdot g' + fld.grade, esc(fld.grade)));
+  k.appendChild(el('span', 'ktxt', esc(fld.key)));
+  row.appendChild(k);
+
+  const stale = fld.fresh === false ? ' <span class="stale">⚠기간초과</span>' : '';
+  const info = fld.note ? ` <span class="ninfo" title="${esc(fld.note)}">ⓘ</span>` : '';
+  row.appendChild(el('div', 'v' + (isGap ? ' gap' : ''), (isGap ? '데이터 없음' : esc(fld.value)) + stale + info));
+
+  const src = el('div', 'src');
+  src.innerHTML = esc(fld.source || '—') + (fld.as_of ? `<br><span class="asof">${esc(fld.as_of)}</span>` : '');
+  row.appendChild(src);
   return row;
 }
 
@@ -49,6 +58,53 @@ function block(title, icon, fields) {
   const gapCount = fields.filter((f) => f.data_gap).length;
   const h = el('h3', null, `<span class="ic">${icon}</span>${esc(title)}<span class="cnt">${fields.length}개 필드${gapCount ? ' · 공백 ' + gapCount : ''}</span>`);
   b.appendChild(h);
+  fields.forEach((f) => b.appendChild(fieldRow(f)));
+  return b;
+}
+
+// 재무 3개년 매출 추이 SVG (단일 시리즈) — 100억 이상 구간·막대 음영
+function financeChart(history) {
+  const W = 340, H = 172, padL = 10, padR = 10, padT = 26, padB = 24;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const threshold = 100;
+  const maxV = Math.max(threshold, ...history.map((d) => d.revenue)) * 1.2;
+  const y = (v) => padT + plotH - (v / maxV) * plotH;
+  const n = history.length, bandW = plotW / n, barW = Math.min(46, bandW * 0.5);
+  const yT = y(threshold);
+
+  let s = `<svg viewBox="0 0 ${W} ${H}" class="finchart" role="img" aria-label="매출액 ${n}개년 추이">`;
+  s += `<rect x="${padL}" y="${padT}" width="${plotW}" height="${(yT - padT).toFixed(1)}" class="fin-band"/>`;
+  s += `<line x1="${padL}" y1="${yT.toFixed(1)}" x2="${padL + plotW}" y2="${yT.toFixed(1)}" class="fin-thresh"/>`;
+  s += `<text x="${padL + plotW}" y="${(yT - 4).toFixed(1)}" class="fin-thresh-lbl" text-anchor="end">100억</text>`;
+  history.forEach((d, i) => {
+    const cx = padL + bandW * (i + 0.5);
+    const yy = y(d.revenue), h = padT + plotH - yy;
+    const hi = d.revenue >= threshold;
+    s += `<rect x="${(cx - barW / 2).toFixed(1)}" y="${yy.toFixed(1)}" width="${barW}" height="${Math.max(h, 1).toFixed(1)}" rx="4" class="fin-bar ${hi ? 'hi' : 'lo'}"><title>${d.year}년 · 매출 ${d.revenue}억 · 영업이익 ${d.operatingProfit}억</title></rect>`;
+    s += `<text x="${cx.toFixed(1)}" y="${(yy - 6).toFixed(1)}" class="fin-val" text-anchor="middle">${d.revenue}억</text>`;
+    s += `<text x="${cx.toFixed(1)}" y="${H - 7}" class="fin-x" text-anchor="middle">${d.year}</text>`;
+  });
+  s += `</svg>`;
+  return s;
+}
+
+// 재무 블록 = 3개년 매출 추이 그래프 + 최신연도 압축 행
+function financeBlock(report) {
+  const fields = report.finance;
+  const hist = report.finance_history || [];
+  const b = el('div', 'block');
+  const gapCount = fields.filter((f) => f.data_gap).length;
+  b.appendChild(el('h3', null, `<span class="ic">💰</span>재무 (금융위)<span class="cnt">${fields.length}개 필드${gapCount ? ' · 공백 ' + gapCount : ''}</span>`));
+
+  if (hist.length) {
+    const latest = hist[hist.length - 1].year;
+    const w = el('div', 'finwrap');
+    w.appendChild(el('div', 'finhead', `<span>매출액 추이 (${hist[0].year}~${latest})</span><span class="finnote">100억 이상 음영</span>`));
+    w.insertAdjacentHTML('beforeend', financeChart(hist));
+    b.appendChild(w);
+  } else {
+    b.appendChild(el('div', 'finmiss', '공식 재무 미제출 법인 — 3개년 추이 그래프 생략'));
+  }
   fields.forEach((f) => b.appendChild(fieldRow(f)));
   return b;
 }
@@ -140,7 +196,7 @@ function render(report) {
   const blocks = el('div', 'blocks');
   blocks.appendChild(block('기업 기본정보', '🏢', report.basic));
   blocks.appendChild(block('생산역량 · 인원', '🏭', report.capacity));
-  blocks.appendChild(block('재무 (금융위)', '💰', report.finance));
+  blocks.appendChild(financeBlock(report));
   const diffBlock = renderDiff(report.diff_from_prev);
   if (diffBlock) blocks.appendChild(diffBlock);
   blocks.appendChild(renderCrosscheck(report.crosscheck));

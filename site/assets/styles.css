@@ -138,13 +138,37 @@ a:hover { text-decoration: underline; }
 .block > h3 .ic { font-size: 15px; }
 .block > h3 .cnt { margin-left: auto; font-size: 12px; color: var(--faint); font-weight: 500; }
 
-.field { padding: 11px 18px; border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: flex-start; }
+/* 3열 압축 행: 항목 | 값 | 출처(우측 소형) */
+.field {
+  display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.25fr) minmax(0, 0.85fr);
+  gap: 10px; align-items: baseline; padding: 6px 16px; border-bottom: 1px solid var(--border);
+}
 .field:last-child { border-bottom: 0; }
-.field .k { flex: 0 0 42%; font-size: 13px; color: var(--muted); }
-.field .v { flex: 1; font-size: 13.5px; font-weight: 500; }
+.field .k { display: flex; gap: 6px; align-items: center; min-width: 0; font-size: 12.5px; color: var(--muted); }
+.field .k .ktxt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field .v { font-size: 13px; font-weight: 500; min-width: 0; word-break: break-word; }
 .field .v.gap { color: var(--faint); font-style: italic; font-weight: 400; }
-.field .note { font-size: 11.5px; color: var(--faint); margin-top: 3px; line-height: 1.4; }
-.field .stale { font-size: 11px; color: var(--gC); margin-left: 6px; }
+.field .src { font-size: 10.5px; color: var(--faint); text-align: right; line-height: 1.35; }
+.field .src .asof { color: var(--faint); }
+.field .stale { font-size: 10.5px; color: var(--gC); margin-left: 4px; white-space: nowrap; }
+.field .ninfo { font-size: 10.5px; color: var(--faint); cursor: help; }
+.gdot { flex: 0 0 auto; font-size: 9.5px; font-weight: 700; width: 15px; height: 15px; border-radius: 4px; display: grid; place-items: center; }
+/* CGMP 적합업소 행 음영 */
+.field.cgmp { background: var(--gA-bg); box-shadow: inset 3px 0 0 var(--gA); }
+
+/* 재무 3개년 추이 그래프 */
+.finwrap { padding: 12px 16px 6px; border-bottom: 1px solid var(--border); }
+.finhead { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.finhead .finnote { font-size: 10.5px; color: var(--accent); }
+.finchart { width: 100%; height: auto; display: block; }
+.fin-band { fill: var(--accent); opacity: .07; }
+.fin-thresh { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; opacity: .55; }
+.fin-thresh-lbl { fill: var(--accent); font-size: 9px; font-weight: 600; }
+.fin-bar.hi { fill: var(--accent); }
+.fin-bar.lo { fill: var(--faint); opacity: .5; }
+.fin-val { fill: var(--text); font-size: 10px; font-weight: 700; }
+.fin-x { fill: var(--muted); font-size: 10px; }
+.finmiss { padding: 14px 16px; font-size: 12.5px; color: var(--faint); font-style: italic; border-bottom: 1px solid var(--border); }
 
 .grade-tag {
   flex: 0 0 auto; font-size: 11px; font-weight: 700; width: 20px; height: 20px;
@@ -192,7 +216,8 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .summary, .block, .riskbox { box-shadow: none; break-inside: avoid; }
   .blocks { grid-template-columns: 1fr 1fr; }
   .block.full { grid-column: 1 / -1; }
-  .grade-tag, .badge-A, .badge-B, .badge-C, .badge-D, .srcpill, .riskbox li .t {
+  .grade-tag, .gdot, .badge-A, .badge-B, .badge-C, .badge-D, .srcpill, .riskbox li .t,
+  .field.cgmp, .fin-band, .fin-bar, .fin-thresh, .finchart {
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   @page { margin: 14mm; }
@@ -203,5 +228,6 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .summary { grid-template-columns: 1fr; text-align: left; }
   .summary .stats { justify-content: flex-start; text-align: left; }
   .grade-badge { width: 60px; height: 60px; font-size: 30px; }
-  .field .k { flex-basis: 46%; }
+  .field { grid-template-columns: 1fr 1fr; }
+  .field .src { grid-column: 1 / -1; text-align: left; }
 }
