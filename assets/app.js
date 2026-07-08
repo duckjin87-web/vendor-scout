@@ -190,6 +190,13 @@ function render(report) {
   sm.appendChild(stats);
   root.appendChild(sm);
 
+  // 자동 생성 데모 리포트 표시 (미등록 업체명 조회 시)
+  if (m.generated) {
+    root.appendChild(el('div', 'gennote',
+      '⚙️ <b>자동 생성 데모 데이터</b> — 예시 업체(리니어코스메틱·샘플뷰티랩) 외 입력은 UI 검증용으로 이름 기반 합성됩니다. ' +
+      '실 서비스에서는 이 입력이 <b>data.go.kr 공공 API로 실시간 조회</b>됩니다.'));
+  }
+
   const rf = renderRiskFlags(report.risk_flags);
   if (rf) root.appendChild(rf);
 
@@ -238,14 +245,12 @@ function lookup(name) {
     const hit = Object.keys(db).find((k) => k.includes(key) || key.includes(k));
     report = hit ? db[hit] : null;
   }
+  // 범용성: 미등록 업체명은 이름 기반으로 데모 리포트 자동 생성
+  if (!report && window.generateReport) report = window.generateReport(key);
   if (!report) {
     const root = $('#report');
     root.classList.remove('hidden');
-    root.innerHTML =
-      `<div class="empty">「${esc(key)}」 데모 데이터가 없습니다.<br>` +
-      `아래 예시 업체로 테스트하세요: <b>${Object.keys(db).join('</b>, <b>')}</b><br><br>` +
-      `<span style="font-size:12.5px">실 서비스에서는 이 입력이 data.go.kr 공공 API로 실시간 조회됩니다.</span></div>`;
-    root.scrollIntoView({ behavior: 'smooth' });
+    root.innerHTML = `<div class="empty">업체명을 입력하세요.</div>`;
     return;
   }
   render(report);
