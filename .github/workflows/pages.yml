@@ -1,13 +1,17 @@
 name: Deploy site to GitHub Pages
 
-# site/ 정적 데모를 GitHub Pages로 배포한다.
-# main 브랜치 push(site/ 또는 이 워크플로우 변경 시) 또는 Actions 탭 수동 실행으로 트리거.
+# 정적 데모 사이트(루트 index.html + assets/)를 GitHub Pages로 배포한다.
+# main 브랜치 push 또는 Actions 탭 수동 실행으로 트리거.
+# 앱이 저장소 루트에 있으므로 Pages 소스가 "GitHub Actions"든 "Deploy from a branch(main/root)"든
+# 모두 동일하게 이 앱이 서빙된다.
 
 on:
   push:
     branches: [main]
     paths:
-      - 'site/**'
+      - 'index.html'
+      - 'assets/**'
+      - '.nojekyll'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -16,7 +20,6 @@ permissions:
   pages: write
   id-token: write
 
-# 동시 배포 방지 — 진행 중 배포는 취소하지 않고 큐잉
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -34,18 +37,19 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
         with:
-          # Public 레포에서 Pages가 아직 안 켜져 있으면 워크플로우가 자동으로 켠다
-          # (Settings → Pages 수동 설정 불필요)
+          # 소스가 branch로 되어 있어도 워크플로우 실행 시 GitHub Actions 방식으로 활성화
           enablement: true
 
-      - name: Stamp asset version (cache-bust)
-        # index.html의 ?v=__V__ 를 커밋 SHA로 치환 → 배포 즉시 새 자산 로드
-        run: sed -i "s/__V__/${GITHUB_SHA::7}/g" site/index.html
+      - name: Stage site files
+        run: |
+          mkdir -p _site
+          cp index.html .nojekyll _site/
+          cp -r assets _site/assets
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment

@@ -52,19 +52,18 @@ vendor-scout/
 
 ## 데모 사이트 (GitHub Pages)
 
-API 키 없이 브라우저에서 리포트 UI를 검증할 수 있는 정적 데모가 `site/`에 있습니다.
+API 키 없이 브라우저에서 리포트 UI를 검증할 수 있는 정적 데모가 저장소 **루트**(`index.html` + `assets/`)에 있습니다.
 샘플 스냅샷 데이터로 4블록 리포트·A~D 신뢰도·크로스체크·리스크 플래그를 그대로 렌더링합니다.
 
-**배포 방법**
+**배포 방법** — 앱이 루트에 있어 Settings → Pages 소스가 **"GitHub Actions"** 든 **"Deploy from a branch (main / root)"** 든 동일하게 서빙됩니다.
 
-1. GitHub 레포 → **Settings → Pages → Build and deployment → Source = "GitHub Actions"** 선택
-2. `main` 브랜치에 push하거나 **Actions 탭 → "Deploy site to GitHub Pages" → Run workflow** 수동 실행
-3. 배포 URL: `https://duckjin87-web.github.io/vendor-scout/`
+1. `main`에 push → 자동 배포
+2. 배포 URL: `https://duckjin87-web.github.io/vendor-scout/`
 
 **로컬 미리보기**
 
 ```bash
-npx http-server site -p 8099   # → http://127.0.0.1:8099
+npx http-server . -p 8099   # → http://127.0.0.1:8099
 ```
 
 > 실 서비스(공공 API 실시간 조회)는 서버/시크릿이 필요하므로 정적 Pages로는 조회가 안 됩니다.
