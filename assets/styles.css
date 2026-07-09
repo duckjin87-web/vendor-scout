@@ -132,6 +132,18 @@ a:hover { text-decoration: underline; }
   font-size: 12.5px; color: var(--gC); background: var(--gC-bg);
   border-radius: 10px; padding: 10px 14px; margin-bottom: 18px; line-height: 1.5;
 }
+/* 식약처 실데이터 안내 */
+.livenote {
+  font-size: 12.5px; color: var(--gA); background: var(--gA-bg);
+  border-radius: 10px; padding: 10px 14px; margin-bottom: 18px; line-height: 1.5;
+}
+/* 실데이터 연결 버튼 */
+.proxybtn {
+  font-size: 12px; font-weight: 600; color: var(--muted); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; cursor: pointer; transition: all .15s;
+}
+.proxybtn:hover { border-color: var(--accent); color: var(--accent); }
+.proxybtn.on { color: var(--gA); border-color: var(--gA); background: var(--gA-bg); }
 
 /* Blocks */
 .blocks { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }

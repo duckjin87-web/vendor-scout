@@ -263,6 +263,72 @@ function generateReport(rawName) {
   };
 }
 
+// ── 실데이터 모드: 식약처(data.go.kr) 기능성화장품 보고품목 응답 → 리포트 매핑 ──
+// 프록시(Cloudflare Worker)가 반환한 식약처 JSON을 4블록 스키마로 변환.
+function isFresh5(dateStr) {
+  if (!dateStr) return false;
+  const s = String(dateStr).replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3');
+  const d = new Date(s);
+  if (isNaN(d)) return false;
+  const c = new Date(); c.setFullYear(c.getFullYear() - 5);
+  return d >= c;
+}
+function mapMfdsReport(name, data) {
+  const raw = (data && data.body && data.body.items)
+    || (data && data.response && data.response.body && data.response.body.items && data.response.body.items.item)
+    || [];
+  const list = Array.isArray(raw) ? raw : [raw].filter(Boolean);
+  const fresh = list.filter((i) => isFresh5(i.REPORT_DAY || i.report_day || i.PRDLST_REPORT_DE));
+  const forms = [...new Set(fresh.map((i) => i.DOSAGE_FORM || i.dosage_form || i.PRDLST_TYPE).filter(Boolean))];
+  const days = list.map((i) => String(i.REPORT_DAY || i.report_day || i.PRDLST_REPORT_DE || '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')).filter(Boolean).sort();
+  const lastDay = days.length ? days[days.length - 1] : null;
+  const today = '2026-07-07';
+  const exists = list.length > 0;
+
+  const basic = [
+    f('업체명', name, 'A', '식약처 보고품목 API', today),
+    f('식약처 화장품 보고 이력', exists ? `보고품목 ${list.length}건 (기능성화장품 신고 이력 존재)` : null, exists ? 'A' : 'D', '식약처 보고품목 API', today, exists ? '기능성화장품 책임판매/제조 신고 이력' : '식약처 기능성 보고 이력 없음 — 업체명 표기 상이 또는 미취급'),
+    f('최근 보고일', lastDay, exists ? 'A' : 'D', '식약처 보고품목 API', lastDay),
+    f('법인등록번호', null, 'D', '금융위 기업기본정보', null, '식약처 API 범위 밖 — 금융위 기업기본정보 연동 필요'),
+    f('대표자', null, 'D', '금융위 기업기본정보', null, '식약처 API 범위 밖 — 금융위 연동 필요'),
+    f('본점주소', null, 'D', '금융위 기업기본정보', null, '식약처 API 범위 밖 — 금융위 연동 필요'),
+  ];
+  const capacity = [
+    f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', today, fresh.length ? null : '최근 5년 보고 이력 없음'),
+    f('기능성 보고품목 수 (전체)', list.length || null, exists ? 'A' : 'D', '식약처 보고품목 API', today),
+    f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', today, 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
+    f('GMP 인증', null, 'D', '식약처 GMP', null, 'GMP 적합업소 API 연동 필요'),
+    f('수출 실적 (최근)', null, 'D', '관세청 수출입 실적', null, '관세청 API 연동 필요'),
+  ];
+  const finance = ['매출액', '영업이익', '총자산', '총부채', '자본금'].map((k) =>
+    f(k, null, 'D', '금융위 재무정보 API', null, '식약처 API 범위 밖 — 금융위 재무 API 연동 필요'));
+
+  const all = [...basic, ...capacity, ...finance];
+  const order = { A: 0, B: 1, C: 2, D: 3 };
+  const gs = all.filter((x) => !x.data_gap).map((x) => order[x.grade]).sort((a, b) => a - b);
+  const overall = gs.length ? ['A', 'B', 'C', 'D'][gs[Math.floor(gs.length / 2)]] : 'D';
+  const risk_flags = [];
+  if (!exists) risk_flags.push({ type: 'data_gap', source: 'mfds', detail: '식약처 기능성 보고 이력 없음 — 업체명 정확도/취급 여부 확인 필요' });
+  const crosscheck = all
+    .filter((x) => x.data_gap || x.grade === 'C')
+    .map((x) => ({ key: x.key, expected: x.value, verified: null, match: null, src_type: x.source }));
+
+  return {
+    meta: {
+      vendor_name: name,
+      vendor_id: name.replace(/[^\w가-힣]/g, '_'),
+      query_at: new Date().toISOString(),
+      version: 1,
+      overall_grade: overall,
+      sources_used: ['식약처 보고품목 API'],
+      max_age_years: 5,
+      live: true, // 식약처 실데이터
+    },
+    basic, capacity, finance, finance_history: [], crosscheck, risk_flags, diff_from_prev: [],
+  };
+}
+
 window.VENDOR_SAMPLES = { '리니어코스메틱': linear, '샘플뷰티랩': beautylab };
 window.VENDOR_SAMPLE_LIST = [linear, beautylab];
 window.generateReport = generateReport;
+window.mapMfdsReport = mapMfdsReport;
