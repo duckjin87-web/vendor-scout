@@ -1,0 +1,52 @@
+name: Fetch MFDS data to static JSON
+
+# GitHub Secret(DATA_GO_KR_API_KEY)으로 식약처 공공 API를 서버측에서 조회하고,
+# 결과를 data/mfds/*.json 으로 커밋한다. → Pages 배포가 이 JSON을 서빙하고 사이트가 읽어 렌더링.
+# 키는 이 워크플로우 안에만 존재하며 브라우저엔 결과 JSON만 나간다 (프록시 불필요).
+
+on:
+  workflow_dispatch:
+    inputs:
+      vendor_names:
+        description: '업체명 (쉼표로 구분, 예: 코스맥스,한국콜마,코스메카코리아)'
+        required: true
+        type: string
+  # 정기 갱신이 필요하면 주석 해제 (매일 18:00 UTC)
+  # schedule:
+  #   - cron: '0 18 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fetch-mfds
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch MFDS → data/mfds
+        env:
+          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: node src/build_index.js "${{ inputs.vendor_names }}"
+
+      - name: Commit results
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data/mfds)" ]; then
+            git add data/mfds
+            git commit -m "mfds: ${{ inputs.vendor_names }} ($(date -u +%F))"
+            git push
+          else
+            echo "변경된 데이터 없음 — 커밋 생략"
+          fi

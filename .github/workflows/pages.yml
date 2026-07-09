@@ -12,6 +12,7 @@ on:
       - 'index.html'
       - 'assets/**'
       - '.nojekyll'
+      - 'data/mfds/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -45,6 +46,8 @@ jobs:
           mkdir -p _site
           cp index.html .nojekyll _site/
           cp -r assets _site/assets
+          # 식약처 실데이터(Actions가 구운 정적 JSON)도 함께 배포
+          if [ -d data/mfds ]; then mkdir -p _site/data && cp -r data/mfds _site/data/mfds; fi
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
