@@ -17,6 +17,24 @@ function f(key, value, grade, source, asOf, note, fresh) {
   };
 }
 
+// 체크리스트 필드 (품질인증 / PLT거래여부 등) — checklist:[{label, ok}]
+function fc(key, checklist, grade, source, asOf, note) {
+  const anyOk = checklist.some((c) => c.ok);
+  return {
+    key,
+    value: checklist.filter((c) => c.ok).map((c) => c.label).join(', ') || '해당 없음',
+    checklist,
+    grade: anyOk ? grade : GRADE.GAP,
+    source: source || '—',
+    as_of: asOf || null,
+    fresh: asOf ? true : null,
+    data_gap: false,
+    note: note || null,
+  };
+}
+const CERTS = ['CGMP', 'ISO 22716', 'ISO 14001', '할랄(HALAL)', '비건(Vegan)'];
+function certList(oks) { return CERTS.map((label, i) => ({ label, ok: !!oks[i] })); }
+
 // ── 샘플 1: 리니어코스메틱 — 대체로 양호(A), 단 주소 3중 상충 1건 ──
 const linear = {
   meta: {
@@ -43,10 +61,9 @@ const linear = {
     f('사업장 주소 (연금기준)', '경기도 화성시 향남읍 제약공단로 51', 'C', '국민연금 사업장 정보', '2026-05-31', '본점/제조소와 번지 상이 — 실사 확인 필요'),
     f('기능성 보고품목 수 (5년내)', 42, 'A', '식약처 보고품목 API', '2026-07-07'),
     f('신고 제형 분포', '크림, 로션, 앰플/세럼, 마스크팩, 젤', 'C', '식약처 보고품목 API', '2026-07-07', 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
-    f('GMP 인증', 'CGMP 적합업소 (유효)', 'A', '식약처 GMP', '2024-11-20'),
+    fc('품질인증', certList([1, 1, 1, 0, 1]), 'A', '식약처 GMP·인증기관', '2024-11-20', 'CGMP 적합업소(유효) + 국제 품질/윤리 인증'),
     f('수출 실적 (최근)', '연 24회 통관 / 對 미·일·베트남', 'B', '관세청 수출입 실적', '2026-04-30'),
-    f('KPP 파렛트풀 거래', '거래중', 'B', 'KPP 거래처 대사', '2026-07-07', '렌탈 파렛트 거래 이력 확인'),
-    f('아주렌탈 등록', '미등록', 'B', '아주렌탈 거래처 대사', '2026-07-07', '등록 이력 없음'),
+    fc('PLT 거래여부', [{ label: 'KPP', ok: true }, { label: '아주렌탈', ok: false }], 'B', '렌탈 거래처 대사', '2026-07-07', '렌탈 파렛트 거래 이력'),
   ],
   finance: [
     f('매출액', '218억 원', 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
@@ -55,11 +72,11 @@ const linear = {
     f('총부채', '71억 원', 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
     f('자본금', '10억 원', 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
   ],
-  // 공식 등록된 최신연도(2024)부터 과거 3개년 — 추이 그래프용 (금액 단위: 억 원)
+  // 최신연도(2024) 기준 과거 3개년 전지표 — 통합 추이 그래프용 (금액 단위: 억 원)
   finance_history: [
-    { year: 2022, revenue: 92, operatingProfit: 4.2 },
-    { year: 2023, revenue: 151, operatingProfit: 12.6 },
-    { year: 2024, revenue: 218, operatingProfit: 19.4 },
+    { year: 2022, revenue: 92, operatingProfit: 4.2, assets: 108, debt: 58, capital: 10 },
+    { year: 2023, revenue: 151, operatingProfit: 12.6, assets: 139, debt: 65, capital: 10 },
+    { year: 2024, revenue: 218, operatingProfit: 19.4, assets: 164, debt: 71, capital: 10 },
   ],
   crosscheck: [
     { key: '실제 공장 소재지', expected: '3개 출처 상충 — 플래그 참조', verified: null, match: null, src_type: '3중대조' },
@@ -102,10 +119,9 @@ const beautylab = {
     f('사업장 주소 (연금기준)', '충청북도 청주시 흥덕구 오송생명로 12', 'C', '국민연금 사업장 정보', '2026-05-31'),
     f('기능성 보고품목 수 (5년내)', 3, 'A', '식약처 보고품목 API', '2026-07-07'),
     f('신고 제형 분포', '앰플/세럼', 'C', '식약처 보고품목 API', '2026-07-07', '단일 제형 — 소품목 소량 추정'),
-    f('GMP 인증', null, 'D', '식약처 GMP', null, 'CGMP 적합업소 목록 미포함'),
+    fc('품질인증', certList([0, 0, 0, 0, 0]), 'B', '식약처 GMP·인증기관', '2026-07-07', 'CGMP 적합업소 목록 미포함 — 인증 미확인'),
     f('수출 실적 (최근)', null, 'D', '관세청 수출입 실적', null, '통관 실적 없음 — 내수 전용 추정'),
-    f('KPP 파렛트풀 거래', '미거래', 'B', 'KPP 거래처 대사', '2026-07-07', '거래 이력 없음'),
-    f('아주렌탈 등록', '미등록', 'B', '아주렌탈 거래처 대사', '2026-07-07', '등록 이력 없음'),
+    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'B', '렌탈 거래처 대사', '2026-07-07', '거래 이력 없음'),
   ],
   finance: [
     f('매출액', null, 'D', '금융위 재무정보 API', null, '데이터 미제출 법인 — 외감 비대상 (등기부/자체제출 폴백)'),
@@ -184,37 +200,44 @@ function generateReport(rawName) {
   const hasGmp = isMaker && chance(0.6);
   const hasExport = chance(0.45);
   const pensionAddr = chance(0.7) ? hqAddr : `${region} ${pick(G_STREET)} ${ri(1, 99)}`;
-  const kpp = chance(0.4) ? '거래중' : '미거래';
-  const aju = chance(0.25) ? '거래중' : '미등록';
+  // 품질인증: CGMP는 제조·GMP 보유 시, 나머지는 확률적으로
+  const certs = certList([hasGmp, hasGmp && chance(0.7), chance(0.35), chance(0.3), chance(0.35)]);
+  const plt = [{ label: 'KPP', ok: chance(0.4) }, { label: '아주렌탈', ok: chance(0.25) }];
   const capacity = [
     f('사업장 가입자수 (연금기준)', `${emp}명`, 'C', '국민연금 사업장 정보', '2026-05-31', '실인원 프록시 — 파견/외주 미포함'),
     f('사업장 주소 (연금기준)', pensionAddr, 'C', '국민연금 사업장 정보', '2026-05-31'),
     f('기능성 보고품목 수 (5년내)', funcCount || null, funcCount ? 'A' : 'D', '식약처 보고품목 API', today, funcCount ? null : '보고 이력 없음 — 기능성 미취급 또는 공백'),
     f('신고 제형 분포', funcCount ? shuffle(G_FORMS).slice(0, ri(1, 5)).join(', ') : null, 'C', '식약처 보고품목 API', today, 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
-    f('GMP 인증', hasGmp ? 'CGMP 적합업소 (유효)' : null, hasGmp ? 'A' : 'D', '식약처 GMP', hasGmp ? '2024-11-20' : null, hasGmp ? null : 'CGMP 적합업소 목록 미포함'),
+    fc('품질인증', certs, 'A', '식약처 GMP·인증기관', today, certs.some((c) => c.ok) ? null : '보유 인증 미확인'),
     f('수출 실적 (최근)', hasExport ? `연 ${ri(3, 60)}회 통관 / 對 ${pick(G_EXPORT)}` : null, hasExport ? 'B' : 'D', '관세청 수출입 실적', hasExport ? '2026-04-30' : null, hasExport ? null : '통관 실적 없음 — 내수 전용 추정'),
-    f('KPP 파렛트풀 거래', kpp, 'B', 'KPP 거래처 대사', today, kpp === '거래중' ? '렌탈 파렛트 거래 이력 확인' : '거래 이력 없음'),
-    f('아주렌탈 등록', aju, 'B', '아주렌탈 거래처 대사', today, aju === '거래중' ? '거래 이력 확인' : '등록 이력 없음'),
+    fc('PLT 거래여부', plt, 'B', '렌탈 거래처 대사', today, plt.some((c) => c.ok) ? '렌탈 파렛트 거래 이력' : '거래 이력 없음'),
   ];
 
   const hasFin = chance(0.7);
   let finance, finance_history = [];
   if (hasFin) {
+    const yr = (rev) => {
+      const op = +(rev * (rand() * 0.15 - 0.02)).toFixed(1);
+      const assets = Math.round(rev * (0.6 + rand() * 0.5));
+      const debt = Math.round(assets * (0.25 + rand() * 0.4));
+      return { revenue: rev, operatingProfit: op, assets, debt, capital: cap };
+    };
+    var cap = pick([3, 5, 10, 20, 30, 50]);
     const r24 = ri(18, 420);
     const r23 = Math.max(6, Math.round(r24 * (0.72 + rand() * 0.2)));
     const r22 = Math.max(4, Math.round(r23 * (0.7 + rand() * 0.2)));
-    const opOf = (r) => +(r * (rand() * 0.15 - 0.02)).toFixed(1);
     finance_history = [
-      { year: 2022, revenue: r22, operatingProfit: opOf(r22) },
-      { year: 2023, revenue: r23, operatingProfit: opOf(r23) },
-      { year: 2024, revenue: r24, operatingProfit: opOf(r24) },
+      { year: 2022, ...yr(r22) },
+      { year: 2023, ...yr(r23) },
+      { year: 2024, ...yr(r24) },
     ];
+    const L = finance_history[2];
     finance = [
-      f('매출액', `${r24}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
-      f('영업이익', `${finance_history[2].operatingProfit}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
-      f('총자산', `${Math.round(r24 * (0.6 + rand() * 0.5))}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
-      f('총부채', `${Math.round(r24 * (0.2 + rand() * 0.4))}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
-      f('자본금', `${pick([3, 5, 10, 20, 30, 50])}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
+      f('매출액', `${L.revenue}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
+      f('영업이익', `${L.operatingProfit}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
+      f('총자산', `${L.assets}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
+      f('총부채', `${L.debt}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
+      f('자본금', `${L.capital}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
     ];
   } else {
     finance = [
@@ -297,8 +320,9 @@ function mapMfdsReport(name, data) {
     f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', today, fresh.length ? null : '최근 5년 보고 이력 없음'),
     f('기능성 보고품목 수 (전체)', list.length || null, exists ? 'A' : 'D', '식약처 보고품목 API', today),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', today, 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
-    f('GMP 인증', null, 'D', '식약처 GMP', null, 'GMP 적합업소 API 연동 필요'),
+    fc('품질인증', certList([false, false, false, false, false]), 'A', '식약처 GMP·인증기관', null, 'GMP/ISO/할랄/비건 인증 API 연동 필요'),
     f('수출 실적 (최근)', null, 'D', '관세청 수출입 실적', null, '관세청 API 연동 필요'),
+    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'B', '렌탈 거래처 대사', null, '렌탈 거래처 API 연동 필요'),
   ];
   const finance = ['매출액', '영업이익', '총자산', '총부채', '자본금'].map((k) =>
     f(k, null, 'D', '금융위 재무정보 API', null, '식약처 API 범위 밖 — 금융위 재무 API 연동 필요'));
