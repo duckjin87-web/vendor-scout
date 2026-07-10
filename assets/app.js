@@ -28,15 +28,53 @@ function staticHit(key) {
     || STATIC_INDEX.find((e) => e.name.includes(key) || key.includes(e.name)) || null;
 }
 
-// ── 실데이터 프록시 설정 (식약처 data.go.kr) — 선택적 실시간 모드 ──
+// ── 실데이터 연결 (선택적 실시간 모드) ──
+// 두 방식 지원: (1) 식약처/공공데이터 인증키 직접 입력 → 브라우저가 data.go.kr 직접 호출
+//              (2) 프록시(Worker) 주소 → CORS가 막힐 때 사용
+// 입력값이 http로 시작하면 프록시, 아니면 인증키로 저장. 키는 이 브라우저에만 보관(남에게 노출 X).
 const PROXY_KEY = 'vs_proxy';
-const getProxy = () => { try { return localStorage.getItem(PROXY_KEY) || ''; } catch { return ''; } };
-const setProxy = (u) => { try { u ? localStorage.setItem(PROXY_KEY, u) : localStorage.removeItem(PROXY_KEY); } catch {} };
+const APIKEY_KEY = 'vs_apikey';
+const _ls = (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
+const _sls = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch {} };
+const getProxy = () => _ls(PROXY_KEY);
+const getApiKey = () => _ls(APIKEY_KEY);
+const isConnected = () => !!(getProxy() || getApiKey());
+function setProxy(v) { // 프록시 URL 또는 인증키를 판별해 저장
+  v = (v || '').trim();
+  if (!v) { _sls(PROXY_KEY, ''); _sls(APIKEY_KEY, ''); return; }
+  if (/^https?:\/\//i.test(v)) { _sls(PROXY_KEY, v); _sls(APIKEY_KEY, ''); }
+  else { _sls(APIKEY_KEY, v); _sls(PROXY_KEY, ''); }
+}
 
+// 서비스별 data.go.kr 직접 호출 URL (인증키 모드)
+const DATA_GO = {
+  corp: 'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2',
+  finance: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2',
+  rpt: 'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
+};
+
+// 공공데이터 조회 — 인증키 모드는 data.go 직접, 아니면 프록시 경유
 async function proxyGet(params) {
-  const base = getProxy().replace(/\/+$/, '');
-  const res = await fetch(`${base}/?${new URLSearchParams(params)}`, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`프록시 HTTP ${res.status}`);
+  const key = getApiKey();
+  let url;
+  if (key) {
+    const base = DATA_GO[params.service];
+    if (!base) throw new Error(`알 수 없는 service: ${params.service}`);
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (k !== 'service' && v != null) q.set(k, v);
+    q.set('serviceKey', key); q.set('resultType', 'json'); q.set('type', 'json');
+    if (!q.has('numOfRows')) q.set('numOfRows', '30');
+    url = `${base}?${q}`;
+  } else {
+    url = `${getProxy().replace(/\/+$/, '')}/?${new URLSearchParams(params)}`;
+  }
+  let res;
+  try {
+    res = await fetch(url, { headers: { Accept: 'application/json' } });
+  } catch (e) {
+    throw new Error(key ? 'data.go 직접호출 실패(CORS 가능성) — 프록시 필요할 수 있음' : `프록시 연결 실패: ${e.message}`);
+  }
+  if (!res.ok) throw new Error(`${key ? 'data.go' : '프록시'} HTTP ${res.status}`);
   return res.json();
 }
 
@@ -94,8 +132,8 @@ function renderCandidates(name, cands) {
 function setProxyUI() {
   const btn = $('#proxyBtn');
   if (!btn) return;
-  const on = !!getProxy();
-  btn.textContent = on ? '🟢 실데이터 연결됨' : '🔌 실데이터 연결';
+  const on = isConnected();
+  btn.textContent = on ? (getApiKey() ? '🟢 키 연결됨' : '🟢 프록시 연결됨') : '🔌 실데이터 연결';
   btn.classList.toggle('on', on);
 }
 
@@ -314,12 +352,12 @@ function render(report) {
   // 데이터 출처 배너
   if (m.live) {
     root.appendChild(el('div', 'livenote',
-      '🟢 <b>식약처 실데이터</b> — data.go.kr 공공 API 조회 결과입니다 (키는 GitHub Actions 안에만 보관). ' +
+      '🟢 <b>실데이터</b> — data.go.kr 공공 API 조회 결과입니다. ' +
       '값이 없는 항목은 <code>data_gap</code>으로 명시합니다.'));
   } else if (m.generated) {
     root.appendChild(el('div', 'gennote',
       '⚙️ <b>자동 생성 데모 데이터</b> — 예시 업체(리니어코스메틱·샘플뷰티랩) 외 입력은 UI 검증용으로 이름 기반 합성됩니다. ' +
-      '실데이터를 보려면 우측 상단 <b>🔌 실데이터 연결</b>로 프록시를 연결하세요.'));
+      '실데이터는 우측 상단 <b>🔌 실데이터 연결</b>에 <b>인증키</b> 또는 프록시를 넣으면 됩니다.'));
   }
 
   const rf = renderRiskFlags(report.risk_flags);
@@ -385,8 +423,8 @@ function lookup(name) {
     }
   }
 
-  // (선택) 실시간 프록시 모드: 기준정보 → (동명업체 선택) → 나머지 카테고리
-  if (getProxy() && !report) {
+  // (선택) 실시간 모드: 기준정보 → (동명업체 선택) → 나머지 카테고리 (키 직접 또는 프록시)
+  if (isConnected() && !report) {
     const root = $('#report');
     root.classList.remove('hidden');
     root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}」</div>`;
@@ -423,9 +461,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const proxyBtn = $('#proxyBtn');
   if (proxyBtn) {
     proxyBtn.addEventListener('click', () => {
-      const cur = getProxy();
+      const cur = getApiKey() || getProxy();
       const next = window.prompt(
-        '식약처 실데이터 프록시(Cloudflare Worker) 주소를 입력하세요.\n예: https://vendor-scout-proxy.계정.workers.dev\n\n비우고 확인하면 데모 모드로 돌아갑니다.',
+        '실데이터 연결 — 둘 중 하나 입력:\n' +
+        '① 공공데이터(data.go.kr) 인증키 → 브라우저가 직접 조회 (서버 불필요)\n' +
+        '② 프록시(Worker) 주소(https://…) → CORS가 막힐 때\n\n' +
+        '비우고 확인하면 데모 모드로 돌아갑니다.',
         cur
       );
       if (next === null) return; // 취소
