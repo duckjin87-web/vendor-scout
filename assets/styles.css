@@ -239,6 +239,14 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 
 .empty { text-align: center; color: var(--faint); padding: 50px 0; }
 
+/* 동명업체 선택 */
+.candbox { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 16px; margin-bottom: 18px; }
+.candhead { font-size: 14px; margin-bottom: 12px; }
+.cand { display: block; width: 100%; text-align: left; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; cursor: pointer; transition: all .15s; }
+.cand:hover { border-color: var(--accent); background: var(--accent-soft); }
+.cand .cn { font-size: 14px; font-weight: 700; }
+.cand .cm { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
 /* 인쇄 / PDF 저장 — 방문용 리포트만 깔끔하게 남긴다 */
 @media print {
   :root {

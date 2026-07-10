@@ -352,7 +352,96 @@ function mapMfdsReport(name, data) {
   };
 }
 
+// ── 실시간 흐름: 금융위 기업기본정보 → 동명업체 후보 목록 ──
+function fmtDate(s) { return s ? String(s).replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') : null; }
+function won2eok(v) { const n = Number(String(v ?? '').replace(/[^\d.-]/g, '')); return isFinite(n) && n !== 0 ? Math.round(n / 1e8) : (n === 0 ? 0 : null); }
+function mapCorpCandidates(data) {
+  const raw = (data && data.response && data.response.body && data.response.body.items && data.response.body.items.item)
+    || (data && data.body && data.body.items) || [];
+  const list = Array.isArray(raw) ? raw : [raw].filter(Boolean);
+  return list.map((c) => ({
+    corpNm: c.corpNm || c.enpNm || c.corp_nm || '',
+    crno: c.crno || null,
+    bzno: c.bzno || null,
+    rep: c.enpRprFnm || null,
+    addr: c.enpBsadr || null,
+    estbDt: c.enpEstbDt || null,
+    raw: c,
+  })).filter((c) => c.corpNm || c.crno);
+}
+
+// 선택된 업체 기준정보 + 재무 + 식약처 응답 → 전체 리포트 조립 (실데이터)
+function assembleLiveReport(name, corp, finData, rptData) {
+  const today = '2026-07-07';
+  const basic = [
+    f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
+    f('사업자등록번호', corp?.bzno || null, 'A', '금융위 기업기본정보', today),
+    f('대표자', corp?.rep || null, 'A', '금융위 기업기본정보', today),
+    f('설립일', fmtDate(corp?.estbDt), 'A', '금융위 기업기본정보', fmtDate(corp?.estbDt)),
+    f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
+    f('제조업 등록', null, 'D', '식약처 화장품정보 API', null, '식약처 제조업 API 연동 필요'),
+  ];
+
+  const rl0 = (rptData && rptData.body && rptData.body.items)
+    || (rptData && rptData.response && rptData.response.body && rptData.response.body.items && rptData.response.body.items.item) || [];
+  const rl = Array.isArray(rl0) ? rl0 : [rl0].filter(Boolean);
+  const fresh = rl.filter((i) => isFresh5(i.REPORT_DAY || i.report_day || i.PRDLST_REPORT_DE));
+  const forms = [...new Set(fresh.map((i) => i.DOSAGE_FORM || i.dosage_form).filter(Boolean))];
+  const capacity = [
+    f('사업장 가입자수 (연금기준)', null, 'D', '국민연금 사업장 정보', null, '국민연금 API 연동 필요'),
+    f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', today),
+    f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', today, 'CAPA 직접 데이터 아님 — 실사 확인'),
+    fc('품질인증', certList([false, false, false, false, false]), 'A', '식약처 GMP·인증기관', null, 'GMP/ISO/할랄/비건 인증 API 연동 필요'),
+    f('수출 실적 (최근)', null, 'D', '관세청 수출입 실적', null, '관세청 API 연동 필요'),
+    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'B', '렌탈 거래처 대사', null, '렌탈 거래처 API 연동 필요'),
+  ];
+
+  const fl0 = (finData && finData.response && finData.response.body && finData.response.body.items && finData.response.body.items.item)
+    || (finData && finData.body && finData.body.items) || [];
+  const fl = (Array.isArray(fl0) ? fl0 : [fl0].filter(Boolean)).filter(Boolean);
+  fl.sort((a, b) => Number(b.bizYear || b.biz_year || 0) - Number(a.bizYear || a.biz_year || 0));
+  const recent = fl.slice(0, 3).reverse();
+  let finance, finance_history = [];
+  if (recent.length) {
+    finance_history = recent.map((it) => ({
+      year: Number(it.bizYear || it.biz_year),
+      revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft),
+      assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt),
+    }));
+    const L = finance_history[finance_history.length - 1];
+    const eok = (v) => (v != null ? `${v}억 원` : null);
+    finance = [
+      f('매출액', eok(L.revenue), 'A', `금융위 재무정보 API (${L.year}년)`, today),
+      f('영업이익', eok(L.operatingProfit), 'A', `금융위 재무정보 API (${L.year}년)`, today),
+      f('총자산', eok(L.assets), 'A', `금융위 재무정보 API (${L.year}년)`, today),
+      f('총부채', eok(L.debt), 'A', `금융위 재무정보 API (${L.year}년)`, today),
+      f('자본금', eok(L.capital), 'A', `금융위 재무정보 API (${L.year}년)`, today),
+    ];
+  } else {
+    finance = ['매출액', '영업이익', '총자산', '총부채', '자본금'].map((k) =>
+      f(k, null, 'D', '금융위 재무정보 API', null, '재무 데이터 없음 (외감 비대상 추정)'));
+  }
+
+  const all = [...basic, ...capacity, ...finance];
+  const order = { A: 0, B: 1, C: 2, D: 3 };
+  const gs = all.filter((x) => !x.data_gap).map((x) => order[x.grade]).sort((a, b) => a - b);
+  const overall = gs.length ? ['A', 'B', 'C', 'D'][gs[Math.floor(gs.length / 2)]] : 'D';
+  const crosscheck = all.filter((x) => x.data_gap || x.grade === 'C')
+    .map((x) => ({ key: x.key, expected: x.value, verified: null, match: null, src_type: x.source }));
+
+  return {
+    meta: {
+      vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
+      version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
+      max_age_years: 5, live: true,
+    },
+    basic, capacity, finance, finance_history, crosscheck, risk_flags: [], diff_from_prev: [],
+  };
+}
+
 window.VENDOR_SAMPLES = { '리니어코스메틱': linear, '샘플뷰티랩': beautylab };
 window.VENDOR_SAMPLE_LIST = [linear, beautylab];
 window.generateReport = generateReport;
 window.mapMfdsReport = mapMfdsReport;
+window.mapCorpCandidates = mapCorpCandidates;
+window.assembleLiveReport = assembleLiveReport;

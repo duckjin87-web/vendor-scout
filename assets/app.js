@@ -33,13 +33,62 @@ const PROXY_KEY = 'vs_proxy';
 const getProxy = () => { try { return localStorage.getItem(PROXY_KEY) || ''; } catch { return ''; } };
 const setProxy = (u) => { try { u ? localStorage.setItem(PROXY_KEY, u) : localStorage.removeItem(PROXY_KEY); } catch {} };
 
-async function liveLookup(name) {
+async function proxyGet(params) {
   const base = getProxy().replace(/\/+$/, '');
-  const url = `${base}/?service=rpt&name=${encodeURIComponent(name)}`;
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  const res = await fetch(`${base}/?${new URLSearchParams(params)}`, { headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error(`프록시 HTTP ${res.status}`);
-  const data = await res.json();
-  return window.mapMfdsReport(name, data);
+  return res.json();
+}
+
+// 1단계: 기준정보(동명업체 후보) 조회 → {candidates} 또는 {report}
+async function liveLookup(name) {
+  let cands = [];
+  try {
+    const corpData = await proxyGet({ service: 'corp', corpNm: name });
+    cands = window.mapCorpCandidates(corpData);
+  } catch (e) { /* 기업기본정보 실패 → 식약처만으로 폴백 */ }
+
+  if (!cands.length) {
+    const rptData = await proxyGet({ service: 'rpt', entp_name: name });
+    return { report: window.mapMfdsReport(name, rptData) };
+  }
+  if (cands.length === 1) return { report: await finishLive(name, cands[0]) };
+  return { candidates: cands, name };
+}
+
+// 2단계: 선택된 업체의 재무·식약처 병렬 조회 → 리포트 조립
+async function finishLive(name, corp) {
+  const [fin, rpt] = await Promise.allSettled([
+    corp.crno ? proxyGet({ service: 'finance', crno: corp.crno }) : Promise.resolve(null),
+    proxyGet({ service: 'rpt', entp_name: corp.corpNm || name }),
+  ]);
+  return window.assembleLiveReport(
+    corp.corpNm || name, corp,
+    fin.status === 'fulfilled' ? fin.value : null,
+    rpt.status === 'fulfilled' ? rpt.value : null
+  );
+}
+
+// 동명업체 선택 UI
+function renderCandidates(name, cands) {
+  const root = $('#report');
+  root.classList.remove('hidden');
+  root.innerHTML = '';
+  const box = el('div', 'candbox');
+  box.appendChild(el('div', 'candhead', `「${esc(name)}」 동명·유사 업체 <b>${cands.length}건</b> — 조회할 업체를 선택하세요`));
+  cands.forEach((c) => {
+    const card = el('button', 'cand');
+    const meta = [c.rep ? '대표 ' + esc(c.rep) : '', c.bzno ? '사업자 ' + esc(c.bzno) : '', c.addr ? esc(c.addr) : ''].filter(Boolean).join(' · ');
+    card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
+    card.addEventListener('click', async () => {
+      root.innerHTML = `<div class="empty">「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…</div>`;
+      try { render(await finishLive(name, c)); }
+      catch (e) { root.innerHTML = `<div class="empty">조회 실패: ${esc(e.message)}</div>`; }
+    });
+    box.appendChild(card);
+  });
+  root.appendChild(box);
+  root.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function setProxyUI() {
@@ -336,17 +385,17 @@ function lookup(name) {
     }
   }
 
-  // (선택) 실시간 프록시 모드: 프록시가 연결돼 있으면 식약처 API 실시간 조회
+  // (선택) 실시간 프록시 모드: 기준정보 → (동명업체 선택) → 나머지 카테고리
   if (getProxy() && !report) {
     const root = $('#report');
     root.classList.remove('hidden');
-    root.innerHTML = `<div class="empty">식약처 실시간 조회 중… 「${esc(key)}」</div>`;
+    root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}」</div>`;
     liveLookup(key)
-      .then((r) => render(r))
+      .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates); else render(res.report); })
       .catch((e) => {
         root.innerHTML =
-          `<div class="empty">식약처 실데이터 조회 실패: ${esc(e.message)}<br>` +
-          `<span style="font-size:12.5px">프록시 주소·키를 확인하세요. 데모 데이터로 대체하려면 아래를 누르세요.</span><br><br>` +
+          `<div class="empty">실데이터 조회 실패: ${esc(e.message)}<br>` +
+          `<span style="font-size:12.5px">프록시 주소·키·API 승인을 확인하세요. 데모 데이터로 대체하려면 아래를 누르세요.</span><br><br>` +
           `<button class="act" id="fallbackBtn">데모 리포트 보기</button></div>`;
         const fb = $('#fallbackBtn');
         if (fb) fb.addEventListener('click', () => render(window.generateReport(key)));

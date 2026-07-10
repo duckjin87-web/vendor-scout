@@ -30,9 +30,14 @@ wrangler secret put DATA_GO_KR_API_KEY   # 프롬프트에 키 입력
 
 동작 확인: 워커 주소로 직접 열기 → `https://<worker>/?service=rpt&name=코스맥스` → 식약처 JSON이 보이면 정상.
 
+## 조회 흐름 (사이트가 워커를 호출하는 순서)
+1. `service=corp&corpNm=<업체명>` → 금융위 **기업기본정보**(동명업체 후보). 2건 이상이면 사이트가 **선택 UI**를 띄움.
+2. 선택 후 `service=finance&crno=<법인번호>` → 금융위 **재무정보**(최신 3개년 그래프),
+   `service=rpt&entp_name=<업체명>` → 식약처 **기능성 보고품목**(제형 등).
+
 ## 참고 / 한계
-- 현재 워커는 **기능성화장품 보고품목**(업체명 조회, `service=rpt`) 하나를 중계합니다.
-  제조업 등록·GMP·재무 등은 각 API(식약처 화장품정보/GMP, 금융위 재무)를 `SERVICES`에 추가하면 됩니다.
-  단, `src/collectors/*`에 남은 TODO처럼 **승인된 명세의 정확한 path·파라미터명**으로 맞춰야 합니다.
-- 식약처 엔드포인트/파라미터명이 승인 화면과 다르면 `worker.js`의 `SERVICES`를 수정하세요.
+- 워커는 **corp·finance·rpt** 3종을 중계합니다. 제조업 등록·GMP/품질인증·국민연금·관세청은
+  각 API를 `SERVICES`에 추가하면 됩니다 (해당 카테고리는 현재 `data_gap`으로 표기).
+- `src/collectors/*`에 남은 TODO처럼 **승인된 명세의 정확한 URL·파라미터명**으로 `SERVICES`를 맞춰야
+  실제 응답이 옵니다. 파라미터명이 승인 화면과 다르면 `worker.js`를 수정하세요.
 - 키가 없거나 프록시 미연결이면 사이트는 **데모(자동 생성) 모드**로 동작합니다.
