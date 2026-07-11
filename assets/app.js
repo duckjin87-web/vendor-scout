@@ -208,52 +208,51 @@ function block(title, icon, fields) {
   return b;
 }
 
-// 재무 3개년 지표 — 소형 막대 하나 (small multiple). 음수(적자)는 기준선 아래로.
-function miniChart(title, unit, pts, threshold) {
-  const W = 150, H = 118, padX = 8, padT = 24, padB = 22;
-  const plotH = H - padT - padB, plotW = W - padX * 2;
-  const vals = pts.map((p) => p.v).filter((v) => v != null);
-  const maxV = Math.max(0, ...vals, threshold || 0);
-  const minV = Math.min(0, ...vals);
+// 재무 지표 정의 (금액 4종 + 비율 2종), 색상 구분
+const FIN_SERIES = [
+  { name: '매출액', unit: '억', grp: 'amt', color: '#3b82f6', g: (d) => d.revenue },
+  { name: '영업이익', unit: '억', grp: 'amt', color: '#ef4444', g: (d) => d.operatingProfit },
+  { name: '총자산', unit: '억', grp: 'amt', color: '#10b981', g: (d) => d.assets },
+  { name: '총부채', unit: '억', grp: 'amt', color: '#f59e0b', g: (d) => d.debt },
+  { name: '영업이익률', unit: '%', grp: 'rat', color: '#a855f7', g: (d) => (d.revenue ? +(d.operatingProfit / d.revenue * 100).toFixed(1) : null) },
+  { name: '부채비율', unit: '%', grp: 'rat', color: '#94a3b8', g: (d) => { const eq = (d.assets || 0) - (d.debt || 0); return eq > 0 ? +(d.debt / eq * 100).toFixed(0) : null; } },
+];
+
+// 연도별 그룹 막대 (여러 지표, 같은 단위) — 음수(적자)는 기준선 아래로
+function groupedBars(series, years, opts) {
+  const threshold = opts && opts.threshold;
+  const W = 680, H = (opts && opts.H) || 196, padL = 12, padR = 12, padT = 16, padB = 22;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const all = series.flatMap((s) => s.vals.filter((v) => v != null));
+  const maxV = Math.max(0, ...all, threshold != null ? threshold : -Infinity);
+  const minV = Math.min(0, ...all);
   const span = (maxV - minV) || 1;
   const y = (v) => padT + plotH - ((v - minV) / span) * plotH;
   const y0 = y(0);
-  const n = pts.length, bandW = plotW / n, barW = Math.min(30, bandW * 0.52);
+  const nG = years.length, gW = plotW / nG, nB = series.length, bW = Math.min(30, (gW * 0.74) / nB);
 
-  let s = `<svg viewBox="0 0 ${W} ${H}" class="mini" role="img" aria-label="${esc(title)} 추이">`;
-  s += `<text x="${W / 2}" y="12" class="mini-t" text-anchor="middle">${esc(title)} <tspan class="mini-u">(${esc(unit)})</tspan></text>`;
-  if (threshold && threshold <= maxV) {
+  let s = `<svg viewBox="0 0 ${W} ${H}" class="gchart" preserveAspectRatio="xMidYMid meet">`;
+  if (threshold != null && threshold <= maxV && threshold >= minV) {
     const yt = y(threshold);
-    s += `<line x1="${padX}" y1="${yt.toFixed(1)}" x2="${W - padX}" y2="${yt.toFixed(1)}" class="fin-thresh"/>`;
-    s += `<text x="${W - padX}" y="${(yt - 3).toFixed(1)}" class="fin-thresh-lbl" text-anchor="end">${threshold}</text>`;
+    s += `<line x1="${padL}" y1="${yt.toFixed(1)}" x2="${W - padR}" y2="${yt.toFixed(1)}" class="fin-thresh"/>`;
+    s += `<text x="${W - padR}" y="${(yt - 3).toFixed(1)}" class="fin-thresh-lbl" text-anchor="end">${threshold}</text>`;
   }
-  s += `<line x1="${padX}" y1="${y0.toFixed(1)}" x2="${W - padX}" y2="${y0.toFixed(1)}" class="mini-base"/>`;
-  pts.forEach((p, i) => {
-    const cx = padX + bandW * (i + 0.5);
-    if (p.v == null) { s += `<text x="${cx.toFixed(1)}" y="${y0 - 4}" class="mini-x" text-anchor="middle">—</text>`; }
-    else {
-      const yv = y(p.v), top = Math.min(yv, y0), h = Math.max(Math.abs(yv - y0), 1);
-      const last = i === pts.length - 1, neg = p.v < 0;
-      const cls = neg ? 'neg' : (threshold && p.v >= threshold ? 'hi' : (last ? 'hi' : 'lo'));
-      s += `<rect x="${(cx - barW / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${barW}" height="${h.toFixed(1)}" rx="3" class="fin-bar ${cls}"><title>${p.year}: ${p.v}${unit}</title></rect>`;
-      s += `<text x="${cx.toFixed(1)}" y="${(neg ? y0 + h + 9 : top - 4).toFixed(1)}" class="mini-v" text-anchor="middle">${p.v}</text>`;
-    }
-    s += `<text x="${cx.toFixed(1)}" y="${H - 6}" class="mini-x" text-anchor="middle">${String(pts[i].year).slice(2)}</text>`;
+  s += `<line x1="${padL}" y1="${y0.toFixed(1)}" x2="${W - padR}" y2="${y0.toFixed(1)}" class="mini-base"/>`;
+  years.forEach((yr, gi) => {
+    const gx = padL + gW * gi + (gW - bW * nB) / 2;
+    series.forEach((se, bi) => {
+      const v = se.vals[gi], x = gx + bi * bW;
+      if (v == null) { s += `<text x="${(x + bW / 2).toFixed(1)}" y="${(y0 - 3).toFixed(1)}" class="mini-x" text-anchor="middle">—</text>`; return; }
+      const yv = y(v), top = Math.min(yv, y0), h = Math.max(Math.abs(yv - y0), 1);
+      s += `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${(bW - 2).toFixed(1)}" height="${h.toFixed(1)}" rx="2.5" fill="${se.color}"><title>${esc(se.name)} ${yr}: ${v}${se.unit}</title></rect>`;
+      s += `<text x="${(x + (bW - 2) / 2).toFixed(1)}" y="${(v >= 0 ? top - 3 : top + h + 8).toFixed(1)}" class="gval" text-anchor="middle">${v}</text>`;
+    });
+    s += `<text x="${(padL + gW * gi + gW / 2).toFixed(1)}" y="${H - 7}" class="mini-x" text-anchor="middle">${yr}</text>`;
   });
-  s += `</svg>`;
-  return s;
+  return s + `</svg>`;
 }
 
-const FIN_METRICS = [
-  { key: '매출액', unit: '억', g: (d) => d.revenue, threshold: 100 },
-  { key: '영업이익', unit: '억', g: (d) => d.operatingProfit },
-  { key: '총자산', unit: '억', g: (d) => d.assets },
-  { key: '총부채', unit: '억', g: (d) => d.debt },
-  { key: '영업이익률', unit: '%', g: (d) => (d.revenue ? +(d.operatingProfit / d.revenue * 100).toFixed(1) : null) },
-  { key: '부채비율', unit: '%', g: (d) => { const eq = (d.assets || 0) - (d.debt || 0); return eq > 0 ? +(d.debt / eq * 100).toFixed(0) : null; } },
-];
-
-// 재무 블록(전폭) = 3개년 전지표 통합 그래프 + 최신연도 압축 행
+// 재무 블록(전폭) = 6지표 3개년 통합 그래프(금액/비율 2단) + 최신연도 압축 행
 function financeBlock(report) {
   const fields = report.finance;
   const hist = report.finance_history || [];
@@ -262,15 +261,14 @@ function financeBlock(report) {
   b.appendChild(el('h3', null, `<span class="ic">💰</span>재무 (금융위)<span class="cnt">${fields.length}개 필드${gapCount ? ' · 공백 ' + gapCount : ''}</span>`));
 
   if (hist.length) {
-    const latest = hist[hist.length - 1].year;
+    const years = hist.map((d) => d.year);
+    const mk = (grp) => FIN_SERIES.filter((s) => s.grp === grp).map((s) => ({ name: s.name, unit: s.unit, color: s.color, vals: hist.map(s.g) }));
     const w = el('div', 'finwrap');
-    w.appendChild(el('div', 'finhead', `<span>재무 지표 3개년 추이 (${hist[0].year}~${latest}, 최신연도 기준)</span><span class="finnote">매출 100억 기준선 · 최신연도 강조</span>`));
-    const grid = el('div', 'minigrid');
-    FIN_METRICS.forEach((mtr) => {
-      const pts = hist.map((d) => ({ year: d.year, v: mtr.g(d) }));
-      grid.insertAdjacentHTML('beforeend', miniChart(mtr.key, mtr.unit, pts, mtr.threshold));
-    });
-    w.appendChild(grid);
+    w.appendChild(el('div', 'finhead', `<span>재무 지표 3개년 (${years[0]}~${years[years.length - 1]})</span><span class="finnote">금액(억)·비율(%) · 매출 100억 기준선</span>`));
+    w.appendChild(el('div', 'glegend', FIN_SERIES.map((s) => `<span class="lg"><span class="sw" style="background:${s.color}"></span>${esc(s.name)} <span class="u">(${s.unit})</span></span>`).join('')));
+    w.insertAdjacentHTML('beforeend', groupedBars(mk('amt'), years, { threshold: 100 }));
+    w.appendChild(el('div', 'gsub', '└ 비율 (%)'));
+    w.insertAdjacentHTML('beforeend', groupedBars(mk('rat'), years, { H: 150 }));
     b.appendChild(w);
   } else {
     b.appendChild(el('div', 'finmiss', '공식 재무 미제출 법인 — 3개년 추이 그래프 생략'));
