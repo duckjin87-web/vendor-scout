@@ -72,8 +72,10 @@ const linear = {
     f('총부채', '71억 원', 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
     f('자본금', '10억 원', 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
   ],
-  // 최신연도(2024) 기준 과거 3개년 전지표 — 통합 추이 그래프용 (금액 단위: 억 원)
+  // 최신연도(2024) 기준 과거 5개년 전지표 — 통합 추이 그래프용 (금액 단위: 억 원)
   finance_history: [
+    { year: 2020, revenue: 61, operatingProfit: 2.1, assets: 84, debt: 47, capital: 10 },
+    { year: 2021, revenue: 78, operatingProfit: 3.6, assets: 96, debt: 52, capital: 10 },
     { year: 2022, revenue: 92, operatingProfit: 4.2, assets: 108, debt: 58, capital: 10 },
     { year: 2023, revenue: 151, operatingProfit: 12.6, assets: 139, debt: 65, capital: 10 },
     { year: 2024, revenue: 218, operatingProfit: 19.4, assets: 164, debt: 71, capital: 10 },
@@ -216,22 +218,18 @@ function generateReport(rawName) {
   const hasFin = chance(0.7);
   let finance, finance_history = [];
   if (hasFin) {
-    const yr = (rev) => {
+    const cap = pick([3, 5, 10, 20, 30, 50]);
+    const yr = (year, rev) => {
       const op = +(rev * (rand() * 0.15 - 0.02)).toFixed(1);
       const assets = Math.round(rev * (0.6 + rand() * 0.5));
       const debt = Math.round(assets * (0.25 + rand() * 0.4));
-      return { revenue: rev, operatingProfit: op, assets, debt, capital: cap };
+      return { year, revenue: rev, operatingProfit: op, assets, debt, capital: cap };
     };
-    var cap = pick([3, 5, 10, 20, 30, 50]);
-    const r24 = ri(18, 420);
-    const r23 = Math.max(6, Math.round(r24 * (0.72 + rand() * 0.2)));
-    const r22 = Math.max(4, Math.round(r23 * (0.7 + rand() * 0.2)));
-    finance_history = [
-      { year: 2022, ...yr(r22) },
-      { year: 2023, ...yr(r23) },
-      { year: 2024, ...yr(r24) },
-    ];
-    const L = finance_history[2];
+    // 최신연도(2024) 기준 과거 5개년
+    const revs = [ri(18, 420)];
+    for (let k = 0; k < 4; k++) revs.unshift(Math.max(4, Math.round(revs[0] * (0.68 + rand() * 0.26))));
+    finance_history = [2020, 2021, 2022, 2023, 2024].map((y, i) => yr(y, revs[i]));
+    const L = finance_history[finance_history.length - 1];
     finance = [
       f('매출액', `${L.revenue}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
       f('영업이익', `${L.operatingProfit}억 원`, 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
@@ -428,7 +426,7 @@ function assembleLiveReport(name, corp, res) {
   const flAll = R.finance && R.finance.ok ? listOf(R.finance.data, ['response.body.items.item', 'body.items']) : [];
   const byYear = new Map();
   flAll.forEach((it) => { const y = Number(it.bizYear || it.biz_year); if (y && !byYear.has(y)) byYear.set(y, it); });
-  const years = [...byYear.keys()].sort((a, b) => b - a).slice(0, 3).sort((a, b) => a - b);
+  const years = [...byYear.keys()].sort((a, b) => b - a).slice(0, 5).sort((a, b) => a - b);
   let finance, finance_history = [];
   if (years.length) {
     finance_history = years.map((y) => { const it = byYear.get(y); return { year: y, revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft), assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt) }; });

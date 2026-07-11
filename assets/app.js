@@ -218,63 +218,62 @@ const FIN_SERIES = [
   { name: '부채비율', unit: '%', grp: 'rat', color: '#94a3b8', g: (d) => { const eq = (d.assets || 0) - (d.debt || 0); return eq > 0 ? +(d.debt / eq * 100).toFixed(0) : null; } },
 ];
 
-// 연도별 그룹 막대 (여러 지표, 같은 단위) — 음수(적자)는 기준선 아래로
-function groupedBars(series, years, opts) {
-  const threshold = opts && opts.threshold;
-  const W = 680, H = (opts && opts.H) || 196, padL = 12, padR = 12, padT = 16, padB = 22;
+// 단일 축 꺾은선 (6지표 원값 겹쳐보기) — 음수(적자)는 0선 아래로, 끝 라벨 겹침 방지
+function lineChart(series, years) {
+  const W = 720, H = 250, padL = 16, padR = 74, padT = 16, padB = 24;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const all = series.flatMap((s) => s.vals.filter((v) => v != null));
-  const maxV = Math.max(0, ...all, threshold != null ? threshold : -Infinity);
-  const minV = Math.min(0, ...all);
-  const span = (maxV - minV) || 1;
+  const maxV = Math.max(...all, 0), minV = Math.min(...all, 0), span = (maxV - minV) || 1;
   const y = (v) => padT + plotH - ((v - minV) / span) * plotH;
+  const x = (i) => years.length > 1 ? padL + plotW * (i / (years.length - 1)) : padL + plotW / 2;
   const y0 = y(0);
-  const nG = years.length, gW = plotW / nG, nB = series.length, bW = Math.min(30, (gW * 0.74) / nB);
+
+  // 끝점 라벨 y좌표 겹침 방지 (최소 간격 12)
+  const ends = series.map((se) => ({ se, y: y(se.vals[se.vals.length - 1]) })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 12) ends[i].y = ends[i - 1].y + 12;
+  const ly = new Map(ends.map((e) => [e.se, e.y]));
 
   let s = `<svg viewBox="0 0 ${W} ${H}" class="gchart" preserveAspectRatio="xMidYMid meet">`;
-  if (threshold != null && threshold <= maxV && threshold >= minV) {
-    const yt = y(threshold);
-    s += `<line x1="${padL}" y1="${yt.toFixed(1)}" x2="${W - padR}" y2="${yt.toFixed(1)}" class="fin-thresh"/>`;
-    s += `<text x="${W - padR}" y="${(yt - 3).toFixed(1)}" class="fin-thresh-lbl" text-anchor="end">${threshold}</text>`;
-  }
   s += `<line x1="${padL}" y1="${y0.toFixed(1)}" x2="${W - padR}" y2="${y0.toFixed(1)}" class="mini-base"/>`;
-  years.forEach((yr, gi) => {
-    const gx = padL + gW * gi + (gW - bW * nB) / 2;
-    series.forEach((se, bi) => {
-      const v = se.vals[gi], x = gx + bi * bW;
-      if (v == null) { s += `<text x="${(x + bW / 2).toFixed(1)}" y="${(y0 - 3).toFixed(1)}" class="mini-x" text-anchor="middle">—</text>`; return; }
-      const yv = y(v), top = Math.min(yv, y0), h = Math.max(Math.abs(yv - y0), 1);
-      s += `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${(bW - 2).toFixed(1)}" height="${h.toFixed(1)}" rx="2.5" fill="${se.color}"><title>${esc(se.name)} ${yr}: ${v}${se.unit}</title></rect>`;
-      s += `<text x="${(x + (bW - 2) / 2).toFixed(1)}" y="${(v >= 0 ? top - 3 : top + h + 8).toFixed(1)}" class="gval" text-anchor="middle">${v}</text>`;
+  series.forEach((se) => {
+    const pts = se.vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    s += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="2.2"/>`;
+    se.vals.forEach((v, i) => {
+      s += `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="var(--panel)" stroke="${se.color}" stroke-width="2"><title>${esc(se.name)} ${years[i]}: ${v}${se.unit}</title></circle>`;
     });
-    s += `<text x="${(padL + gW * gi + gW / 2).toFixed(1)}" y="${H - 7}" class="mini-x" text-anchor="middle">${yr}</text>`;
+    // 값 라벨: 첫·마지막만
+    [0, se.vals.length - 1].forEach((i) => {
+      s += `<text x="${x(i).toFixed(1)}" y="${(y(se.vals[i]) - 7).toFixed(1)}" class="gval" fill="${se.color}" text-anchor="middle">${se.vals[i]}</text>`;
+    });
+    s += `<text x="${W - padR + 6}" y="${(ly.get(se) + 3).toFixed(1)}" class="lname" fill="${se.color}">${esc(se.name)}</text>`;
   });
+  years.forEach((yr, i) => s += `<text x="${x(i).toFixed(1)}" y="${H - 7}" class="mini-x" text-anchor="middle">${yr}</text>`);
   return s + `</svg>`;
 }
 
-// 재무 블록(전폭) = 6지표 3개년 통합 그래프(금액/비율 2단) + 최신연도 압축 행
+// 재무 블록(전폭) = 6지표 5개년 통합 꺾은선 + 자본금 행
 function financeBlock(report) {
   const fields = report.finance;
   const hist = report.finance_history || [];
   const b = el('div', 'block full');
-  const gapCount = fields.filter((f) => f.data_gap).length;
-  b.appendChild(el('h3', null, `<span class="ic">💰</span>재무 (금융위)<span class="cnt">${fields.length}개 필드${gapCount ? ' · 공백 ' + gapCount : ''}</span>`));
+  const chartN = hist.length ? '그래프 6지표 · 표 자본금' : `${fields.length}개 필드`;
+  b.appendChild(el('h3', null, `<span class="ic">💰</span>재무 (금융위)<span class="cnt">${chartN}</span>`));
 
   if (hist.length) {
     const years = hist.map((d) => d.year);
-    const mk = (grp) => FIN_SERIES.filter((s) => s.grp === grp).map((s) => ({ name: s.name, unit: s.unit, color: s.color, vals: hist.map(s.g) }));
+    const series = FIN_SERIES.map((s) => ({ name: s.name, unit: s.unit, color: s.color, vals: hist.map(s.g) }));
     const w = el('div', 'finwrap');
-    w.appendChild(el('div', 'finhead', `<span>재무 지표 3개년 (${years[0]}~${years[years.length - 1]})</span><span class="finnote">금액(억)·비율(%) · 매출 100억 기준선</span>`));
+    w.appendChild(el('div', 'finhead', `<span>재무 지표 ${years.length}개년 추이 (${years[0]}~${years[years.length - 1]}, 최신연도 기준)</span><span class="finnote">6개 지표 겹쳐보기 · 금액(억)+비율(%)</span>`));
     w.appendChild(el('div', 'glegend', FIN_SERIES.map((s) => `<span class="lg"><span class="sw" style="background:${s.color}"></span>${esc(s.name)} <span class="u">(${s.unit})</span></span>`).join('')));
-    w.insertAdjacentHTML('beforeend', groupedBars(mk('amt'), years, { threshold: 100 }));
-    w.appendChild(el('div', 'gsub', '└ 비율 (%)'));
-    w.insertAdjacentHTML('beforeend', groupedBars(mk('rat'), years, { H: 150 }));
+    w.insertAdjacentHTML('beforeend', lineChart(series, years));
     b.appendChild(w);
   } else {
-    b.appendChild(el('div', 'finmiss', '공식 재무 미제출 법인 — 3개년 추이 그래프 생략'));
+    b.appendChild(el('div', 'finmiss', '공식 재무 미제출 법인 — 추이 그래프 생략'));
   }
   const rows = el('div', 'finrows');
-  fields.forEach((f) => rows.appendChild(fieldRow(f)));
+  const capRow = fields.find((f) => f.key === '자본금');
+  if (capRow) rows.appendChild(fieldRow(capRow));
+  else fields.forEach((f) => rows.appendChild(fieldRow(f)));
   b.appendChild(rows);
   return b;
 }
