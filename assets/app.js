@@ -46,49 +46,104 @@ function setProxy(v) { // 프록시 URL 또는 인증키를 판별해 저장
   else { _sls(APIKEY_KEY, v); _sls(PROXY_KEY, ''); }
 }
 
-// 서비스별 data.go.kr 직접 호출 URL (인증키 모드)
+// 서비스별 data.go.kr 엔드포인트 — 후보 배열(폴백 체인). 앞에서부터 시도.
 const DATA_GO = {
-  corp: 'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2',
-  finance: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2',
-  rpt: 'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
-  nps: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch',
+  corp: ['https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2'],
+  finance: ['https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2'],
+  rpt: [
+    'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService01/getRptPrdlstInq01',
+    'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
+  ],
+  npsSearch: ['https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch'],
+  npsDetail: ['https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getDetailInfoSearch'],
+  maker: [
+    'https://apis.data.go.kr/1471000/CsmtcsMnfctrInfoService01/getCsmtcsMnfctrInq01',
+    'https://apis.data.go.kr/1471000/CsmtcsInfoService/getMakerList',
+  ],
 };
 
-// 공공데이터 조회 — 인증키 모드는 data.go 직접, 아니면 프록시 경유
-async function proxyGet(params) {
+// data.go 공통 에러 메시지 → 사용자 조치 안내
+function friendlyDataGoErr(msg) {
+  msg = String(msg || '').trim();
+  if (/NOT_REGISTERED|UNREGISTERED/i.test(msg)) return `${msg} → 이 API의 data.go 활용신청(승인) 필요`;
+  if (/LIMITED_NUMBER|EXCEEDS/i.test(msg)) return `${msg} → 일일 호출한도 초과`;
+  if (/DEADLINE|EXPIRED/i.test(msg)) return `${msg} → 활용기간 만료(연장 필요)`;
+  return msg;
+}
+
+// data.go 응답 해석 — HTTP 200이어도 본문(XML 또는 JSON 헤더)에 에러가 실려 온다
+async function parseDataGo(res) {
+  const text = await res.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch { /* XML일 수 있음 */ }
+  if (data) {
+    const h = (data.response && data.response.header) || data.header || {};
+    const code = h.resultCode != null ? String(h.resultCode).trim() : null;
+    if (code && code !== '00' && code !== '0') throw new Error(friendlyDataGoErr(h.resultMsg || `API 오류(code ${code})`));
+    return data;
+  }
+  // XML 응답 = OpenAPI 공통 에러(미승인 키·한도초과 등)일 확률이 높다
+  const m = text.match(/<returnAuthMsg>([^<]*)<|<resultMsg>([^<]*)<|<errMsg>([^<]*)</);
+  throw new Error(friendlyDataGoErr(m ? (m[1] || m[2] || m[3]) : `JSON 아님(XML/HTML 응답): ${text.slice(0, 80)}`));
+}
+
+// 공공데이터 조회 — 인증키 모드는 data.go 직접(후보 체인 폴백), 아니면 프록시 경유
+async function proxyGet(service, params) {
   const key = getApiKey();
-  let url;
-  if (key) {
-    const base = DATA_GO[params.service];
-    if (!base) throw new Error(`알 수 없는 service: ${params.service}`);
+  if (!key) {
+    const url = `${getProxy().replace(/\/+$/, '')}/?${new URLSearchParams({ service, ...params })}`;
+    let res;
+    try { res = await fetch(url, { headers: { Accept: 'application/json' } }); }
+    catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
+    if (!res.ok) throw new Error(`프록시 HTTP ${res.status}`);
+    return parseDataGo(res);
+  }
+  const chain = DATA_GO[service];
+  if (!chain) throw new Error(`알 수 없는 service: ${service}`);
+  let lastErr = null;
+  for (const base of chain) {
     const q = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) if (k !== 'service' && v != null) q.set(k, v);
+    for (const [k, v] of Object.entries(params)) if (v != null && v !== '') q.set(k, v);
     q.set('serviceKey', key); q.set('resultType', 'json'); q.set('type', 'json');
-    if (!q.has('numOfRows')) q.set('numOfRows', '30');
-    url = `${base}?${q}`;
-  } else {
-    url = `${getProxy().replace(/\/+$/, '')}/?${new URLSearchParams(params)}`;
+    if (!q.has('numOfRows')) q.set('numOfRows', '50');
+    try {
+      const res = await fetch(`${base}?${q}`, { headers: { Accept: 'application/json' } });
+      if (res.status === 404 || res.status === 500) { lastErr = new Error(`HTTP ${res.status} (엔드포인트 확인 필요)`); continue; }
+      if (!res.ok) { lastErr = new Error(`HTTP ${res.status}`); continue; }
+      return await parseDataGo(res);
+    } catch (e) {
+      lastErr = (e instanceof TypeError)
+        ? new Error('네트워크/CORS 차단 — 이 API는 프록시(Worker) 경유 필요')
+        : e;
+    }
   }
-  let res;
-  try {
-    res = await fetch(url, { headers: { Accept: 'application/json' } });
-  } catch (e) {
-    throw new Error(key ? 'data.go 직접호출 실패(CORS 가능성) — 프록시 필요할 수 있음' : `프록시 연결 실패: ${e.message}`);
+  throw lastErr || new Error('호출 실패');
+}
+
+// 응답에서 아이템 배열 추출 (공통 중첩 경로들 시도)
+function itemsOf(data) {
+  const paths = [
+    (d) => d && d.response && d.response.body && d.response.body.items && d.response.body.items.item,
+    (d) => d && d.body && d.body.items,
+    (d) => d && d.items,
+  ];
+  for (const p of paths) {
+    const v = p(data);
+    if (v != null) return Array.isArray(v) ? v : [v].filter(Boolean);
   }
-  if (!res.ok) throw new Error(`${key ? 'data.go' : '프록시'} HTTP ${res.status}`);
-  return res.json();
+  return [];
 }
 
 // 1단계: 기준정보(동명업체 후보) 조회 → {candidates} 또는 {report}
 async function liveLookup(name) {
   let cands = [];
   try {
-    const corpData = await proxyGet({ service: 'corp', corpNm: name });
+    const corpData = await proxyGet('corp', { corpNm: name });
     cands = window.mapCorpCandidates(corpData);
   } catch (e) { /* 기업기본정보 실패 → 식약처만으로 폴백 */ }
 
   if (!cands.length) {
-    const rptData = await proxyGet({ service: 'rpt', entp_name: name });
+    const rptData = await proxyGet('rpt', { entp_name: name });
     return { report: window.mapMfdsReport(name, rptData) };
   }
   if (cands.length === 1) return { report: await finishLive(name, cands[0]) };
@@ -100,14 +155,34 @@ function stripCorp(s) {
   return String(s || '').replace(/\(주\)|\(유\)|\(재\)|\(사\)|㈜|주식회사|유한회사/g, '').trim();
 }
 
-// 2단계: 선택된 업체의 재무·식약처·국민연금 병렬 조회 → 진단 포함 조립
+// 국민연금 2단계: 사업장 검색 → 첫 건 seq로 상세조회(가입자수는 상세에만 있음)
+async function npsLookup(nm, bz6) {
+  const search = await proxyGet('npsSearch', { wkpl_nm: nm, ...(bz6 ? { bzowr_rgst_no: bz6 } : {}) });
+  let items = itemsOf(search);
+  // 사업자번호 필터로 0건이면 상호만으로 재시도
+  if (!items.length && bz6) {
+    const retry = await proxyGet('npsSearch', { wkpl_nm: nm });
+    items = itemsOf(retry);
+  }
+  const hit = items[0];
+  let detail = null;
+  if (hit && (hit.seq != null)) {
+    try {
+      detail = await proxyGet('npsDetail', { seq: hit.seq, ...(hit.dataCrtYm ? { data_crt_ym: hit.dataCrtYm } : {}) });
+    } catch { /* 상세 실패해도 검색 결과는 사용 */ }
+  }
+  return { search: hit || null, detail: detail ? (itemsOf(detail)[0] || detail.response?.body?.item || null) : null, count: items.length };
+}
+
+// 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
   const bz6 = corp.bzno ? String(corp.bzno).replace(/\D/g, '').slice(0, 6) : null;
   const calls = {
-    finance: corp.crno ? proxyGet({ service: 'finance', crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
-    rpt: proxyGet({ service: 'rpt', entp_name: nm }),
-    nps: proxyGet({ service: 'nps', wkpl_nm: nm, ...(bz6 ? { bzowr_rgst_no: bz6 } : {}) }),
+    finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
+    rpt: proxyGet('rpt', { entp_name: nm }),
+    nps: npsLookup(nm, bz6),
+    maker: proxyGet('maker', { entpName: nm }),
   };
   const keys = Object.keys(calls);
   const settled = await Promise.allSettled(keys.map((k) => calls[k]));
@@ -213,45 +288,51 @@ const FIN_SERIES = [
   { name: '매출액', unit: '억', grp: 'amt', color: '#3b82f6', g: (d) => d.revenue },
   { name: '영업이익', unit: '억', grp: 'amt', color: '#ef4444', g: (d) => d.operatingProfit },
   { name: '총자산', unit: '억', grp: 'amt', color: '#10b981', g: (d) => d.assets },
-  { name: '총부채', unit: '억', grp: 'amt', color: '#f59e0b', g: (d) => d.debt },
+  { name: '총부채', unit: '억', grp: 'amt', color: '#f59e0b', invert: true, g: (d) => d.debt },
   { name: '영업이익률', unit: '%', grp: 'rat', color: '#a855f7', g: (d) => (d.revenue ? +(d.operatingProfit / d.revenue * 100).toFixed(1) : null) },
-  { name: '부채비율', unit: '%', grp: 'rat', color: '#94a3b8', g: (d) => { const eq = (d.assets || 0) - (d.debt || 0); return eq > 0 ? +(d.debt / eq * 100).toFixed(0) : null; } },
+  { name: '부채비율', unit: '%', grp: 'rat', color: '#94a3b8', invert: true, g: (d) => { const eq = (d.assets || 0) - (d.debt || 0); return eq > 0 ? +(d.debt / eq * 100).toFixed(0) : null; } },
 ];
 
-// 단일 축 꺾은선 (6지표 원값 겹쳐보기) — 음수(적자)는 0선 아래로, 끝 라벨 겹침 방지
-function lineChart(series, years) {
-  const W = 720, H = 250, padL = 16, padR = 74, padT = 16, padB = 24;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const all = series.flatMap((s) => s.vals.filter((v) => v != null));
-  const maxV = Math.max(...all, 0), minV = Math.min(...all, 0), span = (maxV - minV) || 1;
-  const y = (v) => padT + plotH - ((v - minV) / span) * plotH;
-  const x = (i) => years.length > 1 ? padL + plotW * (i / (years.length - 1)) : padL + plotW / 2;
-  const y0 = y(0);
+// 지표별 스파크 카드 — 각자 자기 스케일이라 수치 크기가 달라도 추이가 전부 보인다
+function sparkCard(se, years) {
+  const vals = se.vals;
+  const idxs = vals.map((v, i) => (v != null ? i : null)).filter((i) => i != null);
+  if (!idxs.length) {
+    return `<div class="spark" style="border-top-color:${se.color}"><div class="sphead">${esc(se.name)} <span class="u">(${se.unit})</span></div><div class="spmiss">데이터 없음</div></div>`;
+  }
+  const first = vals[idxs[0]], last = vals[idxs[idxs.length - 1]];
+  // 증감 배지: 금액은 %(첫해 대비), 비율(%)은 %p 차이
+  let chg = '—', dir = 0;
+  if (se.unit === '%') { const d = +(last - first).toFixed(1); chg = `${d > 0 ? '+' : ''}${d}%p`; dir = Math.sign(d); }
+  else if (first) { const p = Math.round(((last - first) / Math.abs(first)) * 100); chg = `${p > 0 ? '+' : ''}${p}%`; dir = Math.sign(p); }
+  const bad = se.invert ? dir > 0 : dir < 0;   // 부채류는 증가가 경고
+  const good = se.invert ? dir < 0 : dir > 0;
 
-  // 끝점 라벨 y좌표 겹침 방지 (최소 간격 12)
-  const ends = series.map((se) => ({ se, y: y(se.vals[se.vals.length - 1]) })).sort((a, b) => a.y - b.y);
-  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 12) ends[i].y = ends[i - 1].y + 12;
-  const ly = new Map(ends.map((e) => [e.se, e.y]));
+  const W = 210, H = 54, px = 5, py = 7;
+  const nums = vals.filter((v) => v != null);
+  const maxV = Math.max(...nums, 0), minV = Math.min(...nums, 0), span = (maxV - minV) || 1;
+  const x = (i) => px + (W - 2 * px) * (vals.length > 1 ? i / (vals.length - 1) : 0.5);
+  const y = (v) => py + (H - 2 * py) * (1 - (v - minV) / span);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" class="spsvg">`;
+  if (minV < 0 && maxV > 0) svg += `<line x1="${px}" y1="${y(0).toFixed(1)}" x2="${W - px}" y2="${y(0).toFixed(1)}" class="mini-base"/>`;
+  const pts = vals.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean).join(' ');
+  svg += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="2"/>`;
+  vals.forEach((v, i) => { if (v != null) svg += `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.6" fill="${se.color}"><title>${years[i]}: ${v}${se.unit}</title></circle>`; });
+  svg += `</svg>`;
 
-  let s = `<svg viewBox="0 0 ${W} ${H}" class="gchart" preserveAspectRatio="xMidYMid meet">`;
-  s += `<line x1="${padL}" y1="${y0.toFixed(1)}" x2="${W - padR}" y2="${y0.toFixed(1)}" class="mini-base"/>`;
-  series.forEach((se) => {
-    const pts = se.vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-    s += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="2.2"/>`;
-    se.vals.forEach((v, i) => {
-      s += `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="var(--panel)" stroke="${se.color}" stroke-width="2"><title>${esc(se.name)} ${years[i]}: ${v}${se.unit}</title></circle>`;
-    });
-    // 값 라벨: 첫·마지막만
-    [0, se.vals.length - 1].forEach((i) => {
-      s += `<text x="${x(i).toFixed(1)}" y="${(y(se.vals[i]) - 7).toFixed(1)}" class="gval" fill="${se.color}" text-anchor="middle">${se.vals[i]}</text>`;
-    });
-    s += `<text x="${W - padR + 6}" y="${(ly.get(se) + 3).toFixed(1)}" class="lname" fill="${se.color}">${esc(se.name)}</text>`;
-  });
-  years.forEach((yr, i) => s += `<text x="${x(i).toFixed(1)}" y="${H - 7}" class="mini-x" text-anchor="middle">${yr}</text>`);
-  return s + `</svg>`;
+  // 표시 포맷: %는 그대로, 억은 1만억 이상이면 '조' 단위로
+  const fmt = (n) => se.unit === '%' ? `${n}%`
+    : Math.abs(n) >= 10000 ? `${(n / 10000).toFixed(1).replace(/\.0$/, '')}조`
+    : `${n}억`;
+  return `<div class="spark" style="border-top-color:${se.color}">
+    <div class="sphead">${esc(se.name)} <span class="u">(${se.unit})</span></div>
+    <div class="spval">${fmt(last)}<span class="spchg ${bad ? 'bad' : good ? 'good' : ''}">${chg}</span></div>
+    ${svg}
+    <div class="spyr">${years[idxs[0]]} <span>${fmt(first)}</span> → ${years[idxs[idxs.length - 1]]} <span>${fmt(last)}</span></div>
+  </div>`;
 }
 
-// 재무 블록(전폭) = 6지표 5개년 통합 꺾은선 + 자본금 행
+// 재무 블록(전폭) = 지표별 스파크 카드 6개(각자 스케일) + 자본금 행
 function financeBlock(report) {
   const fields = report.finance;
   const hist = report.finance_history || [];
@@ -261,11 +342,13 @@ function financeBlock(report) {
 
   if (hist.length) {
     const years = hist.map((d) => d.year);
-    const series = FIN_SERIES.map((s) => ({ name: s.name, unit: s.unit, color: s.color, vals: hist.map(s.g) }));
     const w = el('div', 'finwrap');
-    w.appendChild(el('div', 'finhead', `<span>재무 지표 ${years.length}개년 추이 (${years[0]}~${years[years.length - 1]}, 최신연도 기준)</span><span class="finnote">6개 지표 겹쳐보기 · 금액(억)+비율(%)</span>`));
-    w.appendChild(el('div', 'glegend', FIN_SERIES.map((s) => `<span class="lg"><span class="sw" style="background:${s.color}"></span>${esc(s.name)} <span class="u">(${s.unit})</span></span>`).join('')));
-    w.insertAdjacentHTML('beforeend', lineChart(series, years));
+    w.appendChild(el('div', 'finhead', `<span>재무 지표 ${years.length}개년 추이 (${years[0]}~${years[years.length - 1]}, 최신연도 기준)</span><span class="finnote">지표별 자기 스케일 — 추이 비교용</span>`));
+    const grid = el('div', 'sparkgrid');
+    FIN_SERIES.forEach((s) => {
+      grid.insertAdjacentHTML('beforeend', sparkCard({ name: s.name, unit: s.unit, color: s.color, invert: s.invert, vals: hist.map(s.g) }, years));
+    });
+    w.appendChild(grid);
     b.appendChild(w);
   } else {
     b.appendChild(el('div', 'finmiss', '공식 재무 미제출 법인 — 추이 그래프 생략'));
@@ -364,6 +447,13 @@ function render(report) {
     root.appendChild(el('div', 'livenote',
       '🟢 <b>실데이터</b> — data.go.kr 공공 API 조회 결과입니다. ' +
       '값이 없는 항목은 <code>data_gap</code>으로 명시합니다.'));
+    // 📡 소스별 조회 상태 — 무엇이 왜 비었는지 즉시 확인
+    if (Array.isArray(m.src_status) && m.src_status.length) {
+      const sp = el('div', 'srcstat');
+      sp.innerHTML = '<b>📡 데이터 소스 상태</b>' + m.src_status.map((s) =>
+        `<span class="ss ${s.ok ? 'ok' : 'no'}"><em>${s.ok ? '✓' : '✗'}</em>${esc(s.name)}<i>${esc(s.detail || '')}</i></span>`).join('');
+      root.appendChild(sp);
+    }
   } else if (m.generated) {
     root.appendChild(el('div', 'gennote',
       '⚙️ <b>자동 생성 데모 데이터</b> — 예시 업체(리니어코스메틱·샘플뷰티랩) 외 입력은 UI 검증용으로 이름 기반 합성됩니다. ' +

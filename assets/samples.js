@@ -391,13 +391,20 @@ function assembleLiveReport(name, corp, res) {
     return emptyMsg;
   };
 
+  // 식약처 제조업 등록 (maker)
+  const mkList = R.maker && R.maker.ok ? listOf(R.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
+  const mk = mkList[0];
+  const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? null) : null;
+  const mkAddr = mk ? (mk.ADDR ?? mk.addr ?? mk.SITE_ADDR ?? null) : null;
+
   const basic = [
     f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
     f('사업자등록번호', corp?.bzno || null, 'A', '금융위 기업기본정보', today),
     f('대표자', corp?.rep || null, 'A', '금융위 기업기본정보', today),
     f('설립일', fmtDate(corp?.estbDt), 'A', '금융위 기업기본정보', fmtDate(corp?.estbDt)),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
-    f('제조업 등록', null, 'D', '식약처 화장품제조업 API', null, '미연동 — 화장품제조/책임판매업 API 승인·엔드포인트 확정 필요'),
+    f('제조업 등록', mk ? `등록${mkNo ? ` (제${mkNo}호)` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null, mk ? null : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
+    f('제조소 소재지', mkAddr, mkAddr ? 'A' : 'D', '식약처 화장품제조업 API', mkAddr ? today : null, mkAddr ? '★ 방문지 기준 주소' : why('maker', '제조소 주소 미확보')),
   ];
 
   // 식약처 기능성 보고품목 (rpt)
@@ -406,11 +413,12 @@ function assembleLiveReport(name, corp, res) {
   const forms = [...new Set(fresh.map((i) => i.DOSAGE_FORM || i.dosage_form).filter(Boolean))];
   const rptEmpty = '기능성 보고 이력 없음 — 기능성 미취급 또는 업체명 불일치';
 
-  // 국민연금 (nps)
-  const npsList = R.nps && R.nps.ok ? listOf(R.nps.data, ['response.body.items.item', 'body.items']) : [];
-  const nps = npsList[0];
-  const empVal = nps ? (nps.jnngpCnt ?? nps.subscrCnt ?? null) : null;
-  const npsAddr = nps ? (nps.wkplRoadNmDtlAddr ?? nps.ldongAddr ?? null) : null;
+  // 국민연금 (nps) — {search, detail, count} 형태 (검색→상세 2단계)
+  const npsData = R.nps && R.nps.ok ? R.nps.data : null;
+  const nps = npsData ? npsData.search : null;
+  const npsDet = npsData ? npsData.detail : null;
+  const empVal = (npsDet && (npsDet.jnngpCnt ?? npsDet.subscrCnt)) ?? (nps && (nps.jnngpCnt ?? nps.subscrCnt)) ?? null;
+  const npsAddr = (nps && (nps.wkplRoadNmDtlAddr ?? nps.ldongAddr)) ?? (npsDet && npsDet.wkplRoadNmDtlAddr) ?? null;
 
   const capacity = [
     f('사업장 가입자수 (연금기준)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '실인원 프록시 — 파견/외주 미포함' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
@@ -451,11 +459,26 @@ function assembleLiveReport(name, corp, res) {
   const crosscheck = all.filter((x) => x.data_gap || x.grade === 'C')
     .map((x) => ({ key: x.key, expected: x.value, verified: null, match: null, src_type: x.source }));
 
+  // 📡 소스별 조회 상태 — 왜 비었는지 화면에서 바로 보이게 (모바일에선 hover 불가)
+  const stat = (part, label, okDetail, emptyDetail) => {
+    const r = R[part];
+    if (!r) return { name: label, ok: false, detail: '미호출' };
+    if (!r.ok) return { name: label, ok: false, detail: r.err };
+    return okDetail != null ? { name: label, ok: true, detail: okDetail } : { name: label, ok: false, detail: emptyDetail };
+  };
+  const src_status = [
+    { name: '금융위 기업기본정보', ok: true, detail: `기준정보 확보 (${corp?.crno || '법인번호 미상'})` },
+    stat('finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '재무 데이터 없음(외감 비대상 추정)'),
+    stat('rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null, '0건 — 기능성 미취급 또는 상호 불일치'),
+    stat('nps', '국민연금 사업장', (npsData && npsData.count) ? `${npsData.count}건 매칭${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
+    stat('maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
+  ];
+
   return {
     meta: {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
       version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
-      max_age_years: 5, live: true,
+      max_age_years: 5, live: true, src_status,
     },
     basic, capacity, finance, finance_history, crosscheck, risk_flags: [], diff_from_prev: [],
   };

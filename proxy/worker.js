@@ -15,8 +15,11 @@
 const SERVICES = {
   corp: 'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2',
   finance: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2',
-  rpt: 'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
-  // 승인 확인 후 추가: biz(제조업 등록), gmp(품질인증) 등
+  rpt: 'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService01/getRptPrdlstInq01',
+  npsSearch: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch',
+  npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getDetailInfoSearch',
+  maker: 'https://apis.data.go.kr/1471000/CsmtcsMnfctrInfoService01/getCsmtcsMnfctrInq01',
+  // 승인 확인 후 추가: gmp(품질인증) 등
 };
 
 const cors = {
