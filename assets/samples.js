@@ -427,7 +427,7 @@ function assembleLiveReport(name, corp, res) {
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
     fc('품질인증', certList([false, false, false, false, false]), 'A', '식약처 GMP·인증기관', null, '미연동 — CGMP는 식약처 GMP API로 가능, ISO/할랄/비건은 인증기관별 개별(공개 API 없음)'),
     f('수출 실적 (최근)', null, 'D', '관세청/무역협회', null, '미연동 — 관세청 공개 API는 업체별 조회 미지원(무역협회/자체자료 필요)'),
-    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'B', '렌탈사 자체자료', null, '공개 API 아님 — KPP/아주렌탈 거래내역은 업체 직접 확인'),
+    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'D', '수기 확인 항목', null, '공개 API 없음 — KPP/아주렌탈은 고객사 목록 비공개. 업체 문의 또는 파트너 계정으로만 확인'),
   ];
 
   // 재무 — 연도 중복 제거(같은 해 복수 제출 대비) 후 최신 3개년

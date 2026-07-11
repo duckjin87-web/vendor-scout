@@ -46,19 +46,24 @@ function setProxy(v) { // 프록시 URL 또는 인증키를 판별해 저장
   else { _sls(APIKEY_KEY, v); _sls(PROXY_KEY, ''); }
 }
 
-// 서비스별 data.go.kr 엔드포인트 — 후보 배열(폴백 체인). 앞에서부터 시도.
+// 서비스별 data.go.kr 후보 = { url, map }. map: 논리키→실제 파라미터명.
+// 앞에서부터 시도하고, 데이터가 있는 첫 후보를 채택(엔드포인트·파라미터명 미확정 대비).
+const B1471 = 'https://apis.data.go.kr/1471000';
 const DATA_GO = {
-  corp: ['https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2'],
-  finance: ['https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2'],
+  corp: [{ url: 'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2', map: { name: 'corpNm' } }],
+  finance: [{ url: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2', map: { crno: 'crno' } }],
   rpt: [
-    'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService01/getRptPrdlstInq01',
-    'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
+    { url: `${B1471}/FtnltCosmRptPrdlstInfoService01/getRptPrdlstInq01`, map: { name: 'entp_name' } },
+    { url: `${B1471}/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq`, map: { name: 'entp_name' } },
+    { url: `${B1471}/FtnltCosmRptPrdlstInfoService01/getRptPrdlstInq01`, map: { name: 'ENTP_NAME' } },
   ],
-  npsSearch: ['https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch'],
-  npsDetail: ['https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getDetailInfoSearch'],
+  npsSearch: [{ url: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch', map: { name: 'wkpl_nm', bz6: 'bzowr_rgst_no' } }],
+  npsDetail: [{ url: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getDetailInfoSearch', map: { seq: 'seq', ym: 'data_crt_ym' } }],
   maker: [
-    'https://apis.data.go.kr/1471000/CsmtcsMnfctrInfoService01/getCsmtcsMnfctrInq01',
-    'https://apis.data.go.kr/1471000/CsmtcsInfoService/getMakerList',
+    { url: `${B1471}/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01`, map: { name: 'bssh_nm' } },
+    { url: `${B1471}/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01`, map: { name: 'entpName' } },
+    { url: `${B1471}/CsmtcsMnfctrInfoService01/getCsmtcsMnfctrInq01`, map: { name: 'entpName' } },
+    { url: `${B1471}/CsmtcsInfoService/getMakerList`, map: { name: 'entpName' } },
   ],
 };
 
@@ -87,36 +92,47 @@ async function parseDataGo(res) {
   throw new Error(friendlyDataGoErr(m ? (m[1] || m[2] || m[3]) : `JSON 아님(XML/HTML 응답): ${text.slice(0, 80)}`));
 }
 
-// 공공데이터 조회 — 인증키 모드는 data.go 직접(후보 체인 폴백), 아니면 프록시 경유
-async function proxyGet(service, params) {
+// 논리 파라미터 → 실제 파라미터로 매핑
+function mapParams(logical, map) {
+  const out = {};
+  for (const [lk, v] of Object.entries(logical)) if (v != null && v !== '' && map[lk]) out[map[lk]] = v;
+  return out;
+}
+
+// 공공데이터 조회 — 인증키 모드는 data.go 직접(엔드포인트·파라미터명 후보 순차), 아니면 프록시 경유
+// logical: { name?, crno?, bz6?, seq?, ym? }
+async function proxyGet(service, logical) {
+  const chain = DATA_GO[service];
+  if (!chain) throw new Error(`알 수 없는 service: ${service}`);
   const key = getApiKey();
-  if (!key) {
-    const url = `${getProxy().replace(/\/+$/, '')}/?${new URLSearchParams({ service, ...params })}`;
+
+  if (!key) { // 프록시 모드 — 첫 후보의 파라미터명으로 매핑해 워커에 전달
+    const actual = mapParams(logical, chain[0].map);
+    const url = `${getProxy().replace(/\/+$/, '')}/?${new URLSearchParams({ service, ...actual })}`;
     let res;
     try { res = await fetch(url, { headers: { Accept: 'application/json' } }); }
     catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
     if (!res.ok) throw new Error(`프록시 HTTP ${res.status}`);
     return parseDataGo(res);
   }
-  const chain = DATA_GO[service];
-  if (!chain) throw new Error(`알 수 없는 service: ${service}`);
-  let lastErr = null;
-  for (const base of chain) {
-    const q = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) if (v != null && v !== '') q.set(k, v);
+
+  let lastErr = null, lastOk = null;
+  for (const cand of chain) {
+    const q = new URLSearchParams(mapParams(logical, cand.map));
     q.set('serviceKey', key); q.set('resultType', 'json'); q.set('type', 'json');
     if (!q.has('numOfRows')) q.set('numOfRows', '50');
     try {
-      const res = await fetch(`${base}?${q}`, { headers: { Accept: 'application/json' } });
-      if (res.status === 404 || res.status === 500) { lastErr = new Error(`HTTP ${res.status} (엔드포인트 확인 필요)`); continue; }
+      const res = await fetch(`${cand.url}?${q}`, { headers: { Accept: 'application/json' } });
+      if (res.status === 404 || res.status === 500) { lastErr = new Error(`HTTP ${res.status} (엔드포인트 미일치)`); continue; }
       if (!res.ok) { lastErr = new Error(`HTTP ${res.status}`); continue; }
-      return await parseDataGo(res);
+      const data = await parseDataGo(res);
+      lastOk = data;
+      if (itemsOf(data).length > 0) return data;  // 데이터 있으면 확정
     } catch (e) {
-      lastErr = (e instanceof TypeError)
-        ? new Error('네트워크/CORS 차단 — 이 API는 프록시(Worker) 경유 필요')
-        : e;
+      lastErr = (e instanceof TypeError) ? new Error('네트워크/CORS 차단 — 프록시 경유 필요') : e;
     }
   }
+  if (lastOk) return lastOk;      // 전부 0건이면 마지막 정상응답(정말 빈 결과)
   throw lastErr || new Error('호출 실패');
 }
 
@@ -138,12 +154,12 @@ function itemsOf(data) {
 async function liveLookup(name) {
   let cands = [];
   try {
-    const corpData = await proxyGet('corp', { corpNm: name });
+    const corpData = await proxyGet('corp', { name });
     cands = window.mapCorpCandidates(corpData);
   } catch (e) { /* 기업기본정보 실패 → 식약처만으로 폴백 */ }
 
   if (!cands.length) {
-    const rptData = await proxyGet('rpt', { entp_name: name });
+    const rptData = await proxyGet('rpt', { name });
     return { report: window.mapMfdsReport(name, rptData) };
   }
   if (cands.length === 1) return { report: await finishLive(name, cands[0]) };
@@ -157,21 +173,17 @@ function stripCorp(s) {
 
 // 국민연금 2단계: 사업장 검색 → 첫 건 seq로 상세조회(가입자수는 상세에만 있음)
 async function npsLookup(nm, bz6) {
-  const search = await proxyGet('npsSearch', { wkpl_nm: nm, ...(bz6 ? { bzowr_rgst_no: bz6 } : {}) });
+  const search = await proxyGet('npsSearch', { name: nm, bz6 });
   let items = itemsOf(search);
   // 사업자번호 필터로 0건이면 상호만으로 재시도
-  if (!items.length && bz6) {
-    const retry = await proxyGet('npsSearch', { wkpl_nm: nm });
-    items = itemsOf(retry);
-  }
+  if (!items.length && bz6) items = itemsOf(await proxyGet('npsSearch', { name: nm }));
   const hit = items[0];
   let detail = null;
-  if (hit && (hit.seq != null)) {
-    try {
-      detail = await proxyGet('npsDetail', { seq: hit.seq, ...(hit.dataCrtYm ? { data_crt_ym: hit.dataCrtYm } : {}) });
-    } catch { /* 상세 실패해도 검색 결과는 사용 */ }
+  if (hit && hit.seq != null) {
+    try { detail = await proxyGet('npsDetail', { seq: hit.seq, ym: hit.dataCrtYm }); }
+    catch { /* 상세 실패해도 검색 결과는 사용 */ }
   }
-  return { search: hit || null, detail: detail ? (itemsOf(detail)[0] || detail.response?.body?.item || null) : null, count: items.length };
+  return { search: hit || null, detail: detail ? (itemsOf(detail)[0] || (detail.response && detail.response.body && detail.response.body.item) || null) : null, count: items.length };
 }
 
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
@@ -180,9 +192,9 @@ async function finishLive(name, corp) {
   const bz6 = corp.bzno ? String(corp.bzno).replace(/\D/g, '').slice(0, 6) : null;
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
-    rpt: proxyGet('rpt', { entp_name: nm }),
+    rpt: proxyGet('rpt', { name: nm }),
     nps: npsLookup(nm, bz6),
-    maker: proxyGet('maker', { entpName: nm }),
+    maker: proxyGet('maker', { name: nm }),
   };
   const keys = Object.keys(calls);
   const settled = await Promise.allSettled(keys.map((k) => calls[k]));
@@ -308,27 +320,36 @@ function sparkCard(se, years) {
   const bad = se.invert ? dir > 0 : dir < 0;   // 부채류는 증가가 경고
   const good = se.invert ? dir < 0 : dir > 0;
 
-  const W = 210, H = 54, px = 5, py = 7;
-  const nums = vals.filter((v) => v != null);
-  const maxV = Math.max(...nums, 0), minV = Math.min(...nums, 0), span = (maxV - minV) || 1;
-  const x = (i) => px + (W - 2 * px) * (vals.length > 1 ? i / (vals.length - 1) : 0.5);
-  const y = (v) => py + (H - 2 * py) * (1 - (v - minV) / span);
-  let svg = `<svg viewBox="0 0 ${W} ${H}" class="spsvg">`;
-  if (minV < 0 && maxV > 0) svg += `<line x1="${px}" y1="${y(0).toFixed(1)}" x2="${W - px}" y2="${y(0).toFixed(1)}" class="mini-base"/>`;
-  const pts = vals.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean).join(' ');
-  svg += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="2"/>`;
-  vals.forEach((v, i) => { if (v != null) svg += `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.6" fill="${se.color}"><title>${years[i]}: ${v}${se.unit}</title></circle>`; });
-  svg += `</svg>`;
-
   // 표시 포맷: %는 그대로, 억은 1만억 이상이면 '조' 단위로
   const fmt = (n) => se.unit === '%' ? `${n}%`
     : Math.abs(n) >= 10000 ? `${(n / 10000).toFixed(1).replace(/\.0$/, '')}조`
     : `${n}억`;
+  const lbl = (n) => se.unit === '%' ? `${n}` : (Math.abs(n) >= 10000 ? `${(n / 10000).toFixed(1).replace(/\.0$/, '')}조` : `${n}`);
+
+  const W = 250, H = 100, px = 12, pt = 18, pb = 18;
+  const nums = vals.filter((v) => v != null);
+  const maxV = Math.max(...nums, 0), minV = Math.min(...nums, 0), span = (maxV - minV) || 1;
+  const x = (i) => px + (W - 2 * px) * (vals.length > 1 ? i / (vals.length - 1) : 0.5);
+  const y = (v) => pt + (H - pt - pb) * (1 - (v - minV) / span);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" class="spsvg">`;
+  if (minV < 0 && maxV > 0) svg += `<line x1="${px}" y1="${y(0).toFixed(1)}" x2="${W - px}" y2="${y(0).toFixed(1)}" class="mini-base"/>`;
+  const pts = vals.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean).join(' ');
+  svg += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="2"/>`;
+  vals.forEach((v, i) => {
+    const xi = x(i).toFixed(1);
+    if (v != null) {
+      const yi = y(v);
+      svg += `<circle cx="${xi}" cy="${yi.toFixed(1)}" r="2.8" fill="${se.color}"/>`;
+      svg += `<text x="${xi}" y="${(yi - 5).toFixed(1)}" class="spptv" text-anchor="middle" fill="${se.color}">${lbl(v)}</text>`;
+    }
+    svg += `<text x="${xi}" y="${H - 5}" class="spptx" text-anchor="middle">${String(years[i]).slice(2)}</text>`;
+  });
+  svg += `</svg>`;
+
   return `<div class="spark" style="border-top-color:${se.color}">
     <div class="sphead">${esc(se.name)} <span class="u">(${se.unit})</span></div>
     <div class="spval">${fmt(last)}<span class="spchg ${bad ? 'bad' : good ? 'good' : ''}">${chg}</span></div>
     ${svg}
-    <div class="spyr">${years[idxs[0]]} <span>${fmt(first)}</span> → ${years[idxs[idxs.length - 1]]} <span>${fmt(last)}</span></div>
   </div>`;
 }
 
