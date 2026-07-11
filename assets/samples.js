@@ -370,44 +370,68 @@ function mapCorpCandidates(data) {
   })).filter((c) => c.corpNm || c.crno);
 }
 
-// 선택된 업체 기준정보 + 재무 + 식약처 응답 → 전체 리포트 조립 (실데이터)
-function assembleLiveReport(name, corp, finData, rptData) {
+// 중첩 응답에서 배열 추출 (여러 경로 시도)
+function listOf(data, paths) {
+  for (const p of paths) {
+    let cur = data, ok = true;
+    for (const seg of p.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
+    if (ok && cur != null) return Array.isArray(cur) ? cur : [cur].filter(Boolean);
+  }
+  return [];
+}
+
+// 선택된 업체 기준정보 + 재무/식약처/국민연금 응답 → 전체 리포트 조립 (실데이터 + 진단)
+// res = { finance:{ok,data|err}, rpt:{ok,...}, nps:{ok,...} }
+function assembleLiveReport(name, corp, res) {
   const today = '2026-07-07';
+  const R = res || {};
+  // 왜 비었는지 진단 문구: 미호출 / 조회실패(에러) / 빈결과
+  const why = (part, emptyMsg) => {
+    const r = R[part];
+    if (!r) return '미연동 — 해당 API 미호출';
+    if (!r.ok) return `조회 실패: ${r.err}`;
+    return emptyMsg;
+  };
+
   const basic = [
     f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
     f('사업자등록번호', corp?.bzno || null, 'A', '금융위 기업기본정보', today),
     f('대표자', corp?.rep || null, 'A', '금융위 기업기본정보', today),
     f('설립일', fmtDate(corp?.estbDt), 'A', '금융위 기업기본정보', fmtDate(corp?.estbDt)),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
-    f('제조업 등록', null, 'D', '식약처 화장품정보 API', null, '식약처 제조업 API 연동 필요'),
+    f('제조업 등록', null, 'D', '식약처 화장품제조업 API', null, '미연동 — 화장품제조/책임판매업 API 승인·엔드포인트 확정 필요'),
   ];
 
-  const rl0 = (rptData && rptData.body && rptData.body.items)
-    || (rptData && rptData.response && rptData.response.body && rptData.response.body.items && rptData.response.body.items.item) || [];
-  const rl = Array.isArray(rl0) ? rl0 : [rl0].filter(Boolean);
+  // 식약처 기능성 보고품목 (rpt)
+  const rl = R.rpt && R.rpt.ok ? listOf(R.rpt.data, ['body.items', 'response.body.items.item']) : [];
   const fresh = rl.filter((i) => isFresh5(i.REPORT_DAY || i.report_day || i.PRDLST_REPORT_DE));
   const forms = [...new Set(fresh.map((i) => i.DOSAGE_FORM || i.dosage_form).filter(Boolean))];
+  const rptEmpty = '기능성 보고 이력 없음 — 기능성 미취급 또는 업체명 불일치';
+
+  // 국민연금 (nps)
+  const npsList = R.nps && R.nps.ok ? listOf(R.nps.data, ['response.body.items.item', 'body.items']) : [];
+  const nps = npsList[0];
+  const empVal = nps ? (nps.jnngpCnt ?? nps.subscrCnt ?? null) : null;
+  const npsAddr = nps ? (nps.wkplRoadNmDtlAddr ?? nps.ldongAddr ?? null) : null;
+
   const capacity = [
-    f('사업장 가입자수 (연금기준)', null, 'D', '국민연금 사업장 정보', null, '국민연금 API 연동 필요'),
-    f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', today),
-    f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', today, 'CAPA 직접 데이터 아님 — 실사 확인'),
-    fc('품질인증', certList([false, false, false, false, false]), 'A', '식약처 GMP·인증기관', null, 'GMP/ISO/할랄/비건 인증 API 연동 필요'),
-    f('수출 실적 (최근)', null, 'D', '관세청 수출입 실적', null, '관세청 API 연동 필요'),
-    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'B', '렌탈 거래처 대사', null, '렌탈 거래처 API 연동 필요'),
+    f('사업장 가입자수 (연금기준)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '실인원 프록시 — 파견/외주 미포함' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
+    f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
+    f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
+    f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
+    fc('품질인증', certList([false, false, false, false, false]), 'A', '식약처 GMP·인증기관', null, '미연동 — CGMP는 식약처 GMP API로 가능, ISO/할랄/비건은 인증기관별 개별(공개 API 없음)'),
+    f('수출 실적 (최근)', null, 'D', '관세청/무역협회', null, '미연동 — 관세청 공개 API는 업체별 조회 미지원(무역협회/자체자료 필요)'),
+    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'B', '렌탈사 자체자료', null, '공개 API 아님 — KPP/아주렌탈 거래내역은 업체 직접 확인'),
   ];
 
-  const fl0 = (finData && finData.response && finData.response.body && finData.response.body.items && finData.response.body.items.item)
-    || (finData && finData.body && finData.body.items) || [];
-  const fl = (Array.isArray(fl0) ? fl0 : [fl0].filter(Boolean)).filter(Boolean);
-  fl.sort((a, b) => Number(b.bizYear || b.biz_year || 0) - Number(a.bizYear || a.biz_year || 0));
-  const recent = fl.slice(0, 3).reverse();
+  // 재무 — 연도 중복 제거(같은 해 복수 제출 대비) 후 최신 3개년
+  const flAll = R.finance && R.finance.ok ? listOf(R.finance.data, ['response.body.items.item', 'body.items']) : [];
+  const byYear = new Map();
+  flAll.forEach((it) => { const y = Number(it.bizYear || it.biz_year); if (y && !byYear.has(y)) byYear.set(y, it); });
+  const years = [...byYear.keys()].sort((a, b) => b - a).slice(0, 3).sort((a, b) => a - b);
   let finance, finance_history = [];
-  if (recent.length) {
-    finance_history = recent.map((it) => ({
-      year: Number(it.bizYear || it.biz_year),
-      revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft),
-      assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt),
-    }));
+  if (years.length) {
+    finance_history = years.map((y) => { const it = byYear.get(y); return { year: y, revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft), assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt) }; });
     const L = finance_history[finance_history.length - 1];
     const eok = (v) => (v != null ? `${v}억 원` : null);
     finance = [
@@ -419,7 +443,7 @@ function assembleLiveReport(name, corp, finData, rptData) {
     ];
   } else {
     finance = ['매출액', '영업이익', '총자산', '총부채', '자본금'].map((k) =>
-      f(k, null, 'D', '금융위 재무정보 API', null, '재무 데이터 없음 (외감 비대상 추정)'));
+      f(k, null, 'D', '금융위 재무정보 API', null, why('finance', '재무 데이터 없음 (외감 비대상 추정)')));
   }
 
   const all = [...basic, ...capacity, ...finance];

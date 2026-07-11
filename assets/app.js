@@ -51,6 +51,7 @@ const DATA_GO = {
   corp: 'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2',
   finance: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2',
   rpt: 'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
+  nps: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch',
 };
 
 // 공공데이터 조회 — 인증키 모드는 data.go 직접, 아니면 프록시 경유
@@ -94,17 +95,29 @@ async function liveLookup(name) {
   return { candidates: cands, name };
 }
 
-// 2단계: 선택된 업체의 재무·식약처 병렬 조회 → 리포트 조립
+// 법인 접두/접미어 제거 — 식약처/국민연금은 순수 상호로 조회해야 매칭됨
+function stripCorp(s) {
+  return String(s || '').replace(/\(주\)|\(유\)|\(재\)|\(사\)|㈜|주식회사|유한회사/g, '').trim();
+}
+
+// 2단계: 선택된 업체의 재무·식약처·국민연금 병렬 조회 → 진단 포함 조립
 async function finishLive(name, corp) {
-  const [fin, rpt] = await Promise.allSettled([
-    corp.crno ? proxyGet({ service: 'finance', crno: corp.crno }) : Promise.resolve(null),
-    proxyGet({ service: 'rpt', entp_name: corp.corpNm || name }),
-  ]);
-  return window.assembleLiveReport(
-    corp.corpNm || name, corp,
-    fin.status === 'fulfilled' ? fin.value : null,
-    rpt.status === 'fulfilled' ? rpt.value : null
-  );
+  const nm = stripCorp(corp.corpNm || name);
+  const bz6 = corp.bzno ? String(corp.bzno).replace(/\D/g, '').slice(0, 6) : null;
+  const calls = {
+    finance: corp.crno ? proxyGet({ service: 'finance', crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
+    rpt: proxyGet({ service: 'rpt', entp_name: nm }),
+    nps: proxyGet({ service: 'nps', wkpl_nm: nm, ...(bz6 ? { bzowr_rgst_no: bz6 } : {}) }),
+  };
+  const keys = Object.keys(calls);
+  const settled = await Promise.allSettled(keys.map((k) => calls[k]));
+  const res = {};
+  keys.forEach((k, i) => {
+    res[k] = settled[i].status === 'fulfilled'
+      ? { ok: true, data: settled[i].value }
+      : { ok: false, err: String(settled[i].reason && settled[i].reason.message || settled[i].reason) };
+  });
+  return window.assembleLiveReport(corp.corpNm || name, corp, res);
 }
 
 // 동명업체 선택 UI
