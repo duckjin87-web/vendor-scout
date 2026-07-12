@@ -65,6 +65,10 @@ const DATA_GO = {
     { url: `${B1471}/CsmtcsMnfctrInfoService01/getCsmtcsMnfctrInq01`, map: { name: 'entpName' } },
     { url: `${B1471}/CsmtcsInfoService/getMakerList`, map: { name: 'entpName' } },
   ],
+  customs: [
+    { url: 'https://apis.data.go.kr/1220000/prodstclnprtscnt/getProdstclnprtscntList', map: { hs: 'hsSgn', from: 'strtYearMonth', to: 'endYearMonth' } },
+    { url: 'https://apis.data.go.kr/1220000/Itemtrdnation/getItemtrdnationList', map: { hs: 'hsSgn', from: 'strtYearMonth', to: 'endYearMonth' } },
+  ],
 };
 
 // data.go 공통 에러 메시지 → 사용자 조치 안내
@@ -195,6 +199,7 @@ async function finishLive(name, corp) {
     rpt: proxyGet('rpt', { name: nm }),
     nps: npsLookup(nm, bz6),
     maker: proxyGet('maker', { name: nm }),
+    customs: proxyGet('customs', { hs: '33', from: '202301', to: '202612' }),
   };
   const keys = Object.keys(calls);
   const settled = await Promise.allSettled(keys.map((k) => calls[k]));
@@ -424,6 +429,22 @@ function renderCrosscheck(rows) {
   return b;
 }
 
+function renderTradeRef(tradeRef) {
+  if (!tradeRef) return null;
+  const fmtUsd = (v) => {
+    if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+    if (v >= 1e6) return `$${Math.round(v / 1e6)}M`;
+    return `$${v.toLocaleString()}`;
+  };
+  const b = el('div', 'traderef');
+  b.innerHTML =
+    `<h4>🌐 화장품 업종 수출입 참고 <span>(관세청 HS33 · ${tradeRef.itemCount}건)</span></h4>` +
+    `<div class="tr-row"><b>수출 총액:</b> ${fmtUsd(tradeRef.totalExportUsd)}</div>` +
+    (tradeRef.topCountries.length ? `<div class="tr-row"><b>주요 수출국:</b> ${esc(tradeRef.topCountries.join(', '))}</div>` : '') +
+    `<div class="tr-note">※ ${esc(tradeRef.note)}</div>`;
+  return b;
+}
+
 function render(report) {
   currentReport = report;
   const root = $('#report');
@@ -488,6 +509,8 @@ function render(report) {
   blocks.appendChild(block('기업 기본정보', '🏢', report.basic));
   blocks.appendChild(block('생산역량 · 인원', '🏭', report.capacity));
   blocks.appendChild(financeBlock(report));
+  const trb = renderTradeRef(report.trade_ref);
+  if (trb) blocks.appendChild(trb);
   const diffBlock = renderDiff(report.diff_from_prev);
   if (diffBlock) blocks.appendChild(diffBlock);
   blocks.appendChild(renderCrosscheck(report.crosscheck));

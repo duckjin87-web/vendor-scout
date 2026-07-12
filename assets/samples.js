@@ -93,6 +93,12 @@ const linear = {
     { key: '사업장 가입자수 (연금기준)', before: '81명', after: '87명' },
     { key: '기능성 보고품목 수 (5년내)', before: 39, after: 42 },
   ],
+  trade_ref: {
+    totalExportUsd: 8_541_000_000, totalImportUsd: 2_104_000_000,
+    topCountries: ['중국', '미국', '일본', '베트남', '러시아'],
+    itemCount: 156, hsCode: '33',
+    note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계 (데모)',
+  },
 };
 
 // ── 샘플 2: 샘플뷰티랩 — 데이터 공백 다수(B/D), 재무 미제출 ──
@@ -146,6 +152,12 @@ const beautylab = {
     { type: 'data_gap', source: 'mfds', detail: '제조업 등록 미확인 — 자사 제조 여부 실사 필수' },
   ],
   diff_from_prev: [],
+  trade_ref: {
+    totalExportUsd: 8_541_000_000, totalImportUsd: 2_104_000_000,
+    topCountries: ['중국', '미국', '일본', '베트남', '러시아'],
+    itemCount: 156, hsCode: '33',
+    note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계 (데모)',
+  },
 };
 
 // ── 범용성: 미등록 업체명 입력 시 이름 기반 결정론적 데모 리포트 자동 생성 ──
@@ -277,10 +289,16 @@ function generateReport(rawName) {
       overall_grade: overall,
       sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
       max_age_years: 5,
-      generated: true, // 자동 생성 데모 표시
+      generated: true,
     },
     basic, capacity, finance, finance_history, crosscheck, risk_flags,
     diff_from_prev: [],
+    trade_ref: {
+      totalExportUsd: ri(4e9, 10e9), totalImportUsd: ri(1e9, 3e9),
+      topCountries: shuffle(['중국', '미국', '일본', '베트남', '러시아', '태국', '대만', '홍콩', '인도네시아', '말레이시아']).slice(0, 5),
+      itemCount: ri(80, 200), hsCode: '33',
+      note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계 (데모)',
+    },
   };
 }
 
@@ -420,13 +438,34 @@ function assembleLiveReport(name, corp, res) {
   const empVal = (npsDet && (npsDet.jnngpCnt ?? npsDet.subscrCnt)) ?? (nps && (nps.jnngpCnt ?? nps.subscrCnt)) ?? null;
   const npsAddr = (nps && (nps.wkplRoadNmDtlAddr ?? nps.ldongAddr)) ?? (npsDet && npsDet.wkplRoadNmDtlAddr) ?? null;
 
+  // 관세청 수출입 (화장품 업종 참고 — 개별 업체가 아닌 HS33 업종 전체 통계)
+  const custList = R.customs && R.customs.ok ? listOf(R.customs.data, ['response.body.items.item', 'body.items', 'items']) : [];
+  let trade_ref = null;
+  if (custList.length) {
+    const byCountry = {};
+    let totalExp = 0, totalImp = 0;
+    custList.forEach((it) => {
+      const country = it.cntryNm || it.cntry_nm || it.natNm || it.cntryEngNm || '기타';
+      const exp = Number(it.expDlr || it.exp_dlr || it.expUsdAmt || 0);
+      const imp = Number(it.impDlr || it.imp_dlr || it.impUsdAmt || 0);
+      totalExp += exp;
+      totalImp += imp;
+      byCountry[country] = (byCountry[country] || 0) + exp;
+    });
+    const topCountries = Object.entries(byCountry)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([n]) => n);
+    trade_ref = { totalExportUsd: totalExp, totalImportUsd: totalImp, topCountries, itemCount: custList.length, hsCode: '33', note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계이며 개별 업체 수치가 아닙니다' };
+  }
+
   const capacity = [
     f('사업장 가입자수 (연금기준)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '실인원 프록시 — 파견/외주 미포함' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
     fc('품질인증', certList([false, false, false, false, false]), 'A', '식약처 GMP·인증기관', null, '미연동 — CGMP는 식약처 GMP API로 가능, ISO/할랄/비건은 인증기관별 개별(공개 API 없음)'),
-    f('수출 실적 (최근)', null, 'D', '관세청/무역협회', null, '미연동 — 관세청 공개 API는 업체별 조회 미지원(무역협회/자체자료 필요)'),
+    f('수출 실적 (업종)', trade_ref ? `화장품(HS33) 수출 총 $${Math.round(trade_ref.totalExportUsd / 1e6)}M` : null, trade_ref ? 'C' : 'D', '관세청 수출입실적 API', trade_ref ? today : null, trade_ref ? '관세청 업종 통계 — 업체별 수출은 무역협회/자체자료 필요' : '관세청 API 연동 실패 또는 데이터 없음'),
     fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'D', '수기 확인 항목', null, '공개 API 없음 — KPP/아주렌탈은 고객사 목록 비공개. 업체 문의 또는 파트너 계정으로만 확인'),
   ];
 
@@ -472,6 +511,7 @@ function assembleLiveReport(name, corp, res) {
     stat('rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null, '0건 — 기능성 미취급 또는 상호 불일치'),
     stat('nps', '국민연금 사업장', (npsData && npsData.count) ? `${npsData.count}건 매칭${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
     stat('maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
+    stat('customs', '관세청 수출입실적', custList.length ? `${custList.length}건 (HS33 화장품)` : null, '화장품 업종 수출입 데이터 없음'),
   ];
 
   return {
@@ -481,6 +521,7 @@ function assembleLiveReport(name, corp, res) {
       max_age_years: 5, live: true, src_status,
     },
     basic, capacity, finance, finance_history, crosscheck, risk_flags: [], diff_from_prev: [],
+    trade_ref,
   };
 }
 

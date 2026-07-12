@@ -19,7 +19,7 @@ const SERVICES = {
   npsSearch: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch',
   npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getDetailInfoSearch',
   maker: 'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01',
-  // 승인 확인 후 추가: gmp(품질인증) 등
+  customs: 'https://apis.data.go.kr/1220000/prodstclnprtscnt/getProdstclnprtscntList',
 };
 
 const cors = {
