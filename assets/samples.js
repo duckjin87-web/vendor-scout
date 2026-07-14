@@ -35,6 +35,41 @@ function fc(key, checklist, grade, source, asOf, note) {
 const CERTS = ['CGMP', 'ISO 22716', 'ISO 14001', '할랄(HALAL)', '비건(Vegan)'];
 function certList(oks) { return CERTS.map((label, i) => ({ label, ok: !!oks[i] })); }
 
+// ── 방문 이동거리 추정 (한국콜마 세종 기준점) ──
+const REF_POINT = { name: '한국콜마', addr: '세종시 전의면 산단길 22-17', lat: 36.631, lng: 127.046 };
+const COORDS = [
+  ['향남읍',37.096,126.905],['오송',36.622,127.109],['진량읍',35.858,128.802],
+  ['통진읍',37.645,126.634],['청북읍',36.973,127.076],['전의면',36.631,127.046],
+  ['화성시',37.199,126.831],['안산시',37.322,126.831],['김포시',37.615,126.715],
+  ['평택시',36.992,127.112],['용인시',37.241,127.177],['청주시',36.642,127.489],
+  ['천안시',36.815,127.114],['경산시',35.825,128.802],['남동구',37.449,126.731],
+  ['단원구',37.318,126.797],['서북구',36.820,127.156],['흥덕구',36.639,127.430],
+  ['유성구',36.362,127.356],['처인구',37.234,127.202],
+  ['서울',37.566,126.978],['인천',37.456,126.705],['대전',36.351,127.385],
+  ['세종',36.480,127.261],['대구',35.872,128.602],['부산',35.180,129.076],
+  ['광주',35.160,126.851],['울산',35.539,129.311],
+  ['경기도',37.400,127.000],['충청북도',36.635,127.490],['충청남도',36.659,126.673],
+  ['경상북도',36.576,128.506],['경상남도',35.238,128.692],
+  ['전라북도',35.820,127.108],['전라남도',34.816,126.463],['강원',37.885,127.730],['제주',33.489,126.498],
+];
+function haversineKm(la1,lo1,la2,lo2){const R=6371,r=Math.PI/180,dL=(la2-la1)*r,dO=(lo2-lo1)*r,a=Math.sin(dL/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dO/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
+function estimateTravel(addr){
+  if(!addr)return null;
+  for(const[key,lat,lng]of COORDS){if(addr.includes(key)){
+    const s=haversineKm(REF_POINT.lat,REF_POINT.lng,lat,lng);
+    if(s<2)return{km:0,min:0,same:true};
+    const d=Math.round(s*1.35),m=Math.round(d/65*60);
+    return{km:d,min:m};
+  }}
+  return null;
+}
+function travelText(est){
+  if(!est)return null;
+  if(est.same)return '한국콜마 인근 (동일 권역)';
+  const h=Math.floor(est.min/60),m=est.min%60;
+  return `약 ${est.km}km · 차량 ${h?h+'시간 ':''}${m}분`;
+}
+
 // ── 샘플 1: 리니어코스메틱 — 대체로 양호(A), 단 주소 3중 상충 1건 ──
 const linear = {
   meta: {
@@ -57,8 +92,9 @@ const linear = {
     f('제조업 등록', '화장품제조업 (등록 제2011-1428호)', 'A', '식약처 제조업 등록', '2011-06-02'),
   ],
   capacity: [
-    f('사업장 가입자수 (연금기준)', '87명', 'C', '국민연금 사업장 정보', '2026-05-31', '실인원 프록시 — 파견/외주 미포함'),
+    f('재직자수 (국민연금 가입자)', '87명', 'B', '국민연금 사업장 API', '2026-05-31', '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조'),
     f('사업장 주소 (연금기준)', '경기도 화성시 향남읍 제약공단로 51', 'C', '국민연금 사업장 정보', '2026-05-31', '본점/제조소와 번지 상이 — 실사 확인 필요'),
+    f('방문 이동거리', travelText(estimateTravel('경기도 화성시 향남읍 제약공단로 45')), 'C', `기준: ${REF_POINT.name} (${REF_POINT.addr})`, '2026-07-07', '직선거리 기반 추정 — 네이버/카카오 지도에서 정확한 경로 확인'),
     f('기능성 보고품목 수 (5년내)', 42, 'A', '식약처 보고품목 API', '2026-07-07'),
     f('신고 제형 분포', '크림, 로션, 앰플/세럼, 마스크팩, 젤', 'C', '식약처 보고품목 API', '2026-07-07', 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
     fc('품질인증', certList([1, 1, 1, 0, 1]), 'A', '식약처 GMP·인증기관', '2024-11-20', 'CGMP 적합업소(유효) + 국제 품질/윤리 인증'),
@@ -84,13 +120,13 @@ const linear = {
     { key: '실제 공장 소재지', expected: '3개 출처 상충 — 플래그 참조', verified: null, match: null, src_type: '3중대조' },
     { key: '사업장 주소 (연금기준)', expected: '경기도 화성시 향남읍 제약공단로 51', verified: null, match: null, src_type: '국민연금 사업장 정보' },
     { key: '신고 제형 분포', expected: '크림, 로션, 앰플/세럼, 마스크팩, 젤', verified: null, match: null, src_type: '식약처 보고품목 API' },
-    { key: '사업장 가입자수 (연금기준)', expected: '87명', verified: null, match: null, src_type: '국민연금 사업장 정보' },
+    { key: '재직자수 (국민연금 가입자)', expected: '87명', verified: null, match: null, src_type: '국민연금 사업장 API' },
   ],
   risk_flags: [
     { type: 'address_conflict', detail: '본점주소: 제약공단로 45 | 제조소 소재지: 제약공단로 45 | 사업장 주소 (연금기준): 제약공단로 51' },
   ],
   diff_from_prev: [
-    { key: '사업장 가입자수 (연금기준)', before: '81명', after: '87명' },
+    { key: '재직자수 (국민연금 가입자)', before: '81명', after: '87명' },
     { key: '기능성 보고품목 수 (5년내)', before: 39, after: 42 },
   ],
   trade_ref: {
@@ -123,8 +159,9 @@ const beautylab = {
     f('제조업 등록', null, 'D', '식약처 제조업 등록', null, '조회 결과 없음 — 책임판매업만 등록 추정'),
   ],
   capacity: [
-    f('사업장 가입자수 (연금기준)', '11명', 'C', '국민연금 사업장 정보', '2026-05-31', '실인원 프록시'),
+    f('재직자수 (국민연금 가입자)', '11명', 'B', '국민연금 사업장 API', '2026-05-31', '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조'),
     f('사업장 주소 (연금기준)', '충청북도 청주시 흥덕구 오송생명로 12', 'C', '국민연금 사업장 정보', '2026-05-31'),
+    f('방문 이동거리', travelText(estimateTravel('충청북도 청주시 흥덕구 오송생명로 12')), 'C', `기준: ${REF_POINT.name} (${REF_POINT.addr})`, '2026-07-07', '직선거리 기반 추정 — 네이버/카카오 지도에서 정확한 경로 확인'),
     f('기능성 보고품목 수 (5년내)', 3, 'A', '식약처 보고품목 API', '2026-07-07'),
     f('신고 제형 분포', '앰플/세럼', 'C', '식약처 보고품목 API', '2026-07-07', '단일 제형 — 소품목 소량 추정'),
     fc('품질인증', certList([0, 0, 0, 0, 0]), 'B', '식약처 GMP·인증기관', '2026-07-07', 'CGMP 적합업소 목록 미포함 — 인증 미확인'),
@@ -218,8 +255,9 @@ function generateReport(rawName) {
   const certs = certList([hasGmp, hasGmp && chance(0.7), chance(0.35), chance(0.3), chance(0.35)]);
   const plt = [{ label: 'KPP', ok: chance(0.4) }, { label: '아주렌탈', ok: chance(0.25) }];
   const capacity = [
-    f('사업장 가입자수 (연금기준)', `${emp}명`, 'C', '국민연금 사업장 정보', '2026-05-31', '실인원 프록시 — 파견/외주 미포함'),
+    f('재직자수 (국민연금 가입자)', `${emp}명`, 'B', '국민연금 사업장 API', '2026-05-31', '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조'),
     f('사업장 주소 (연금기준)', pensionAddr, 'C', '국민연금 사업장 정보', '2026-05-31'),
+    f('방문 이동거리', travelText(estimateTravel(hqAddr)), 'C', `기준: ${REF_POINT.name} (${REF_POINT.addr})`, today, '직선거리 기반 추정 — 네이버/카카오 지도에서 정확한 경로 확인'),
     f('기능성 보고품목 수 (5년내)', funcCount || null, funcCount ? 'A' : 'D', '식약처 보고품목 API', today, funcCount ? null : '보고 이력 없음 — 기능성 미취급 또는 공백'),
     f('신고 제형 분포', funcCount ? shuffle(G_FORMS).slice(0, ri(1, 5)).join(', ') : null, 'C', '식약처 보고품목 API', today, 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
     fc('품질인증', certs, 'A', '식약처 GMP·인증기관', today, certs.some((c) => c.ok) ? null : '보유 인증 미확인'),
@@ -460,8 +498,9 @@ function assembleLiveReport(name, corp, res) {
   }
 
   const capacity = [
-    f('사업장 가입자수 (연금기준)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '실인원 프록시 — 파견/외주 미포함' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
+    f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
+    f('방문 이동거리', travelText(estimateTravel(mkAddr || corp?.addr || npsAddr)), 'C', '좌표 추정 (하버사인)', today, '도로사정·출발지에 따라 실제와 차이 가능 — 네이버지도 재확인'),
     f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
     fc('품질인증', certList([false, false, false, false, false]), 'A', '식약처 GMP·인증기관', null, '미연동 — CGMP는 식약처 GMP API로 가능, ISO/할랄/비건은 인증기관별 개별(공개 API 없음)'),

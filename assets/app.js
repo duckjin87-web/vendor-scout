@@ -632,10 +632,4 @@ document.addEventListener('DOMContentLoaded', () => {
       lookup(c.dataset.name);
     })
   );
-  // 첫 진입 시 대표 샘플 자동 표시
-  const first = (window.VENDOR_SAMPLE_LIST || [])[0];
-  if (first) {
-    $('#q').value = first.meta.vendor_name;
-    render(first);
-  }
 });
