@@ -69,6 +69,10 @@ const DATA_GO = {
     { url: 'https://apis.data.go.kr/1220000/prodstclnprtscnt/getProdstclnprtscntList', map: { hs: 'hsSgn', from: 'strtYearMonth', to: 'endYearMonth' } },
     { url: 'https://apis.data.go.kr/1220000/Itemtrdnation/getItemtrdnationList', map: { hs: 'hsSgn', from: 'strtYearMonth', to: 'endYearMonth' } },
   ],
+  gmp: [
+    { url: `${B1471}/CsmtcsGmpInfoService01/getCsmtcsGmpList01`, map: { name: 'bssh_nm' } },
+    { url: `${B1471}/CsmtcsGmpInfoService01/getCsmtcsGmpList01`, map: { name: 'BSSH_NM' } },
+  ],
 };
 
 // data.go 공통 에러 메시지 → 사용자 조치 안내
@@ -140,6 +144,22 @@ async function proxyGet(service, logical) {
   throw lastErr || new Error('호출 실패');
 }
 
+// DART 공시 / 네이버 뉴스 — 프록시 전용 (CORS 차단 → 브라우저 직접 호출 불가)
+async function proxyOnlyGet(service, params) {
+  const proxy = getProxy();
+  if (!proxy) throw new Error('프록시 미설정 — DART/네이버는 프록시(Worker) 경유 전용');
+  const q = new URLSearchParams({ service, ...params });
+  let res;
+  try { res = await fetch(`${proxy.replace(/\/+$/, '')}/?${q}`, { headers: { Accept: 'application/json' } }); }
+  catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    const msg = (() => { try { return JSON.parse(body).error; } catch { return ''; } })();
+    throw new Error(msg || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // 응답에서 아이템 배열 추출 (공통 중첩 경로들 시도)
 function itemsOf(data) {
   const paths = [
@@ -194,12 +214,18 @@ async function npsLookup(nm, bz6) {
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
   const bz6 = corp.bzno ? String(corp.bzno).replace(/\D/g, '').slice(0, 6) : null;
+  const oneYearAgo = new Date(); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const dartFrom = oneYearAgo.toISOString().slice(0, 10).replace(/-/g, '');
+  const dartTo = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
     rpt: proxyGet('rpt', { name: nm }),
     nps: npsLookup(nm, bz6),
     maker: proxyGet('maker', { name: nm }),
     customs: proxyGet('customs', { hs: '33', from: '202301', to: '202612' }),
+    gmp: proxyGet('gmp', { name: nm }),
+    dart: proxyOnlyGet('dart', { corp_name: nm, bgn_de: dartFrom, end_de: dartTo, page_count: '10', sort: 'date', sort_mth: 'desc' }),
+    naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
   };
   const keys = Object.keys(calls);
   const settled = await Promise.allSettled(keys.map((k) => calls[k]));
@@ -429,6 +455,44 @@ function renderCrosscheck(rows) {
   return b;
 }
 
+function renderNews(news) {
+  if (!news || !news.length) return null;
+  const b = el('div', 'newsbox');
+  b.innerHTML = `<h4>📰 최신 관련기사 <span>(최근 1년 · ${news.length}건)</span></h4>`;
+  const list = el('ul', 'newslist');
+  news.forEach((n) => {
+    const li = el('li');
+    const title = String(n.title || '').replace(/<\/?b>/g, '');
+    const desc = String(n.description || '').replace(/<\/?b>/g, '');
+    const date = n.pubDate ? new Date(n.pubDate).toLocaleDateString('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+    const src = n.source || '';
+    li.innerHTML =
+      `<a href="${esc(n.link || '#')}" target="_blank" rel="noopener" class="ntitle">${esc(title)}</a>` +
+      `<div class="ndesc">${esc(desc.slice(0, 120))}${desc.length > 120 ? '…' : ''}</div>` +
+      `<div class="nmeta">${date}${src ? ' · ' + esc(src) : ''}</div>`;
+    list.appendChild(li);
+  });
+  b.appendChild(list);
+  return b;
+}
+
+function renderDartDisclosures(disclosures) {
+  if (!disclosures || !disclosures.length) return null;
+  const b = el('div', 'dartbox');
+  b.innerHTML = `<h4>📋 DART 공시 <span>(최근 1년 · ${disclosures.length}건)</span></h4>`;
+  const list = el('ul', 'dartlist');
+  disclosures.slice(0, 8).forEach((d) => {
+    const li = el('li');
+    const date = d.rcept_dt ? `${d.rcept_dt.slice(0, 4)}-${d.rcept_dt.slice(4, 6)}-${d.rcept_dt.slice(6, 8)}` : '';
+    li.innerHTML =
+      `<a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${esc(d.rcept_no || '')}" target="_blank" rel="noopener" class="dtitle">${esc(d.report_nm || '(제목 없음)')}</a>` +
+      `<div class="dmeta">${esc(date)}${d.flr_nm ? ' · ' + esc(d.flr_nm) : ''}</div>`;
+    list.appendChild(li);
+  });
+  b.appendChild(list);
+  return b;
+}
+
 function renderTradeRef(tradeRef) {
   if (!tradeRef) return null;
   const fmtUsd = (v) => {
@@ -511,6 +575,10 @@ function render(report) {
   blocks.appendChild(financeBlock(report));
   const trb = renderTradeRef(report.trade_ref);
   if (trb) blocks.appendChild(trb);
+  const dartB = renderDartDisclosures(report.dart_disclosures);
+  if (dartB) blocks.appendChild(dartB);
+  const newsB = renderNews(report.news);
+  if (newsB) blocks.appendChild(newsB);
   const diffBlock = renderDiff(report.diff_from_prev);
   if (diffBlock) blocks.appendChild(diffBlock);
   blocks.appendChild(renderCrosscheck(report.crosscheck));
@@ -608,8 +676,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const cur = getApiKey() || getProxy();
       const next = window.prompt(
         '실데이터 연결 — 둘 중 하나 입력:\n' +
-        '① 공공데이터(data.go.kr) 인증키 → 브라우저가 직접 조회 (서버 불필요)\n' +
-        '② 프록시(Worker) 주소(https://…) → CORS가 막힐 때\n\n' +
+        '① 공공데이터(data.go.kr) 인증키 → 브라우저가 직접 조회\n' +
+        '② 프록시(Worker) 주소(https://…) → CORS·DART·네이버 뉴스까지\n\n' +
+        '※ DART 공시·네이버 뉴스는 프록시(Worker Secret) 전용\n' +
         '비우고 확인하면 데모 모드로 돌아갑니다.',
         cur
       );
