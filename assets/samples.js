@@ -505,7 +505,9 @@ function assembleLiveReport(name, corp, res) {
     const byCountry = {};
     let totalExp = 0, totalImp = 0;
     custList.forEach((it) => {
-      const country = it.cntryNm || it.cntry_nm || it.natNm || it.cntryEngNm || '기타';
+      const country = it.statKor || it.statCd || it.cntryNm || it.cntry_nm || it.natNm || it.cntryEngNm || '기타';
+      // 총계/합계 행은 국가별 집계에서 제외(중복합산·순위오염 방지)
+      if (/총계|합계|total/i.test(country)) return;
       const exp = Number(it.expDlr || it.exp_dlr || it.expUsdAmt || 0);
       const imp = Number(it.impDlr || it.imp_dlr || it.impUsdAmt || 0);
       totalExp += exp;
@@ -519,9 +521,13 @@ function assembleLiveReport(name, corp, res) {
     trade_ref = { totalExportUsd: totalExp, totalImportUsd: totalImp, topCountries, itemCount: custList.length, hsCode: '33', note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계이며 개별 업체 수치가 아닙니다' };
   }
 
-  // 식약처 GMP 적합업소 (CGMP 등록여부)
+  // 식약처 GMP 적합업소 (CGMP 등록여부) — 적합업체 전체목록에서 상호로 필터
   const gmpList = R.gmp && R.gmp.ok ? listOf(R.gmp.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const gmpHit = gmpList[0];
+  const cmpKey = stripCorp(name).replace(/\s/g, '');
+  const gmpHit = cmpKey ? gmpList.find((g) => {
+    const gn = stripCorp(g.BSSH_NM || g.bssh_nm || g.CMPNY_NM || g.cmpny_nm || g.ENTRPS_NM || g.entrps_nm || g.PRDLST_REPORT_NO || '').replace(/\s/g, '');
+    return gn && (gn.includes(cmpKey) || cmpKey.includes(gn));
+  }) : null;
   const hasCgmp = !!gmpHit;
   const gmpCerts = certList([hasCgmp, false, false, false, false]);
 
@@ -590,7 +596,9 @@ function assembleLiveReport(name, corp, res) {
     stat('nps', '국민연금 사업장', (npsData && npsData.count) ? `${npsData.count}건 매칭${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
     stat('maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
     stat('customs', '관세청 수출입실적', custList.length ? `${custList.length}건 (HS33 화장품)` : null, '화장품 업종 수출입 데이터 없음'),
-    stat('gmp', '식약처 GMP 적합업소', hasCgmp ? 'CGMP 적합업소 확인' : null, 'CGMP 미등록 또는 조회 실패'),
+    (R.gmp && R.gmp.ok)
+      ? { name: '식약처 GMP 적합업소', ok: hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `적합업체 ${gmpList.length}곳 중 미해당 (CGMP 미인증)` }
+      : stat('gmp', '식약처 GMP 적합업소', null, 'GMP 목록 조회 실패'),
     stat('dart', 'DART 전자공시', dart_disclosures ? `${dart_disclosures.length}건 (최근 1년)` : null, '공시 없음 또는 프록시 미설정'),
     stat('naverNews', '네이버 뉴스검색', news ? `${news.length}건 관련기사` : null, '기사 없음 또는 프록시 미설정'),
   ];

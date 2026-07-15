@@ -22,12 +22,12 @@
 const DATAGO_SERVICES = {
   corp: 'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2',
   finance: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2',
-  rpt: 'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService01/getRptPrdlstInq01',
+  rpt: 'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
   npsSearch: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch',
   npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getDetailInfoSearch',
   maker: 'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01',
-  customs: 'https://apis.data.go.kr/1220000/prodstclnprtscnt/getProdstclnprtscntList',
-  gmp: 'https://apis.data.go.kr/1471000/CsmtcsGmpInfoService01/getCsmtcsGmpList01',
+  customs: 'https://apis.data.go.kr/1220000/nitemtrade/getNitemtradeList',
+  gmp: 'https://apis.data.go.kr/1471000/CsmtcsGmpStbltCompInfo/getCsmtcsGmpStbltCompInfo',
 };
 
 const cors = {

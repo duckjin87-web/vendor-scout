@@ -56,8 +56,8 @@ const PARAM_MAP = {
   npsSearch: { name: 'wkpl_nm', bz6: 'bzowr_rgst_no' },
   npsDetail: { seq: 'seq', ym: 'data_crt_ym' },
   maker:     { name: 'bssh_nm' },
-  customs:   { hs: 'hsSgn', from: 'strtYearMonth', to: 'endYearMonth' },
-  gmp:       { name: 'bssh_nm' },
+  customs:   { hs: 'hsSgn', from: 'strtYymm', to: 'endYymm' },
+  gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
 };
 
 // data.go 공통 에러 메시지 → 사용자 조치 안내
@@ -197,7 +197,7 @@ async function finishLive(name, corp) {
     nps: npsLookup(nm, bz6),
     maker: proxyGet('maker', { name: nm }),
     customs: proxyGet('customs', { hs: '33', from: ym(custStart), to: ym(custEnd) }),
-    gmp: proxyGet('gmp', { name: nm }),
+    gmp: proxyGet('gmp', { rows: '500' }),
     dart: proxyOnlyGet('dart', { corp_name: nm, bgn_de: dartFrom, end_de: dartTo, page_count: '10', sort: 'date', sort_mth: 'desc' }),
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
   };
