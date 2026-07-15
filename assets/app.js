@@ -53,7 +53,7 @@ const PARAM_MAP = {
   corp:      { name: 'corpNm' },
   finance:   { crno: 'crno' },
   rpt:       { name: 'entp_name' },
-  npsSearch: { name: 'wkpl_nm', bz6: 'bzowr_rgst_no' },
+  npsSearch: { name: 'wkpl_nm' },
   npsDetail: { seq: 'seq', ym: 'data_crt_ym' },
   maker:     { name: 'bssh_nm' },
   customs:   { hs: 'hsSgn', from: 'strtYymm', to: 'endYymm' },
@@ -164,12 +164,11 @@ function stripCorp(s) {
   return String(s || '').replace(/\(주\)|\(유\)|\(재\)|\(사\)|㈜|주식회사|유한회사/g, '').trim();
 }
 
-// 국민연금 2단계: 사업장 검색 → 첫 건 seq로 상세조회(가입자수는 상세에만 있음)
-async function npsLookup(nm, bz6) {
-  const search = await proxyGet('npsSearch', { name: nm, bz6 });
-  let items = itemsOf(search);
-  // 사업자번호 필터로 0건이면 상호만으로 재시도
-  if (!items.length && bz6) items = itemsOf(await proxyGet('npsSearch', { name: nm }));
+// 국민연금 2단계: 사업장 검색(상호) → 첫 건 seq로 상세조회(가입자수는 상세에만 있음)
+// bzowr_rgst_no(6자리 부분번호)를 함께 보내면 NPS 백엔드가 500 크래시 → 상호만으로 조회
+async function npsLookup(nm) {
+  const search = await proxyGet('npsSearch', { name: nm });
+  const items = itemsOf(search);
   const hit = items[0];
   let detail = null;
   if (hit && hit.seq != null) {
@@ -182,19 +181,18 @@ async function npsLookup(nm, bz6) {
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
-  const bz6 = corp.bzno ? String(corp.bzno).replace(/\D/g, '').slice(0, 6) : null;
   const now = new Date();
   const ym = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  // 관세청: 완료된 지난달까지(미래월은 data.go가 거부) 최근 24개월
+  // 관세청: 조회기간은 1년 이내만 허용 → 완료된 지난달까지 최근 6개월
   const custEnd = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const custStart = new Date(now.getFullYear(), now.getMonth() - 24, 1);
+  const custStart = new Date(now.getFullYear(), now.getMonth() - 6, 1);
   // DART: 최근 1년(YYYYMMDD)
   const dartFrom = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()).toISOString().slice(0, 10).replace(/-/g, '');
   const dartTo = now.toISOString().slice(0, 10).replace(/-/g, '');
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
     rpt: proxyGet('rpt', { name: nm }),
-    nps: npsLookup(nm, bz6),
+    nps: npsLookup(nm),
     maker: proxyGet('maker', { name: nm }),
     customs: proxyGet('customs', { hs: '33', from: ym(custStart), to: ym(custEnd) }),
     gmp: proxyGet('gmp', { rows: '500' }),

@@ -522,12 +522,15 @@ function assembleLiveReport(name, corp, res) {
   }
 
   // 식약처 GMP 적합업소 (CGMP 등록여부) — 적합업체 전체목록에서 상호로 필터
+  // 업체명 필드 키가 API마다 달라(BSSH_NM/CMPNY_NM/…) 모든 필드값을 훑어 상호 포함 여부로 매칭
   const gmpList = R.gmp && R.gmp.ok ? listOf(R.gmp.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const cmpKey = stripCorp(name).replace(/\s/g, '');
-  const gmpHit = cmpKey ? gmpList.find((g) => {
-    const gn = stripCorp(g.BSSH_NM || g.bssh_nm || g.CMPNY_NM || g.cmpny_nm || g.ENTRPS_NM || g.entrps_nm || g.PRDLST_REPORT_NO || '').replace(/\s/g, '');
-    return gn && (gn.includes(cmpKey) || cmpKey.includes(gn));
-  }) : null;
+  const gmpHit = cmpKey.length >= 2 ? gmpList.find((g) =>
+    Object.values(g).some((v) => {
+      const gn = stripCorp(String(v == null ? '' : v)).replace(/\s/g, '');
+      return gn.length >= 3 && gn.includes(cmpKey);
+    })
+  ) : null;
   const hasCgmp = !!gmpHit;
   const gmpCerts = certList([hasCgmp, false, false, false, false]);
 
@@ -547,7 +550,7 @@ function assembleLiveReport(name, corp, res) {
     f('방문 이동거리', travelText(estimateTravel(mkAddr || corp?.addr || npsAddr)), 'C', '좌표 추정 (하버사인)', today, '도로사정·출발지에 따라 실제와 차이 가능 — 네이버지도 재확인'),
     f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
-    fc('품질인증 (CGMP)', gmpCerts, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? `CGMP 적합업소 확인 (${gmpHit.BSSH_NM || gmpHit.bssh_nm || name})` : why('gmp', 'CGMP 적합업소 미등록 — ISO/할랄/비건은 인증기관별 개별 확인')),
+    fc('품질인증 (CGMP)', gmpCerts, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 명단 확인 — 식약처 GMP 적합업체 현황 등재' : why('gmp', 'CGMP 적합업소 미등재 — ISO/할랄/비건은 인증기관별 개별 확인')),
     f('수출 실적 (업종)', trade_ref ? `화장품(HS33) 수출 총 $${Math.round(trade_ref.totalExportUsd / 1e6)}M` : null, trade_ref ? 'C' : 'D', '관세청 수출입실적 API', trade_ref ? today : null, trade_ref ? '관세청 업종 통계 — 업체별 수출은 DART 공시/무역협회 확인' : '관세청 API 연동 실패 또는 데이터 없음'),
     f('DART 공시', dart_disclosures ? `최근 1년 ${dart_disclosures.length}건` : null, dart_disclosures ? 'A' : 'D', 'DART 전자공시', dart_disclosures ? today : null, dart_disclosures ? '사업보고서·반기보고서 등 — 상세 재무·수출비중 확인 가능' : why('dart', '공시목록 조회 실패 또는 공시 없음')),
     fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'D', '수기 확인 항목', null, '공개 API 없음 — KPP/아주렌탈은 고객사 목록 비공개. 업체 문의 또는 파트너 계정으로만 확인'),

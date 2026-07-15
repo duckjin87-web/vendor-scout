@@ -48,13 +48,17 @@ async function relay(target, label, init) {
   return new Response(body, { status: 200, headers: JSON_HDR });
 }
 
+// 식약처 1471000 API만 json 지정에 `type` 파라미터를 씀. NPS(B552015)는 `type`을 주면
+// 백엔드가 크래시(HTTP 500 Unexpected errors)하므로 resultType만 붙인다.
+const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp']);
+
 function handleDataGo(url, service, env) {
   if (!env.DATA_GO_KR_API_KEY) return jsonRes({ error: 'DATA_GO_KR_API_KEY 미설정' }, 500);
   const q = new URLSearchParams();
   for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
   q.set('serviceKey', env.DATA_GO_KR_API_KEY);
   if (!q.has('resultType')) q.set('resultType', 'json');
-  if (!q.has('type'))       q.set('type', 'json');
+  if (NEEDS_TYPE.has(service) && !q.has('type')) q.set('type', 'json');
   if (!q.has('numOfRows'))  q.set('numOfRows', '30');
   return relay(`${DATAGO[service]}?${q}`, `data.go(${service})`);
 }
