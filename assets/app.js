@@ -42,8 +42,17 @@ const isConnected = () => !!(getProxy() || getApiKey());
 function setProxy(v) { // 프록시 URL 또는 인증키를 판별해 저장
   v = (v || '').trim();
   if (!v) { _sls(PROXY_KEY, ''); _sls(APIKEY_KEY, ''); return; }
-  if (/^https?:\/\//i.test(v)) { _sls(PROXY_KEY, v); _sls(APIKEY_KEY, ''); }
+  // http(s):// 절대주소 또는 / 로 시작하는 상대경로(같은 도메인 프록시) → 프록시로 인식
+  if (/^https?:\/\//i.test(v) || v.startsWith('/')) { _sls(PROXY_KEY, v); _sls(APIKEY_KEY, ''); }
   else { _sls(APIKEY_KEY, v); _sls(PROXY_KEY, ''); }
+}
+// 프록시 주소 + 쿼리 → 최종 요청 URL. 루트 워커(경로 없음)엔 /를 붙이고, /api/proxy 같은 경로엔 그대로.
+function buildProxyUrl(params) {
+  const base = getProxy().replace(/\/+$/, '');
+  const qs = new URLSearchParams(params).toString();
+  // 경로가 있으면(/api/proxy) 그대로, 없으면(https://x.workers.dev) 루트 슬래시 추가
+  const hasPath = /^https?:\/\//i.test(base) ? new URL(base).pathname.length > 1 : base.length > 0;
+  return `${base}${hasPath ? '' : '/'}?${qs}`;
 }
 
 // 서비스별 data.go.kr 후보 = { url, map }. map: 논리키→실제 파라미터명.
@@ -116,7 +125,7 @@ async function proxyGet(service, logical) {
 
   if (!key) { // 프록시 모드 — 첫 후보의 파라미터명으로 매핑해 워커에 전달
     const actual = mapParams(logical, chain[0].map);
-    const url = `${getProxy().replace(/\/+$/, '')}/?${new URLSearchParams({ service, ...actual })}`;
+    const url = buildProxyUrl({ service, ...actual });
     let res;
     try { res = await fetch(url, { headers: { Accept: 'application/json' } }); }
     catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
@@ -148,9 +157,8 @@ async function proxyGet(service, logical) {
 async function proxyOnlyGet(service, params) {
   const proxy = getProxy();
   if (!proxy) throw new Error('프록시 미설정 — DART/네이버는 프록시(Worker) 경유 전용');
-  const q = new URLSearchParams({ service, ...params });
   let res;
-  try { res = await fetch(`${proxy.replace(/\/+$/, '')}/?${q}`, { headers: { Accept: 'application/json' } }); }
+  try { res = await fetch(buildProxyUrl({ service, ...params }), { headers: { Accept: 'application/json' } }); }
   catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
