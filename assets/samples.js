@@ -485,8 +485,12 @@ function assembleLiveReport(name, corp, res) {
   const npsData = R.nps && R.nps.ok ? R.nps.data : null;
   const nps = npsData ? npsData.search : null;
   const npsDet = npsData ? npsData.detail : null;
-  const empVal = (npsDet && (npsDet.jnngpCnt ?? npsDet.subscrCnt)) ?? (nps && (nps.jnngpCnt ?? nps.subscrCnt)) ?? null;
-  const npsAddr = (nps && (nps.wkplRoadNmDtlAddr ?? nps.ldongAddr)) ?? (npsDet && npsDet.wkplRoadNmDtlAddr) ?? null;
+  // XML 태그명: 가입자수=jnngpCnt, 도로명주소=wkplRoadNmDetAddr, 법정동주소=ldongAddrMgpldongNm 등
+  const empRaw = (npsDet && (npsDet.jnngpCnt ?? npsDet.subscrCnt)) ?? (nps && (nps.jnngpCnt ?? nps.subscrCnt)) ?? null;
+  const empVal = (empRaw != null && empRaw !== '') ? empRaw : null;
+  const pick = (o, ...ks) => { if (!o) return null; for (const k of ks) if (o[k] != null && o[k] !== '') return o[k]; return null; };
+  const npsAddr = pick(nps, 'wkplRoadNmDetAddr', 'wkplRoadNmDtlAddr', 'ldongAddrMgpldongNm', 'ldongAddr')
+    || pick(npsDet, 'wkplRoadNmDetAddr', 'wkplRoadNmDtlAddr', 'ldongAddrMgpldongNm') || null;
 
   // 관세청 수출입 (화장품 업종 참고 — 개별 업체가 아닌 HS33 업종 전체 통계)
   const custList = R.customs && R.customs.ok ? listOf(R.customs.data, ['response.body.items.item', 'body.items', 'items']) : [];

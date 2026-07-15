@@ -37,15 +37,23 @@ const cors = {
 const json = (obj, status) =>
   new Response(JSON.stringify(obj), { status, headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' } });
 
+const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp']); // 식약처 1471000만 type=json
+const NPS = new Set(['npsSearch', 'npsDetail']);      // NPS는 json 직렬화 버그 → XML로
+
 async function handleDataGo(url, service, env) {
   if (!env.DATA_GO_KR_API_KEY) return json({ error: 'server missing DATA_GO_KR_API_KEY secret' }, 500);
   const base = DATAGO_SERVICES[service];
   const q = new URLSearchParams();
   for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
   q.set('serviceKey', env.DATA_GO_KR_API_KEY);
-  if (!q.has('resultType')) q.set('resultType', 'json');
-  if (!q.has('type')) q.set('type', 'json');
-  if (!q.has('numOfRows')) q.set('numOfRows', '30');
+  if (NPS.has(service)) {
+    if (!q.has('pageNo')) q.set('pageNo', '1');
+    if (!q.has('numOfRows')) q.set('numOfRows', '100');
+  } else {
+    if (!q.has('resultType')) q.set('resultType', 'json');
+    if (NEEDS_TYPE.has(service) && !q.has('type')) q.set('type', 'json');
+    if (!q.has('numOfRows')) q.set('numOfRows', '30');
+  }
 
   let upstream;
   try {

@@ -72,8 +72,6 @@ const PARAM_MAP = {
   corp:      { name: 'corpNm' },
   finance:   { crno: 'crno' },
   rpt:       { name: 'entp_name' },
-  npsSearch: { name: 'wkpl_nm' },
-  npsDetail: { seq: 'seq', ym: 'data_crt_ym' },
   maker:     { name: 'bssh_nm' },
   customs:   { hs: 'hsSgn', from: 'strtYymm', to: 'endYymm' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
@@ -183,18 +181,49 @@ function stripCorp(s) {
   return String(s || '').replace(/\(주\)|\(유\)|\(재\)|\(사\)|㈜|주식회사|유한회사/g, '').trim();
 }
 
+// NPS(B552015) 응답 파서 — resultType=json이면 서버가 500 크래시 → XML로 받아 파싱.
+// (혹시 JSON이면 그대로 파싱) 반환: item 객체 배열.
+function parseNpsBody(text) {
+  try {
+    const j = JSON.parse(text);
+    return itemsOf(j);
+  } catch { /* XML */ }
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error(`NPS 응답 파싱 실패: ${text.slice(0, 80)}`);
+  const tag = (name) => { const n = doc.getElementsByTagName(name)[0]; return n ? n.textContent.trim() : null; };
+  const code = tag('resultCode');
+  if (code && code !== '00' && code !== '0') throw new Error(friendlyDataGoErr(tag('resultMsg') || `API 오류(code ${code})`));
+  return [...doc.getElementsByTagName('item')].map((it) => {
+    const o = {};
+    for (const c of it.children) o[c.tagName] = c.textContent.trim();
+    return o;
+  });
+}
+
+// NPS 프록시 호출(XML) — params는 실제 파라미터명 그대로 전달(빈 값은 제거)
+async function npsRaw(service, params) {
+  if (!getProxy()) throw new Error('프록시 미설정 — 국민연금은 프록시 경유 전용');
+  const clean = { service };
+  for (const [k, v] of Object.entries(params)) if (v != null && v !== '') clean[k] = v;
+  let res;
+  try { res = await fetch(buildProxyUrl(clean), { headers: { Accept: 'application/xml' } }); }
+  catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
+  if (!res.ok) throw new Error(await proxyErrMsg(res));
+  return parseNpsBody(await res.text());
+}
+
 // 국민연금 2단계: 사업장 검색(상호) → 첫 건 seq로 상세조회(가입자수는 상세에만 있음)
-// bzowr_rgst_no(6자리 부분번호)를 함께 보내면 NPS 백엔드가 500 크래시 → 상호만으로 조회
 async function npsLookup(nm) {
-  const search = await proxyGet('npsSearch', { name: nm });
-  const items = itemsOf(search);
+  const items = await npsRaw('npsSearch', { wkpl_nm: nm });
   const hit = items[0];
   let detail = null;
-  if (hit && hit.seq != null) {
-    try { detail = await proxyGet('npsDetail', { seq: hit.seq, ym: hit.dataCrtYm }); }
-    catch { /* 상세 실패해도 검색 결과는 사용 */ }
+  if (hit && hit.seq != null && hit.seq !== '') {
+    try {
+      const d = await npsRaw('npsDetail', { seq: hit.seq, data_crt_ym: hit.dataCrtYm });
+      detail = d[0] || null;
+    } catch { /* 상세 실패해도 검색 결과는 사용 */ }
   }
-  return { search: hit || null, detail: detail ? (itemsOf(detail)[0] || (detail.response && detail.response.body && detail.response.body.item) || null) : null, count: items.length };
+  return { search: hit || null, detail, count: items.length };
 }
 
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
