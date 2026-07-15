@@ -135,11 +135,6 @@ const linear = {
     itemCount: 156, hsCode: '33',
     note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계 (데모)',
   },
-  dart_disclosures: [
-    { rcept_no: '20260315000123', rcept_dt: '20260315', report_nm: '사업보고서 (2025.12)', flr_nm: '리니어코스메틱' },
-    { rcept_no: '20251115000456', rcept_dt: '20251115', report_nm: '분기보고서 (2025.09)', flr_nm: '리니어코스메틱' },
-    { rcept_no: '20250815000789', rcept_dt: '20250815', report_nm: '반기보고서 (2025.06)', flr_nm: '리니어코스메틱' },
-  ],
   news: [
     { title: '리니어코스메틱, 베트남 법인 설립…동남아 시장 본격 진출', link: '#', pubDate: '2026-06-20', description: '경기도 화성 소재 화장품 제조업체 리니어코스메틱이 베트남 호치민에 현지법인을 설립하고 동남아 시장 공략에 나선다고 밝혔다.' },
     { title: '화장품 OEM 업계 "올해 수출 20% 성장 기대"', link: '#', pubDate: '2026-04-11', description: '국내 주요 화장품 OEM·ODM 업체들이 K-뷰티 수요 증가에 힘입어 올해 수출 실적 20% 이상 성장을 전망하고 있다.' },
@@ -205,7 +200,6 @@ const beautylab = {
     itemCount: 156, hsCode: '33',
     note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계 (데모)',
   },
-  dart_disclosures: null,
   news: [
     { title: '중소 뷰티 브랜드 OEM 위탁 증가세…"자사 제조보다 비용 효율적"', link: '#', pubDate: '2026-03-15', description: '최근 중소 화장품 브랜드 사이에서 OEM 위탁제조 수요가 빠르게 증가하고 있다. 자체 공장 투자 부담 없이 품질관리가 가능하다는 점이 부각됐다.' },
   ],
@@ -351,10 +345,6 @@ function generateReport(rawName) {
       itemCount: ri(80, 200), hsCode: '33',
       note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계 (데모)',
     },
-    dart_disclosures: hasFin ? [
-      { rcept_no: `2026${pad(ri(1,12),2)}${pad(ri(10,28),2)}0${ri(10000,99999)}`, rcept_dt: `2026${pad(ri(1,6),2)}${pad(ri(10,28),2)}`, report_nm: '사업보고서 (2025.12)', flr_nm: name },
-      { rcept_no: `2025${pad(ri(8,11),2)}${pad(ri(10,28),2)}0${ri(10000,99999)}`, rcept_dt: `2025${pad(ri(8,11),2)}${pad(ri(10,28),2)}`, report_nm: '반기보고서 (2025.06)', flr_nm: name },
-    ] : null,
     news: [
       { title: `${name}, ${pick(['신규 라인 가동', 'CGMP 인증 획득', '해외 수출 확대', '신규 거래처 확보', '품질관리 강화'])} 소식`, link: '#', pubDate: `2026-${pad(ri(1,6),2)}-${pad(ri(1,28),2)}`, description: `화장품 제조업체 ${name}이(가) 최근 ${pick(['생산 역량 강화', '수출 시장 개척', '품질 인증 확대', 'OEM 수주 확대'])}에 나서고 있다.` },
       { title: `K-뷰티 OEM 업계, ${pick(['동남아', '북미', '유럽', '일본'])} 시장 공략 가속화`, link: '#', pubDate: `2025-${pad(ri(7,12),2)}-${pad(ri(1,28),2)}`, description: '국내 화장품 OEM 업체들이 해외 시장 다변화에 적극 나서면서 수출 실적이 증가세를 보이고 있다.' },
@@ -534,11 +524,6 @@ function assembleLiveReport(name, corp, res) {
   const hasCgmp = !!gmpHit;
   const gmpCerts = certList([hasCgmp, false, false, false, false]);
 
-  // DART 공시 (최근 1년)
-  const dartRaw = R.dart && R.dart.ok ? R.dart.data : null;
-  const dartList = dartRaw && dartRaw.list ? dartRaw.list : [];
-  const dart_disclosures = dartList.length ? dartList : null;
-
   // 네이버 뉴스 (최근 기사)
   const newsRaw = R.naverNews && R.naverNews.ok ? R.naverNews.data : null;
   const newsItems = newsRaw && newsRaw.items ? newsRaw.items : [];
@@ -551,8 +536,7 @@ function assembleLiveReport(name, corp, res) {
     f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
     fc('품질인증 (CGMP)', gmpCerts, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 명단 확인 — 식약처 GMP 적합업체 현황 등재' : why('gmp', 'CGMP 적합업소 미등재 — ISO/할랄/비건은 인증기관별 개별 확인')),
-    f('수출 실적 (업종)', trade_ref ? `화장품(HS33) 수출 총 $${Math.round(trade_ref.totalExportUsd / 1e6)}M` : null, trade_ref ? 'C' : 'D', '관세청 수출입실적 API', trade_ref ? today : null, trade_ref ? '관세청 업종 통계 — 업체별 수출은 DART 공시/무역협회 확인' : '관세청 API 연동 실패 또는 데이터 없음'),
-    f('DART 공시', dart_disclosures ? `최근 1년 ${dart_disclosures.length}건` : null, dart_disclosures ? 'A' : 'D', 'DART 전자공시', dart_disclosures ? today : null, dart_disclosures ? '사업보고서·반기보고서 등 — 상세 재무·수출비중 확인 가능' : why('dart', '공시목록 조회 실패 또는 공시 없음')),
+    f('수출 실적 (업종)', trade_ref ? `화장품(HS33) 수출 총 $${Math.round(trade_ref.totalExportUsd / 1e6)}M` : null, trade_ref ? 'C' : 'D', '관세청 수출입실적 API', trade_ref ? today : null, trade_ref ? '관세청 업종 통계 — 업체별 수출은 무역협회/자체자료 확인' : '관세청 API 연동 실패 또는 데이터 없음'),
     fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'D', '수기 확인 항목', null, '공개 API 없음 — KPP/아주렌탈은 고객사 목록 비공개. 업체 문의 또는 파트너 계정으로만 확인'),
   ];
 
@@ -586,24 +570,24 @@ function assembleLiveReport(name, corp, res) {
     .map((x) => ({ key: x.key, expected: x.value, verified: null, match: null, src_type: x.source }));
 
   // 📡 소스별 조회 상태 — 왜 비었는지 화면에서 바로 보이게 (모바일에선 hover 불가)
-  const stat = (part, label, okDetail, emptyDetail) => {
+  // key: 제외 토글용 소스 키(없으면 항상 포함). part: res 응답 키.
+  const stat = (key, part, label, okDetail, emptyDetail) => {
     const r = R[part];
-    if (!r) return { name: label, ok: false, detail: '미호출' };
-    if (!r.ok) return { name: label, ok: false, detail: r.err };
-    return okDetail != null ? { name: label, ok: true, detail: okDetail } : { name: label, ok: false, detail: emptyDetail };
+    if (!r) return { key, name: label, ok: false, detail: '미호출' };
+    if (!r.ok) return { key, name: label, ok: false, detail: r.err };
+    return okDetail != null ? { key, name: label, ok: true, detail: okDetail } : { key, name: label, ok: false, detail: emptyDetail };
   };
   const src_status = [
     { name: '금융위 기업기본정보', ok: true, detail: `기준정보 확보 (${corp?.crno || '법인번호 미상'})` },
-    stat('finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '재무 데이터 없음(외감 비대상 추정)'),
-    stat('rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null, '0건 — 기능성 미취급 또는 상호 불일치'),
-    stat('nps', '국민연금 사업장', (npsData && npsData.count) ? `${npsData.count}건 매칭${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
-    stat('maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
-    stat('customs', '관세청 수출입실적', custList.length ? `${custList.length}건 (HS33 화장품)` : null, '화장품 업종 수출입 데이터 없음'),
+    stat('finance', 'finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '재무 데이터 없음(외감 비대상 추정)'),
+    stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null, '0건 — 기능성 미취급 또는 상호 불일치'),
+    stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `${npsData.count}건 매칭${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
+    stat('maker', 'maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
+    stat('customs', 'customs', '관세청 수출입실적', custList.length ? `${custList.length}건 (HS33 화장품)` : null, '화장품 업종 수출입 데이터 없음'),
     (R.gmp && R.gmp.ok)
-      ? { name: '식약처 GMP 적합업소', ok: hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `적합업체 ${gmpList.length}곳 중 미해당 (CGMP 미인증)` }
-      : stat('gmp', '식약처 GMP 적합업소', null, 'GMP 목록 조회 실패'),
-    stat('dart', 'DART 전자공시', dart_disclosures ? `${dart_disclosures.length}건 (최근 1년)` : null, '공시 없음 또는 프록시 미설정'),
-    stat('naverNews', '네이버 뉴스검색', news ? `${news.length}건 관련기사` : null, '기사 없음 또는 프록시 미설정'),
+      ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `적합업체 ${gmpList.length}곳 중 미해당 (CGMP 미인증)` }
+      : stat('gmp', 'gmp', '식약처 GMP (CGMP)', null, 'GMP 목록 조회 실패'),
+    stat('news', 'naverNews', '네이버 뉴스검색', news ? `${news.length}건 관련기사` : null, '기사 없음 또는 프록시 미설정'),
   ];
 
   return {
@@ -613,7 +597,7 @@ function assembleLiveReport(name, corp, res) {
       max_age_years: 5, live: true, src_status,
     },
     basic, capacity, finance, finance_history, crosscheck, risk_flags: [], diff_from_prev: [],
-    trade_ref, dart_disclosures, news,
+    trade_ref, news,
   };
 }
 

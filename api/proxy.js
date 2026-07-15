@@ -2,9 +2,8 @@
 //
 // Vercel 환경변수(Settings → Environment Variables):
 //   DATA_GO_KR_API_KEY   — data.go.kr 인증키 (필수)
-//   DART_API_KEY          — DART 전자공시 인증키 (선택)
-//   NAVER_CLIENT_ID       — 네이버 개발자 Client ID (선택)
-//   NAVER_CLIENT_SECRET   — 네이버 개발자 Client Secret (선택)
+//   NAVER_CLIENT_ID       — 네이버 개발자 Client ID (선택, 뉴스)
+//   NAVER_CLIENT_SECRET   — 네이버 개발자 Client Secret (선택, 뉴스)
 
 const DATAGO = {
   corp:      'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2',
@@ -63,14 +62,6 @@ function handleDataGo(url, service, env) {
   return relay(`${DATAGO[service]}?${q}`, `data.go(${service})`);
 }
 
-function handleDart(url, env) {
-  if (!env.DART_API_KEY) return jsonRes({ error: 'DART_API_KEY 미설정' }, 500);
-  const q = new URLSearchParams();
-  for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
-  q.set('crtfc_key', env.DART_API_KEY);
-  return relay(`https://opendart.fss.or.kr/api/list.json?${q}`, 'DART');
-}
-
 function handleNaverNews(url, env) {
   if (!env.NAVER_CLIENT_ID || !env.NAVER_CLIENT_SECRET) return jsonRes({ error: 'NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정' }, 500);
   const q = new URLSearchParams();
@@ -91,7 +82,6 @@ export default async function handler(req) {
     const service = url.searchParams.get('service');
     const env = process.env;
 
-    if (service === 'dart')      return handleDart(url, env);
     if (service === 'naverNews') return handleNaverNews(url, env);
     if (DATAGO[service])         return handleDataGo(url, service, env);
 

@@ -29,7 +29,7 @@ function staticHit(key) {
 }
 
 // ── 실데이터 연결 (프록시 경유) ──
-// data.go.kr·DART·네이버는 브라우저 직접 호출이 CORS로 막힌다. 프록시(Vercel /api/proxy 또는 Worker)
+// data.go.kr·네이버는 브라우저 직접 호출이 CORS로 막힌다. 프록시(Vercel /api/proxy 또는 Worker)
 // 주소만 저장해 두고, 모든 조회를 프록시로 중계한다. API 키는 프록시 서버(환경변수)에만 있고 여기엔 없다.
 const PROXY_KEY = 'vs_proxy';
 const _ls = (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
@@ -37,6 +37,25 @@ const _sls = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.rem
 const getProxy = () => _ls(PROXY_KEY);
 const isConnected = () => !!getProxy();
 function setProxy(v) { _sls(PROXY_KEY, (v || '').trim()); }
+
+// ── 데이터 소스 제외 설정 ──
+// 조회 실패했거나 불필요한 소스를 사용자가 리포트에서 빼도록. 제외 목록은 브라우저에 저장.
+const EXCLUDED_KEY = 'vs_excluded';
+const getExcluded = () => { try { return new Set(JSON.parse(_ls(EXCLUDED_KEY) || '[]')); } catch { return new Set(); } };
+function toggleExcluded(key) { const s = getExcluded(); s.has(key) ? s.delete(key) : s.add(key); _sls(EXCLUDED_KEY, JSON.stringify([...s])); }
+
+// 필드/블록의 출처 문자열 → 소스 키 (제외 필터링용). 매핑 안 되는 항목(이동거리·PLT 등)은 항상 표시.
+function srcKeyOf(sourceStr) {
+  const s = String(sourceStr || '');
+  if (/재무/.test(s)) return 'finance';
+  if (/기능성|보고품목/.test(s)) return 'rpt';
+  if (/국민연금/.test(s)) return 'nps';
+  if (/제조업|화장품제조/.test(s)) return 'maker';
+  if (/관세청|수출입/.test(s)) return 'customs';
+  if (/GMP/.test(s)) return 'gmp';
+  if (/뉴스/.test(s)) return 'news';
+  return null; // 기업기본정보 등 핵심/비-API 항목은 제외 불가
+}
 
 // 프록시 주소 + 쿼리 → 최종 요청 URL. 루트 워커(경로 없음)엔 /를 붙이고, /api/proxy 같은 경로엔 그대로.
 function buildProxyUrl(params) {
@@ -118,10 +137,10 @@ async function proxyGet(service, logical) {
   return parseDataGo(res);
 }
 
-// DART 공시 / 네이버 뉴스 — 프록시 전용 (CORS 차단 → 브라우저 직접 호출 불가)
+// 네이버 뉴스 — 프록시 전용 (CORS 차단 → 브라우저 직접 호출 불가, 응답이 data.go 형식 아님)
 async function proxyOnlyGet(service, params) {
   const proxy = getProxy();
-  if (!proxy) throw new Error('프록시 미설정 — DART/네이버는 프록시(Worker) 경유 전용');
+  if (!proxy) throw new Error('프록시 미설정 — 네이버 뉴스는 프록시 경유 전용');
   let res;
   try { res = await fetch(buildProxyUrl({ service, ...params }), { headers: { Accept: 'application/json' } }); }
   catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
@@ -186,9 +205,6 @@ async function finishLive(name, corp) {
   // 관세청: 조회기간은 1년 이내만 허용 → 완료된 지난달까지 최근 6개월
   const custEnd = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const custStart = new Date(now.getFullYear(), now.getMonth() - 6, 1);
-  // DART: 최근 1년(YYYYMMDD)
-  const dartFrom = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()).toISOString().slice(0, 10).replace(/-/g, '');
-  const dartTo = now.toISOString().slice(0, 10).replace(/-/g, '');
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
     rpt: proxyGet('rpt', { name: nm }),
@@ -196,7 +212,6 @@ async function finishLive(name, corp) {
     maker: proxyGet('maker', { name: nm }),
     customs: proxyGet('customs', { hs: '33', from: ym(custStart), to: ym(custEnd) }),
     gmp: proxyGet('gmp', { rows: '500' }),
-    dart: proxyOnlyGet('dart', { corp_name: nm, bgn_de: dartFrom, end_de: dartTo, page_count: '10', sort: 'date', sort_mth: 'desc' }),
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
   };
   const keys = Object.keys(calls);
@@ -448,23 +463,6 @@ function renderNews(news) {
   return b;
 }
 
-function renderDartDisclosures(disclosures) {
-  if (!disclosures || !disclosures.length) return null;
-  const b = el('div', 'dartbox');
-  b.innerHTML = `<h4>📋 DART 공시 <span>(최근 1년 · ${disclosures.length}건)</span></h4>`;
-  const list = el('ul', 'dartlist');
-  disclosures.slice(0, 8).forEach((d) => {
-    const li = el('li');
-    const date = d.rcept_dt ? `${d.rcept_dt.slice(0, 4)}-${d.rcept_dt.slice(4, 6)}-${d.rcept_dt.slice(6, 8)}` : '';
-    li.innerHTML =
-      `<a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${esc(d.rcept_no || '')}" target="_blank" rel="noopener" class="dtitle">${esc(d.report_nm || '(제목 없음)')}</a>` +
-      `<div class="dmeta">${esc(date)}${d.flr_nm ? ' · ' + esc(d.flr_nm) : ''}</div>`;
-    list.appendChild(li);
-  });
-  b.appendChild(list);
-  return b;
-}
-
 function renderTradeRef(tradeRef) {
   if (!tradeRef) return null;
   const fmtUsd = (v) => {
@@ -489,6 +487,11 @@ function render(report) {
 
   const m = report.meta;
 
+  // 제외된 소스는 필드/블록/집계에서 모두 숨김
+  const excl = getExcluded();
+  const included = (f) => { const k = srcKeyOf(f.source); return !k || !excl.has(k); };
+  const visible = (fields) => fields.filter(included);
+
   // 방문 리포트 저장/인쇄 툴바
   const actions = el('div', 'actions');
   const dlBtn = el('button', 'act', '⬇ JSON 다운로드');
@@ -499,7 +502,7 @@ function render(report) {
   actions.appendChild(dlBtn);
   actions.appendChild(printBtn);
   root.appendChild(actions);
-  const allFields = [...report.basic, ...report.capacity, ...report.finance];
+  const allFields = [...report.basic, ...report.capacity, ...report.finance].filter(included);
   const gapTotal = allFields.filter((f) => f.data_gap).length;
 
   // Summary
@@ -525,35 +528,48 @@ function render(report) {
     root.appendChild(el('div', 'livenote',
       '🟢 <b>실데이터</b> — data.go.kr 공공 API 조회 결과입니다. ' +
       '값이 없는 항목은 <code>data_gap</code>으로 명시합니다.'));
-    // 📡 소스별 조회 상태 — 무엇이 왜 비었는지 즉시 확인
+    // 📡 소스별 조회 상태 — 무엇이 왜 비었는지 + 체크 해제 시 리포트에서 제외
     if (Array.isArray(m.src_status) && m.src_status.length) {
+      const excluded = getExcluded();
       const sp = el('div', 'srcstat');
-      sp.innerHTML = '<b>📡 데이터 소스 상태</b>' + m.src_status.map((s) =>
-        `<span class="ss ${s.ok ? 'ok' : 'no'}"><em>${s.ok ? '✓' : '✗'}</em>${esc(s.name)}<i>${esc(s.detail || '')}</i></span>`).join('');
+      sp.appendChild(el('div', 'srchead', '📡 데이터 소스 상태 <span>체크 해제 → 리포트에서 제외</span>'));
+      m.src_status.forEach((s) => {
+        const canToggle = !!s.key;
+        const ex = canToggle && excluded.has(s.key);
+        const row = el('label', 'ss ' + (ex ? 'excl' : (s.ok ? 'ok' : 'no')));
+        const mark = ex ? '⊘' : (s.ok ? '✓' : '✗');
+        const detail = ex ? '제외됨 — 사용자 설정' : (s.detail || '');
+        row.innerHTML =
+          `<input type="checkbox" ${ex ? '' : 'checked'} ${canToggle ? '' : 'disabled'}>` +
+          `<em>${mark}</em><span class="ssn">${esc(s.name)}</span><i>${esc(detail)}</i>`;
+        if (canToggle) {
+          row.querySelector('input').addEventListener('change', () => {
+            toggleExcluded(s.key);
+            render(currentReport); // 즉시 반영 (재조회 없이 표시만 갱신)
+          });
+        }
+        sp.appendChild(row);
+      });
       root.appendChild(sp);
     }
   } else if (m.generated) {
     root.appendChild(el('div', 'gennote',
       '⚙️ <b>자동 생성 데모 데이터</b> — 예시 업체(리니어코스메틱·샘플뷰티랩) 외 입력은 UI 검증용으로 이름 기반 합성됩니다. ' +
-      '실데이터는 우측 상단 <b>🔌 실데이터 연결</b>에 <b>인증키</b> 또는 프록시를 넣으면 됩니다.'));
+      '실데이터는 우측 상단 <b>🔌 실데이터 연결</b>에 <b>프록시 주소</b>(/api/proxy)를 넣으면 됩니다.'));
   }
 
   const rf = renderRiskFlags(report.risk_flags);
   if (rf) root.appendChild(rf);
 
   const blocks = el('div', 'blocks');
-  blocks.appendChild(block('기업 기본정보', '🏢', report.basic));
-  blocks.appendChild(block('생산역량 · 인원', '🏭', report.capacity));
-  blocks.appendChild(financeBlock(report));
-  const trb = renderTradeRef(report.trade_ref);
-  if (trb) blocks.appendChild(trb);
-  const dartB = renderDartDisclosures(report.dart_disclosures);
-  if (dartB) blocks.appendChild(dartB);
-  const newsB = renderNews(report.news);
-  if (newsB) blocks.appendChild(newsB);
+  blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic)));
+  blocks.appendChild(block('생산역량 · 인원', '🏭', visible(report.capacity)));
+  if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
+  if (!excl.has('customs')) { const trb = renderTradeRef(report.trade_ref); if (trb) blocks.appendChild(trb); }
+  if (!excl.has('news')) { const newsB = renderNews(report.news); if (newsB) blocks.appendChild(newsB); }
   const diffBlock = renderDiff(report.diff_from_prev);
   if (diffBlock) blocks.appendChild(diffBlock);
-  blocks.appendChild(renderCrosscheck(report.crosscheck));
+  blocks.appendChild(renderCrosscheck(report.crosscheck.filter((r) => { const k = srcKeyOf(r.src_type); return !k || !excl.has(k); })));
   root.appendChild(blocks);
 
   // Legend
