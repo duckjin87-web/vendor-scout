@@ -28,24 +28,16 @@ function staticHit(key) {
     || STATIC_INDEX.find((e) => e.name.includes(key) || key.includes(e.name)) || null;
 }
 
-// ── 실데이터 연결 (선택적 실시간 모드) ──
-// 두 방식 지원: (1) 식약처/공공데이터 인증키 직접 입력 → 브라우저가 data.go.kr 직접 호출
-//              (2) 프록시(Worker) 주소 → CORS가 막힐 때 사용
-// 입력값이 http로 시작하면 프록시, 아니면 인증키로 저장. 키는 이 브라우저에만 보관(남에게 노출 X).
+// ── 실데이터 연결 (프록시 경유) ──
+// data.go.kr·DART·네이버는 브라우저 직접 호출이 CORS로 막힌다. 프록시(Vercel /api/proxy 또는 Worker)
+// 주소만 저장해 두고, 모든 조회를 프록시로 중계한다. API 키는 프록시 서버(환경변수)에만 있고 여기엔 없다.
 const PROXY_KEY = 'vs_proxy';
-const APIKEY_KEY = 'vs_apikey';
 const _ls = (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
 const _sls = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch {} };
 const getProxy = () => _ls(PROXY_KEY);
-const getApiKey = () => _ls(APIKEY_KEY);
-const isConnected = () => !!(getProxy() || getApiKey());
-function setProxy(v) { // 프록시 URL 또는 인증키를 판별해 저장
-  v = (v || '').trim();
-  if (!v) { _sls(PROXY_KEY, ''); _sls(APIKEY_KEY, ''); return; }
-  // http(s):// 절대주소 또는 / 로 시작하는 상대경로(같은 도메인 프록시) → 프록시로 인식
-  if (/^https?:\/\//i.test(v) || v.startsWith('/')) { _sls(PROXY_KEY, v); _sls(APIKEY_KEY, ''); }
-  else { _sls(APIKEY_KEY, v); _sls(PROXY_KEY, ''); }
-}
+const isConnected = () => !!getProxy();
+function setProxy(v) { _sls(PROXY_KEY, (v || '').trim()); }
+
 // 프록시 주소 + 쿼리 → 최종 요청 URL. 루트 워커(경로 없음)엔 /를 붙이고, /api/proxy 같은 경로엔 그대로.
 function buildProxyUrl(params) {
   const base = getProxy().replace(/\/+$/, '');
@@ -55,33 +47,17 @@ function buildProxyUrl(params) {
   return `${base}${hasPath ? '' : '/'}?${qs}`;
 }
 
-// 서비스별 data.go.kr 후보 = { url, map }. map: 논리키→실제 파라미터명.
-// 앞에서부터 시도하고, 데이터가 있는 첫 후보를 채택(엔드포인트·파라미터명 미확정 대비).
-const B1471 = 'https://apis.data.go.kr/1471000';
-const DATA_GO = {
-  corp: [{ url: 'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2', map: { name: 'corpNm' } }],
-  finance: [{ url: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2', map: { crno: 'crno' } }],
-  rpt: [
-    { url: `${B1471}/FtnltCosmRptPrdlstInfoService01/getRptPrdlstInq01`, map: { name: 'entp_name' } },
-    { url: `${B1471}/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq`, map: { name: 'entp_name' } },
-    { url: `${B1471}/FtnltCosmRptPrdlstInfoService01/getRptPrdlstInq01`, map: { name: 'ENTP_NAME' } },
-  ],
-  npsSearch: [{ url: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch', map: { name: 'wkpl_nm', bz6: 'bzowr_rgst_no' } }],
-  npsDetail: [{ url: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getDetailInfoSearch', map: { seq: 'seq', ym: 'data_crt_ym' } }],
-  maker: [
-    { url: `${B1471}/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01`, map: { name: 'bssh_nm' } },
-    { url: `${B1471}/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01`, map: { name: 'entpName' } },
-    { url: `${B1471}/CsmtcsMnfctrInfoService01/getCsmtcsMnfctrInq01`, map: { name: 'entpName' } },
-    { url: `${B1471}/CsmtcsInfoService/getMakerList`, map: { name: 'entpName' } },
-  ],
-  customs: [
-    { url: 'https://apis.data.go.kr/1220000/prodstclnprtscnt/getProdstclnprtscntList', map: { hs: 'hsSgn', from: 'strtYearMonth', to: 'endYearMonth' } },
-    { url: 'https://apis.data.go.kr/1220000/Itemtrdnation/getItemtrdnationList', map: { hs: 'hsSgn', from: 'strtYearMonth', to: 'endYearMonth' } },
-  ],
-  gmp: [
-    { url: `${B1471}/CsmtcsGmpInfoService01/getCsmtcsGmpList01`, map: { name: 'bssh_nm' } },
-    { url: `${B1471}/CsmtcsGmpInfoService01/getCsmtcsGmpList01`, map: { name: 'BSSH_NM' } },
-  ],
+// 서비스별 파라미터 매핑(논리키 → 실제 data.go 파라미터명). 실제 엔드포인트 URL은
+// 프록시(api/proxy.js·worker.js)에 단일 정의 — 화이트리스트로 오픈프록시 방지.
+const PARAM_MAP = {
+  corp:      { name: 'corpNm' },
+  finance:   { crno: 'crno' },
+  rpt:       { name: 'entp_name' },
+  npsSearch: { name: 'wkpl_nm', bz6: 'bzowr_rgst_no' },
+  npsDetail: { seq: 'seq', ym: 'data_crt_ym' },
+  maker:     { name: 'bssh_nm' },
+  customs:   { hs: 'hsSgn', from: 'strtYearMonth', to: 'endYearMonth' },
+  gmp:       { name: 'bssh_nm' },
 };
 
 // data.go 공통 에러 메시지 → 사용자 조치 안내
@@ -116,41 +92,30 @@ function mapParams(logical, map) {
   return out;
 }
 
-// 공공데이터 조회 — 인증키 모드는 data.go 직접(엔드포인트·파라미터명 후보 순차), 아니면 프록시 경유
-// logical: { name?, crno?, bz6?, seq?, ym? }
+// 프록시 비정상응답(res.ok=false) 본문에서 사람이 읽을 오류 메시지 추출
+// (프록시가 { error, detail, upstreamStatus } 형태로 실어보냄. error가 객체여도 문자열화)
+async function proxyErrMsg(res) {
+  const body = await res.text().catch(() => '');
+  try {
+    const j = JSON.parse(body);
+    const err = typeof j.error === 'object' ? JSON.stringify(j.error) : (j.error || '');
+    const parts = [err, j.detail].filter(Boolean);
+    if (parts.length) return parts.join(' · ');
+  } catch { /* JSON 아님 */ }
+  return body ? body.slice(0, 200) : `프록시 HTTP ${res.status}`;
+}
+
+// 공공데이터 조회 — 프록시 경유. logical: { name?, crno?, bz6?, seq?, ym?, hs?, from?, to? }
 async function proxyGet(service, logical) {
-  const chain = DATA_GO[service];
-  if (!chain) throw new Error(`알 수 없는 service: ${service}`);
-  const key = getApiKey();
-
-  if (!key) { // 프록시 모드 — 첫 후보의 파라미터명으로 매핑해 워커에 전달
-    const actual = mapParams(logical, chain[0].map);
-    const url = buildProxyUrl({ service, ...actual });
-    let res;
-    try { res = await fetch(url, { headers: { Accept: 'application/json' } }); }
-    catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
-    if (!res.ok) throw new Error(`프록시 HTTP ${res.status}`);
-    return parseDataGo(res);
-  }
-
-  let lastErr = null, lastOk = null;
-  for (const cand of chain) {
-    const q = new URLSearchParams(mapParams(logical, cand.map));
-    q.set('serviceKey', key); q.set('resultType', 'json'); q.set('type', 'json');
-    if (!q.has('numOfRows')) q.set('numOfRows', '50');
-    try {
-      const res = await fetch(`${cand.url}?${q}`, { headers: { Accept: 'application/json' } });
-      if (res.status === 404 || res.status === 500) { lastErr = new Error(`HTTP ${res.status} (엔드포인트 미일치)`); continue; }
-      if (!res.ok) { lastErr = new Error(`HTTP ${res.status}`); continue; }
-      const data = await parseDataGo(res);
-      lastOk = data;
-      if (itemsOf(data).length > 0) return data;  // 데이터 있으면 확정
-    } catch (e) {
-      lastErr = (e instanceof TypeError) ? new Error('네트워크/CORS 차단 — 프록시 경유 필요') : e;
-    }
-  }
-  if (lastOk) return lastOk;      // 전부 0건이면 마지막 정상응답(정말 빈 결과)
-  throw lastErr || new Error('호출 실패');
+  const map = PARAM_MAP[service];
+  if (!map) throw new Error(`알 수 없는 service: ${service}`);
+  if (!getProxy()) throw new Error('프록시 미설정 — 우측 상단 실데이터 연결에 프록시 주소(/api/proxy)를 입력하세요');
+  const url = buildProxyUrl({ service, ...mapParams(logical, map) });
+  let res;
+  try { res = await fetch(url, { headers: { Accept: 'application/json' } }); }
+  catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
+  if (!res.ok) throw new Error(await proxyErrMsg(res));
+  return parseDataGo(res);
 }
 
 // DART 공시 / 네이버 뉴스 — 프록시 전용 (CORS 차단 → 브라우저 직접 호출 불가)
@@ -160,11 +125,7 @@ async function proxyOnlyGet(service, params) {
   let res;
   try { res = await fetch(buildProxyUrl({ service, ...params }), { headers: { Accept: 'application/json' } }); }
   catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    const msg = (() => { try { return JSON.parse(body).error; } catch { return ''; } })();
-    throw new Error(msg || `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(await proxyErrMsg(res));
   return res.json();
 }
 
@@ -222,15 +183,20 @@ async function npsLookup(nm, bz6) {
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
   const bz6 = corp.bzno ? String(corp.bzno).replace(/\D/g, '').slice(0, 6) : null;
-  const oneYearAgo = new Date(); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-  const dartFrom = oneYearAgo.toISOString().slice(0, 10).replace(/-/g, '');
-  const dartTo = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const now = new Date();
+  const ym = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  // 관세청: 완료된 지난달까지(미래월은 data.go가 거부) 최근 24개월
+  const custEnd = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const custStart = new Date(now.getFullYear(), now.getMonth() - 24, 1);
+  // DART: 최근 1년(YYYYMMDD)
+  const dartFrom = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()).toISOString().slice(0, 10).replace(/-/g, '');
+  const dartTo = now.toISOString().slice(0, 10).replace(/-/g, '');
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
     rpt: proxyGet('rpt', { name: nm }),
     nps: npsLookup(nm, bz6),
     maker: proxyGet('maker', { name: nm }),
-    customs: proxyGet('customs', { hs: '33', from: '202301', to: '202612' }),
+    customs: proxyGet('customs', { hs: '33', from: ym(custStart), to: ym(custEnd) }),
     gmp: proxyGet('gmp', { name: nm }),
     dart: proxyOnlyGet('dart', { corp_name: nm, bgn_de: dartFrom, end_de: dartTo, page_count: '10', sort: 'date', sort_mth: 'desc' }),
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
@@ -272,7 +238,7 @@ function setProxyUI() {
   const btn = $('#proxyBtn');
   if (!btn) return;
   const on = isConnected();
-  btn.textContent = on ? (getApiKey() ? '🟢 키 연결됨' : '🟢 프록시 연결됨') : '🔌 실데이터 연결';
+  btn.textContent = on ? '🟢 프록시 연결됨' : '🔌 실데이터 연결';
   btn.classList.toggle('on', on);
 }
 
@@ -681,12 +647,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const proxyBtn = $('#proxyBtn');
   if (proxyBtn) {
     proxyBtn.addEventListener('click', () => {
-      const cur = getApiKey() || getProxy();
+      const cur = getProxy();
       const next = window.prompt(
-        '실데이터 연결 — 둘 중 하나 입력:\n' +
-        '① 공공데이터(data.go.kr) 인증키 → 브라우저가 직접 조회\n' +
-        '② 프록시(Worker) 주소(https://…) → CORS·DART·네이버 뉴스까지\n\n' +
-        '※ DART 공시·네이버 뉴스는 프록시(Worker Secret) 전용\n' +
+        '실데이터 연결 — 프록시 주소 입력:\n' +
+        '같은 도메인이면  /api/proxy\n' +
+        '다른 도메인이면  https://…/api/proxy\n\n' +
+        '※ API 키는 프록시 서버(환경변수)에만 두세요. 여기엔 넣지 않습니다.\n' +
         '비우고 확인하면 데모 모드로 돌아갑니다.',
         cur
       );

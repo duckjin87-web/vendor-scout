@@ -22,81 +22,80 @@ const CORS = {
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
+const JSON_HDR = { ...CORS, 'Content-Type': 'application/json; charset=utf-8' };
 
-function jsonRes(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' },
-  });
+const jsonRes = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: JSON_HDR });
+
+// 상류 호출 공통 — 타임아웃·네트워크오류·비정상응답을 항상 CORS JSON으로 정규화(플랫폼 500 크래시 방지)
+async function relay(target, label, init) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000); // data.go가 느려도 20초에 깔끔히 종료
+  let upstream;
+  try {
+    upstream = await fetch(target, { ...init, signal: ctrl.signal });
+  } catch (e) {
+    clearTimeout(timer);
+    const aborted = e && e.name === 'AbortError';
+    return jsonRes({ error: `${label} 상류 호출 실패`, detail: aborted ? '타임아웃(20초 초과)' : String(e && e.message || e) }, aborted ? 504 : 502);
+  }
+  clearTimeout(timer);
+
+  const body = await upstream.text().catch(() => '');
+  // 상류가 2xx가 아니면, 상태·본문 일부를 실어 원인이 화면에 보이게 한다
+  if (!upstream.ok) {
+    return jsonRes({ error: `${label} 상류 HTTP ${upstream.status}`, upstreamStatus: upstream.status, detail: body.slice(0, 300) }, 502);
+  }
+  return new Response(body, { status: 200, headers: JSON_HDR });
 }
 
-async function handleDataGo(params, service) {
-  const key = process.env.DATA_GO_KR_API_KEY;
-  if (!key) return jsonRes({ error: 'DATA_GO_KR_API_KEY 미설정' }, 500);
-
+function handleDataGo(url, service, env) {
+  if (!env.DATA_GO_KR_API_KEY) return jsonRes({ error: 'DATA_GO_KR_API_KEY 미설정' }, 500);
   const q = new URLSearchParams();
-  for (const [k, v] of params) if (k !== 'service' && v) q.set(k, v);
-  q.set('serviceKey', key);
+  for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
+  q.set('serviceKey', env.DATA_GO_KR_API_KEY);
   if (!q.has('resultType')) q.set('resultType', 'json');
   if (!q.has('type'))       q.set('type', 'json');
   if (!q.has('numOfRows'))  q.set('numOfRows', '30');
-
-  const res = await fetch(`${DATAGO[service]}?${q}`);
-  const body = await res.text();
-  return new Response(body, {
-    status: res.status,
-    headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' },
-  });
+  return relay(`${DATAGO[service]}?${q}`, `data.go(${service})`);
 }
 
-async function handleDart(params) {
-  const key = process.env.DART_API_KEY;
-  if (!key) return jsonRes({ error: 'DART_API_KEY 미설정' }, 500);
-
+function handleDart(url, env) {
+  if (!env.DART_API_KEY) return jsonRes({ error: 'DART_API_KEY 미설정' }, 500);
   const q = new URLSearchParams();
-  for (const [k, v] of params) if (k !== 'service' && v) q.set(k, v);
-  q.set('crtfc_key', key);
-
-  const res = await fetch(`https://opendart.fss.or.kr/api/list.json?${q}`);
-  const body = await res.text();
-  return new Response(body, {
-    status: res.status,
-    headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' },
-  });
+  for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
+  q.set('crtfc_key', env.DART_API_KEY);
+  return relay(`https://opendart.fss.or.kr/api/list.json?${q}`, 'DART');
 }
 
-async function handleNaverNews(params) {
-  const id = process.env.NAVER_CLIENT_ID;
-  const secret = process.env.NAVER_CLIENT_SECRET;
-  if (!id || !secret) return jsonRes({ error: 'NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정' }, 500);
-
+function handleNaverNews(url, env) {
+  if (!env.NAVER_CLIENT_ID || !env.NAVER_CLIENT_SECRET) return jsonRes({ error: 'NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정' }, 500);
   const q = new URLSearchParams();
-  for (const [k, v] of params) if (k !== 'service' && v) q.set(k, v);
+  for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
   if (!q.has('display')) q.set('display', '5');
   if (!q.has('sort'))    q.set('sort', 'date');
-
-  const res = await fetch(`https://openapi.naver.com/v1/search/news.json?${q}`, {
-    headers: { 'X-Naver-Client-Id': id, 'X-Naver-Client-Secret': secret },
-  });
-  const body = await res.text();
-  return new Response(body, {
-    status: res.status,
-    headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' },
+  return relay(`https://openapi.naver.com/v1/search/news.json?${q}`, '네이버 뉴스', {
+    headers: { 'X-Naver-Client-Id': env.NAVER_CLIENT_ID, 'X-Naver-Client-Secret': env.NAVER_CLIENT_SECRET },
   });
 }
 
 export default async function handler(req) {
-  if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
-  if (req.method !== 'GET') return jsonRes({ error: 'method not allowed' }, 405);
+  try {
+    if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    if (req.method !== 'GET') return jsonRes({ error: 'method not allowed' }, 405);
 
-  const url = new URL(req.url);
-  const service = url.searchParams.get('service');
+    const url = new URL(req.url);
+    const service = url.searchParams.get('service');
+    const env = process.env;
 
-  if (service === 'dart')      return handleDart(url.searchParams);
-  if (service === 'naverNews') return handleNaverNews(url.searchParams);
-  if (DATAGO[service])         return handleDataGo(url.searchParams, service);
+    if (service === 'dart')      return handleDart(url, env);
+    if (service === 'naverNews') return handleNaverNews(url, env);
+    if (DATAGO[service])         return handleDataGo(url, service, env);
 
-  return jsonRes({ error: `unknown service: ${service}` }, 400);
+    return jsonRes({ error: `unknown service: ${service}` }, 400);
+  } catch (e) {
+    // 어떤 경우에도 플랫폼 크래시(FUNCTION_INVOCATION_FAILED) 대신 읽을 수 있는 JSON을 돌려준다
+    return jsonRes({ error: '프록시 내부 오류', detail: String(e && e.message || e) }, 500);
+  }
 }
 
 export const config = { runtime: 'edge' };
