@@ -174,6 +174,12 @@ function hpAddrCores(addr) {
 }
 async function findHomepage(nm, corp) {
   if (!getProxy()) return null;
+  // 공장등록부에 홈페이지가 있으면 그게 공식 확정 — 웹검색보다 신뢰
+  const fctHp = corp && corp.factoryHomepage ? String(corp.factoryHomepage).trim() : '';
+  if (fctHp && /^https?:\/\//i.test(fctHp)) {
+    let host = fctHp; try { host = new URL(fctHp).hostname.replace(/^www\./, ''); } catch {}
+    return { proposed: { url: fctHp, host, matches: ['공장등록부 등재'], score: 3 }, candidates: [] };
+  }
   let web;
   try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 화장품`, display: '20' }); }
   catch (e) { return { proposed: null, candidates: [], err: e.message }; }
@@ -691,7 +697,7 @@ function render(report) {
     } else {
       hpBox.innerHTML = '<h4>🔎 홈페이지 추적 <span>검색 중…</span></h4>';
       const getV = (k) => { const f = report.basic.find((x) => x.key === k); return f && f.value; };
-      findHomepage(report.meta.vendor_name, { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호') })
+      findHomepage(report.meta.vendor_name, { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호'), factoryHomepage: report.meta.factory_homepage })
         .then((hp) => { report._homepage = hp || null; renderHomepageInto(hpBox, report._homepage); })
         .catch(() => { report._homepage = null; renderHomepageInto(hpBox, null); });
     }

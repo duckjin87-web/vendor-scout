@@ -464,7 +464,14 @@ function assembleLiveReport(name, corp, res) {
   const fctAddr = fctHit ? (
     fctHit.rnAdres ?? fctHit.lnmAdres ?? fctHit.lotNoAddr ?? fctHit.roadNmAddr ?? fctHit.adres ?? fctHit.ADRES ?? fctHit.fctryAddr ?? fctHit.lctnAddr ?? fctHit.addr ??
     Object.values(fctHit).find(looksAddr) ?? null) : null;
-  const fctProduct = fctHit ? (fctHit.prdlstNm ?? fctHit.indutyNm ?? fctHit.mainProductCn ?? fctHit.prductNm ?? fctHit.MAIN_PRDLST ?? null) : null;
+  const fctProduct = fctHit ? (fctHit.mainProductCn ?? fctHit.prdlstNm ?? fctHit.prductNm ?? fctHit.MAIN_PRDLST ?? null) : null;
+  const fctInduty = fctHit ? (fctHit.indutyNm ?? null) : null;
+  const fctEmpl = fctHit ? (fctHit.allEmplyCo ?? fctHit.emplyCo ?? null) : null; // 공장등록 종업원수
+  // 홈페이지는 여러 공장 레코드 중 등재된 것을 채택(첫 매칭에 없을 수 있음)
+  const fctHmpadr = (fctList.find((it) => /^https?:\/\//i.test(String(it.hmpadr || ''))) || {}).hmpadr || null;
+  const fctRegDe = fctHit ? fmtDate(fctHit.frstFctryRegistDe) : null;
+  const fctNote = fctAddr ? ['★ 실제 공장 주소', fctProduct ? `생산: ${fctProduct}` : null, fctInduty || null, fctRegDe ? `등록 ${fctRegDe}` : null].filter(Boolean).join(' · ')
+    : why('factory', '공장등록 조회 결과 없음 — 미등록 공장(임대/소규모) 또는 상호 불일치');
 
   const basic = [
     f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
@@ -474,7 +481,7 @@ function assembleLiveReport(name, corp, res) {
     f('설립일', fmtDate(corp?.estbDt), 'A', '금융위 기업기본정보', fmtDate(corp?.estbDt)),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
     f('제조업 등록', mk ? `등록${mkNo ? ` (제${mkNo}호)` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null, mk ? null : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
-    f('공장 소재지', fctAddr, fctAddr ? 'A' : 'D', '산업단지공단 공장등록', fctAddr ? today : null, fctAddr ? `★ 실제 공장 주소${fctProduct ? ` · 생산: ${fctProduct}` : ''}` : why('factory', '공장등록 조회 결과 없음 — 미등록 공장(임대/소규모) 또는 상호 불일치')),
+    f('공장 소재지', fctAddr, fctAddr ? 'A' : 'D', '산업단지공단 공장등록', fctAddr ? today : null, fctNote),
   ];
 
   // 식약처 기능성 보고품목 (rpt)
@@ -517,6 +524,7 @@ function assembleLiveReport(name, corp, res) {
 
   const capacity = [
     f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
+    f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? today : null, fctEmpl ? '공장등록부 기준 종업원 — 국민연금 재직자수와 교차확인' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     f('방문 이동거리',
       kkTravel ? travelText(kkTravel) : travelText(estimateTravel(fctAddr || corp?.addr || npsAddr)),
@@ -580,7 +588,7 @@ function assembleLiveReport(name, corp, res) {
     stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `${npsData.count}건 매칭${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
     stat('maker', 'maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
     { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, warn: !fctAddr && !!(R.factory && R.factory.ok),
-      detail: fctAddr ? `공장 확인${fctProduct ? ' · ' + fctProduct : ''}`
+      detail: fctAddr ? `공장 확인${fctEmpl ? ` · 종업원 ${fctEmpl}명` : ''}${fctProduct ? ' · ' + fctProduct : ''}`
         : (!R.factory ? '미호출' : (!R.factory.ok ? `⚠ 연결 실패: ${R.factory.err}` : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '조회 성공 · 공장등록 0건(미등록/임대 가능)'))) },
     // GMP: API가 응답했으면 체크(✓), 미해당은 빨간색으로 표시
     (R.gmp && R.gmp.ok)
@@ -605,7 +613,7 @@ function assembleLiveReport(name, corp, res) {
     meta: {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
       version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
-      max_age_years: 5, live: true, src_status,
+      max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
     },
     basic, capacity, finance, finance_history, crosscheck, risk_flags, diff_from_prev: [],
     news, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
