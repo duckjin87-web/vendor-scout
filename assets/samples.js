@@ -35,6 +35,14 @@ function fc(key, checklist, grade, source, asOf, note) {
 const CERTS = ['CGMP', 'ISO 22716', 'ISO 14001', '할랄(HALAL)', '비건(Vegan)'];
 function certList(oks) { return CERTS.map((label, i) => ({ label, ok: !!oks[i] })); }
 
+// 관세청 국가코드(ISO2 추정) → 한글명. 미매핑 코드는 원본 표기 유지.
+const COUNTRY_KO = {
+  CN: '중국', US: '미국', JP: '일본', HK: '홍콩', VN: '베트남', RU: '러시아', TW: '대만',
+  TH: '태국', ID: '인도네시아', MY: '말레이시아', SG: '싱가포르', PH: '필리핀', IN: '인도',
+  KR: '한국', GB: '영국', FR: '프랑스', DE: '독일', NL: '네덜란드', CA: '캐나다', AU: '호주',
+  AE: 'UAE', SA: '사우디', KZ: '카자흐스탄', MM: '미얀마', KH: '캄보디아', MN: '몽골',
+};
+
 // ── 방문 이동거리 추정 (한국콜마 세종 기준점) ──
 const REF_POINT = { name: '한국콜마', addr: '세종시 전의면 산단길 22-17', lat: 36.631, lng: 127.046 };
 const COORDS = [
@@ -259,18 +267,18 @@ function generateReport(rawName) {
   const hasGmp = isMaker && chance(0.6);
   const hasExport = chance(0.45);
   const pensionAddr = chance(0.7) ? hqAddr : `${region} ${pick(G_STREET)} ${ri(1, 99)}`;
-  // 품질인증: CGMP는 제조·GMP 보유 시, 나머지는 확률적으로
-  const certs = certList([hasGmp, hasGmp && chance(0.7), chance(0.35), chance(0.3), chance(0.35)]);
-  const plt = [{ label: 'KPP', ok: chance(0.4) }, { label: '아주렌탈', ok: chance(0.25) }];
+  // PLT: 공개 API 없음 → 규모·수출·제조 기반 예측
+  const pScore = (isMaker ? 1 : 0) + (emp >= 50 ? 2 : emp >= 20 ? 1 : 0) + (hasExport ? 1 : 0);
+  const pltLikely = pScore >= 3 ? '가능성 높음' : pScore >= 2 ? '보통' : '낮음/미상';
   const capacity = [
     f('재직자수 (국민연금 가입자)', `${emp}명`, 'B', '국민연금 사업장 API', '2026-05-31', '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조'),
     f('사업장 주소 (연금기준)', pensionAddr, 'C', '국민연금 사업장 정보', '2026-05-31'),
-    f('방문 이동거리', travelText(estimateTravel(hqAddr)), 'C', `기준: ${REF_POINT.name} (${REF_POINT.addr})`, today, '직선거리 기반 추정 — 네이버/카카오 지도에서 정확한 경로 확인'),
+    f('방문 이동거리', travelText(estimateTravel(hqAddr)), 'C', `기준: ${REF_POINT.name} (${REF_POINT.addr})`, today, '직선거리 기반 추정 — 실데이터 연결 시 카카오내비 실측'),
     f('기능성 보고품목 수 (5년내)', funcCount || null, funcCount ? 'A' : 'D', '식약처 보고품목 API', today, funcCount ? null : '보고 이력 없음 — 기능성 미취급 또는 공백'),
     f('신고 제형 분포', funcCount ? shuffle(G_FORMS).slice(0, ri(1, 5)).join(', ') : null, 'C', '식약처 보고품목 API', today, 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
-    fc('품질인증', certs, 'A', '식약처 GMP·인증기관', today, certs.some((c) => c.ok) ? null : '보유 인증 미확인'),
+    f('CGMP 적합업소', hasGmp ? '적합 (식약처 GMP 등재)' : null, hasGmp ? 'A' : 'D', '식약처 GMP API', hasGmp ? today : null, hasGmp ? 'CGMP 적합업소 — ISO/할랄/비건은 공개 API 없어 방문 시 인증서 확인' : 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)'),
     f('수출 실적 (최근)', hasExport ? `연 ${ri(3, 60)}회 통관 / 對 ${pick(G_EXPORT)}` : null, hasExport ? 'B' : 'D', '관세청 수출입 실적', hasExport ? '2026-04-30' : null, hasExport ? null : '통관 실적 없음 — 내수 전용 추정'),
-    fc('PLT 거래여부', plt, 'B', '렌탈 거래처 대사', today, plt.some((c) => c.ok) ? '렌탈 파렛트 거래 이력' : '거래 이력 없음'),
+    f('PLT 렌탈 거래 (예측)', `예측: ${pltLikely}`, 'C', '휴리스틱 추정 (공개 API 없음)', today, 'KPP/아주렌탈 고객사 비공개 → 규모·수출 기반 추정. 방문 시 파렛트 임대라벨·계약서로 확정'),
   ];
 
   const hasFin = chance(0.7);
@@ -493,26 +501,28 @@ function assembleLiveReport(name, corp, res) {
     || pick(npsDet, 'wkplRoadNmDetAddr', 'wkplRoadNmDtlAddr', 'ldongAddrMgpldongNm') || null;
 
   // 관세청 수출입 (화장품 업종 참고 — 개별 업체가 아닌 HS33 업종 전체 통계)
+  // getNitemtradeList 응답(XML): statCd=국가코드, expDlr/impDlr=USD, 총계행 statCd='ALL'
   const custList = R.customs && R.customs.ok ? listOf(R.customs.data, ['response.body.items.item', 'body.items', 'items']) : [];
   let trade_ref = null;
   if (custList.length) {
     const byCountry = {};
-    let totalExp = 0, totalImp = 0;
+    let totalExp = 0, totalImp = 0, allExp = 0, allImp = 0;
     custList.forEach((it) => {
-      const country = it.statKor || it.statCd || it.cntryNm || it.cntry_nm || it.natNm || it.cntryEngNm || '기타';
-      // 총계/합계 행은 국가별 집계에서 제외(중복합산·순위오염 방지)
-      if (/총계|합계|total/i.test(country)) return;
+      const code = String(it.statCd || it.cntyCd || it.statKor || it.cntryNm || '').trim();
       const exp = Number(it.expDlr || it.exp_dlr || it.expUsdAmt || 0);
       const imp = Number(it.impDlr || it.imp_dlr || it.impUsdAmt || 0);
-      totalExp += exp;
-      totalImp += imp;
-      byCountry[country] = (byCountry[country] || 0) + exp;
+      // 총계행(ALL/총계)은 별도 보관 — 개별국가 합산과 중복 방지
+      if (/^ALL$|총계|합계|total/i.test(code)) { allExp += exp; allImp += imp; return; }
+      totalExp += exp; totalImp += imp;
+      const name = COUNTRY_KO[code] || it.statKor || it.cntryNm || code || '기타';
+      byCountry[name] = (byCountry[name] || 0) + exp;
     });
-    const topCountries = Object.entries(byCountry)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([n]) => n);
-    trade_ref = { totalExportUsd: totalExp, totalImportUsd: totalImp, topCountries, itemCount: custList.length, hsCode: '33', note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계이며 개별 업체 수치가 아닙니다' };
+    const topCountries = Object.entries(byCountry).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([n]) => n);
+    trade_ref = {
+      totalExportUsd: allExp || totalExp, totalImportUsd: allImp || totalImp,
+      topCountries, itemCount: custList.length, hsCode: '33',
+      note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계이며 개별 업체 수치가 아닙니다',
+    };
   }
 
   // 식약처 GMP 적합업소 (CGMP 등록여부) — 적합업체 전체목록에서 상호로 필터
@@ -526,10 +536,15 @@ function assembleLiveReport(name, corp, res) {
     })
   ) : null;
   const hasCgmp = !!gmpHit;
-  const gmpCerts = certList([hasCgmp, false, false, false, false]);
 
   // 카카오 실측 이동거리 {km, min} — 없으면 하버사인 추정으로 폴백
   const kkTravel = R.kakao && R.kakao.ok ? R.kakao.data : null;
+
+  // PLT(파렛트 렌탈) 거래여부 — 공개 API 없음 → 규모·수출·제조등록 기반 휴리스틱 예측
+  const empN = Number(String(empVal || '').replace(/\D/g, '')) || 0;
+  const pltScore = (mk ? 1 : 0) + (empN >= 50 ? 2 : empN >= 20 ? 1 : 0) + (trade_ref ? 1 : 0);
+  const pltLikely = pltScore >= 3 ? '가능성 높음' : pltScore >= 2 ? '보통' : '낮음/미상';
+  const pltReason = [mk ? '자사제조' : null, empN ? `재직 ${empN}명` : null, trade_ref ? '수출활동' : null].filter(Boolean).join('·') || '판단근거 부족';
 
   // 네이버 뉴스 (최근 기사)
   const newsRaw = R.naverNews && R.naverNews.ok ? R.naverNews.data : null;
@@ -547,9 +562,9 @@ function assembleLiveReport(name, corp, res) {
       kkTravel ? '실제 도로 경로 기준 거리·예상 소요시간' : '직선거리 추정 — 도로사정 차이 가능. 카카오맵 버튼으로 재확인'),
     f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
-    fc('품질인증 (CGMP)', gmpCerts, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 명단 확인 — 식약처 GMP 적합업체 현황 등재' : why('gmp', 'CGMP 적합업소 미등재 — ISO/할랄/비건은 인증기관별 개별 확인')),
+    f('CGMP 적합업소', hasCgmp ? '적합 (식약처 GMP 등재)' : null, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 — ISO/할랄/비건은 공개 API 없어 방문 시 인증서 확인' : why('gmp', 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)')),
     f('수출 실적 (업종)', trade_ref ? `화장품(HS33) 수출 총 $${Math.round(trade_ref.totalExportUsd / 1e6)}M` : null, trade_ref ? 'C' : 'D', '관세청 수출입실적 API', trade_ref ? today : null, trade_ref ? '관세청 업종 통계 — 업체별 수출은 무역협회/자체자료 확인' : '관세청 API 연동 실패 또는 데이터 없음'),
-    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'D', '수기 확인 항목', null, '공개 API 없음 — KPP/아주렌탈은 고객사 목록 비공개. 업체 문의 또는 파트너 계정으로만 확인'),
+    f('PLT 렌탈 거래 (예측)', `예측: ${pltLikely}`, 'C', '휴리스틱 추정 (공개 API 없음)', today, `${pltReason} · KPP/아주렌탈은 고객사 비공개 → 방문 시 파렛트 임대라벨·계약서로 확정`),
   ];
 
   // 재무 — 연도 중복 제거(같은 해 복수 제출 대비) 후 최신 3개년

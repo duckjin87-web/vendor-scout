@@ -75,7 +75,7 @@ const PARAM_MAP = {
   npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo' }, // 국민연금 V2 — camelCase
   npsDetail: { seq: 'seq', ym: 'dataCrtYm' },
   maker:     { name: 'bssh_nm' },
-  customs:   { hs: 'hsSgn', from: 'strtYymm', to: 'endYymm' },
+  customs:   { hs: 'hsSgn', from: 'strtYymm', to: 'endYymm', rows: 'numOfRows' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
 };
 
@@ -99,9 +99,25 @@ async function parseDataGo(res) {
     if (code && code !== '00' && code !== '0') throw new Error(friendlyDataGoErr(h.resultMsg || `API 오류(code ${code})`));
     return data;
   }
-  // XML 응답 = OpenAPI 공통 에러(미승인 키·한도초과 등)일 확률이 높다
-  const m = text.match(/<returnAuthMsg>([^<]*)<|<resultMsg>([^<]*)<|<errMsg>([^<]*)</);
-  throw new Error(friendlyDataGoErr(m ? (m[1] || m[2] || m[3]) : `JSON 아님(XML/HTML 응답): ${text.slice(0, 80)}`));
+  // XML 응답 — 관세청 등 일부 API는 성공도 XML로 준다. 에러/성공을 구분해 파싱.
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) {
+    throw new Error(friendlyDataGoErr(`응답 형식 오류(XML/HTML 아님): ${text.slice(0, 80)}`));
+  }
+  const tag = (n) => { const e = doc.getElementsByTagName(n)[0]; return e ? e.textContent.trim() : null; };
+  const authMsg = tag('returnAuthMsg');
+  if (authMsg) throw new Error(friendlyDataGoErr(authMsg)); // 미승인 키·한도초과 등
+  const code = tag('resultCode') || tag('returnReasonCode');
+  const msg = tag('resultMsg') || tag('errMsg') || tag('cmmMsgHeader');
+  const ok = !code || code === '00' || code === '0' || /정상|NORMAL|SUCCESS/i.test(msg || '');
+  if (!ok) throw new Error(friendlyDataGoErr(msg || `API 오류(code ${code})`));
+  // 성공 XML → <item> 배열을 표준 구조로 반환(itemsOf/listOf 호환)
+  const items = [...doc.getElementsByTagName('item')].map((it) => {
+    const o = {};
+    for (const c of it.children) o[c.tagName] = c.textContent.trim();
+    return o;
+  });
+  return { response: { body: { items: { item: items } } } };
 }
 
 // 논리 파라미터 → 실제 파라미터로 매핑
@@ -149,31 +165,33 @@ async function proxyOnlyGet(service, params) {
 }
 
 // 카카오 길찾기 — 한국콜마(기준점)에서 방문지까지 실측 도로거리·소요시간
+// 실패 시 구체적 사유로 throw → 상태 패널에 원인 표시(키 미설정/좌표변환/내비 미승인 구분)
 const KOLMAR_ADDR = '세종특별자치시 전의면 산단길 22-17'; // 한국콜마 기준점
 let _kolmarCoord = null; // 세션 내 캐시(기준점 좌표는 고정)
 async function kakaoGeocode(addr) {
-  const data = await proxyOnlyGet('kakaoGeocode', { query: addr });
+  const data = await proxyOnlyGet('kakaoGeocode', { query: addr }); // 실패 시 proxyErrMsg 전파
   const doc = data && data.documents && data.documents[0];
   if (!doc) return null;
   const lng = Number(doc.x), lat = Number(doc.y);
   return (isFinite(lng) && isFinite(lat)) ? { lng, lat } : null;
 }
-// 반환: { km, min } 또는 null(키 미설정·주소 실패 시 → 하버사인 추정으로 폴백)
 async function kakaoTravel(destAddr) {
-  if (!getProxy() || !destAddr) return null;
-  try {
-    if (!_kolmarCoord) _kolmarCoord = await kakaoGeocode(KOLMAR_ADDR);
-    const dest = await kakaoGeocode(destAddr);
-    if (!_kolmarCoord || !dest) return null;
-    const dir = await proxyOnlyGet('kakaoDirections', {
-      origin: `${_kolmarCoord.lng},${_kolmarCoord.lat}`,
-      destination: `${dest.lng},${dest.lat}`,
-    });
-    const route = dir && dir.routes && dir.routes[0];
-    const sum = route && route.summary;
-    if (!sum || (route.result_code != null && route.result_code !== 0)) return null;
-    return { km: Math.round(sum.distance / 1000), min: Math.round(sum.duration / 60) };
-  } catch { return null; }
+  if (!getProxy()) throw new Error('프록시 미설정');
+  if (!destAddr) throw new Error('방문 주소 없음');
+  if (!_kolmarCoord) _kolmarCoord = await kakaoGeocode(KOLMAR_ADDR);
+  if (!_kolmarCoord) throw new Error('기준점(한국콜마) 좌표 변환 실패');
+  const dest = await kakaoGeocode(destAddr);
+  if (!dest) throw new Error(`방문지 좌표 변환 실패: ${destAddr}`);
+  const dir = await proxyOnlyGet('kakaoDirections', {
+    origin: `${_kolmarCoord.lng},${_kolmarCoord.lat}`,
+    destination: `${dest.lng},${dest.lat}`,
+  });
+  const route = dir && dir.routes && dir.routes[0];
+  if (!route) throw new Error('길찾기 응답에 경로 없음');
+  if (route.result_code != null && route.result_code !== 0) throw new Error(`길찾기 오류: ${route.result_msg || route.result_code}`);
+  const sum = route.summary;
+  if (!sum) throw new Error('길찾기 요약 없음');
+  return { km: Math.round(sum.distance / 1000), min: Math.round(sum.duration / 60) };
 }
 
 // 응답에서 아이템 배열 추출 (공통 중첩 경로들 시도)
@@ -245,7 +263,7 @@ async function finishLive(name, corp) {
     rpt: proxyGet('rpt', { name: nm }),
     nps: npsLookup(nm, corp.bzno),
     maker: proxyGet('maker', { name: nm }),
-    customs: proxyGet('customs', { hs: '33', from: ym(custStart), to: ym(custEnd) }),
+    customs: proxyGet('customs', { hs: '33', from: ym(custStart), to: ym(custEnd), rows: '900' }),
     gmp: proxyGet('gmp', { rows: '500' }),
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
   };
@@ -262,10 +280,12 @@ async function finishLive(name, corp) {
   const mkList = res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const mkAddr = mkList[0] ? (mkList[0].ADDR ?? mkList[0].addr ?? mkList[0].SITE_ADDR ?? null) : null;
   const visitAddr = mkAddr || corp.addr || null;
-  const travel = await kakaoTravel(visitAddr);
+  let travel = null, kakaoErr = null;
+  try { travel = await kakaoTravel(visitAddr); }
+  catch (e) { kakaoErr = e && e.message ? e.message : String(e); }
   res.kakao = travel
     ? { ok: true, data: travel }
-    : { ok: false, err: getProxy() ? '카카오 길찾기 실패(키·좌표 확인) — 추정치 대체' : '프록시 미설정' };
+    : { ok: false, err: `${kakaoErr || '실패'} — 추정치 대체` };
 
   return window.assembleLiveReport(corp.corpNm || name, corp, res);
 }
