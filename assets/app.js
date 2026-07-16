@@ -331,7 +331,7 @@ async function finishLive(name, corp) {
 
   // 카카오 실측 이동거리 — 공장(산단공) 주소 우선, 없으면 본점. 가장 정확한 방문지로 길찾기.
   const fList = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const fAddr = fList[0] ? (fList[0].lotNoAddr ?? fList[0].roadNmAddr ?? fList[0].adres ?? fList[0].ADRES ?? fList[0].fctryAddr ?? null) : null;
+  const fAddr = fList[0] ? (fList[0].rnAdres ?? fList[0].lnmAdres ?? fList[0].lotNoAddr ?? fList[0].roadNmAddr ?? fList[0].adres ?? fList[0].ADRES ?? fList[0].fctryAddr ?? null) : null;
   const visitAddr = fAddr || corp.addr || null;
   let travel = null, kakaoErr = null;
   try { travel = await kakaoTravel(visitAddr); }

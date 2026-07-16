@@ -462,9 +462,9 @@ function assembleLiveReport(name, corp, res) {
   // 주소 필드명이 API마다 달라 명시 후보 → 실패 시 값 스캔(한글 주소 패턴)
   const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
   const fctAddr = fctHit ? (
-    fctHit.lotNoAddr ?? fctHit.roadNmAddr ?? fctHit.adres ?? fctHit.ADRES ?? fctHit.fctryAddr ?? fctHit.lctnAddr ?? fctHit.addr ??
+    fctHit.rnAdres ?? fctHit.lnmAdres ?? fctHit.lotNoAddr ?? fctHit.roadNmAddr ?? fctHit.adres ?? fctHit.ADRES ?? fctHit.fctryAddr ?? fctHit.lctnAddr ?? fctHit.addr ??
     Object.values(fctHit).find(looksAddr) ?? null) : null;
-  const fctProduct = fctHit ? (fctHit.mainProductCn ?? fctHit.prductNm ?? fctHit.MAIN_PRDLST ?? fctHit.prdlstNm ?? null) : null;
+  const fctProduct = fctHit ? (fctHit.prdlstNm ?? fctHit.indutyNm ?? fctHit.mainProductCn ?? fctHit.prductNm ?? fctHit.MAIN_PRDLST ?? null) : null;
 
   const basic = [
     f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
