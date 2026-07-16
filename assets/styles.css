@@ -237,6 +237,9 @@ a:hover { text-decoration: underline; }
 .srcstat .ss.ok em { color: var(--gA); }
 .srcstat .ss.no em { color: var(--risk); }
 .srcstat .ss.no { color: var(--gC); }
+/* warn: 조회는 성공(✓, 초록)했지만 결과가 부정(미해당) → 상세만 빨간색 */
+.srcstat .ss.warn em { color: var(--gA); }
+.srcstat .ss.warn i { color: var(--risk); font-weight: 600; }
 .srcstat .ss.excl { opacity: .55; }
 .srcstat .ss.excl em { color: var(--faint); }
 .srcstat .ss.excl .ssn { text-decoration: line-through; color: var(--faint); }

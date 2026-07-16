@@ -47,11 +47,14 @@ async function relay(target, label, init) {
   return new Response(body, { status: 200, headers: JSON_HDR });
 }
 
-// json 지정에 `type` 파라미터를 쓰는 서비스(식약처 1471000 · 산단공 B550624).
-const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp', 'factory']);
+// json 지정에 `type` 파라미터를 쓰는 서비스(식약처 1471000). 산단공/관세청 등은
+// 추가 포맷 파라미터가 크래시를 유발할 수 있어 넣지 않고, 응답이 XML이면 parseDataGo가 처리.
+const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp']);
 // 국민연금은 V2(camelCase) 엔드포인트 사용 — V1(getBassInfoSearch)은 폐기되어 500.
 // V2는 json 지정에 `dataType` 파라미터를 쓴다(resultType/type 아님).
 const NPS = new Set(['npsSearch', 'npsDetail']);
+// 포맷 파라미터를 넣지 않는 서비스(기본 XML로 받음) — 추가 파라미터 민감한 게이트웨이 대비.
+const NO_FORMAT = new Set(['factory']);
 
 function handleDataGo(url, service, env) {
   if (!env.DATA_GO_KR_API_KEY) return jsonRes({ error: 'DATA_GO_KR_API_KEY 미설정' }, 500);
@@ -62,6 +65,9 @@ function handleDataGo(url, service, env) {
     if (!q.has('dataType'))  q.set('dataType', 'json');
     if (!q.has('pageNo'))    q.set('pageNo', '1');
     if (!q.has('numOfRows')) q.set('numOfRows', '100');
+  } else if (NO_FORMAT.has(service)) {
+    if (!q.has('pageNo'))    q.set('pageNo', '1');
+    if (!q.has('numOfRows')) q.set('numOfRows', '30');
   } else {
     if (!q.has('resultType')) q.set('resultType', 'json');
     if (NEEDS_TYPE.has(service) && !q.has('type')) q.set('type', 'json');

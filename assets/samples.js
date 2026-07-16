@@ -459,8 +459,12 @@ function assembleLiveReport(name, corp, res) {
   // 산단공 공장등록(생산)정보 — 회사명 검색 결과에서 상호 일치 건
   const fctList = R.factory && R.factory.ok ? listOf(R.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const fctHit = matchByName(name, fctList) || fctList[0] || null;
-  const fctAddr = fctHit ? (fctHit.lotNoAddr ?? fctHit.roadNmAddr ?? fctHit.adres ?? fctHit.ADRES ?? fctHit.fctryAddr ?? null) : null;
-  const fctProduct = fctHit ? (fctHit.mainProductCn ?? fctHit.prductNm ?? fctHit.MAIN_PRDLST ?? null) : null;
+  // 주소 필드명이 API마다 달라 명시 후보 → 실패 시 값 스캔(한글 주소 패턴)
+  const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
+  const fctAddr = fctHit ? (
+    fctHit.lotNoAddr ?? fctHit.roadNmAddr ?? fctHit.adres ?? fctHit.ADRES ?? fctHit.fctryAddr ?? fctHit.lctnAddr ?? fctHit.addr ??
+    Object.values(fctHit).find(looksAddr) ?? null) : null;
+  const fctProduct = fctHit ? (fctHit.mainProductCn ?? fctHit.prductNm ?? fctHit.MAIN_PRDLST ?? fctHit.prdlstNm ?? null) : null;
 
   const basic = [
     f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
@@ -567,14 +571,20 @@ function assembleLiveReport(name, corp, res) {
   };
   const src_status = [
     { name: '금융위 기업기본정보', ok: true, detail: `기준정보 확보 (${corp?.crno || '법인번호 미상'})` },
-    { key: 'nts', name: '국세청 사업자상태', ok: !!bStt, detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}` : ((R.nts && !R.nts.ok) ? (R.nts.err || '조회 실패') : '조회 실패 — 사업자번호/승인 확인') },
+    // 연결 실패 / 조회성공·데이터없음 을 명확히 구분
+    { key: 'nts', name: '국세청 사업자상태', ok: !!bStt,
+      detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}`
+        : (!R.nts ? '미호출(사업자번호 없음)' : (!R.nts.ok ? `⚠ 연결 실패: ${R.nts.err}` : '조회 성공 · 해당 사업자 정보 없음')) },
     stat('finance', 'finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '재무 데이터 없음(외감 비대상 추정)'),
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null, '0건 — 기능성 미취급 또는 상호 불일치'),
     stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `${npsData.count}건 매칭${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
     stat('maker', 'maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
-    { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, detail: fctAddr ? `공장 확인${fctProduct ? ' · ' + fctProduct : ''}` : ((R.factory && !R.factory.ok) ? (R.factory.err || '조회 실패') : '공장등록 없음 — 미등록/임대/상호불일치') },
+    { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, warn: !fctAddr && !!(R.factory && R.factory.ok),
+      detail: fctAddr ? `공장 확인${fctProduct ? ' · ' + fctProduct : ''}`
+        : (!R.factory ? '미호출' : (!R.factory.ok ? `⚠ 연결 실패: ${R.factory.err}` : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '조회 성공 · 공장등록 0건(미등록/임대 가능)'))) },
+    // GMP: API가 응답했으면 체크(✓), 미해당은 빨간색으로 표시
     (R.gmp && R.gmp.ok)
-      ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `적합업체 ${gmpList.length}곳 중 미해당 (CGMP 미인증)` }
+      ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: true, warn: !hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `미해당 — 적합업체 ${gmpList.length}곳 중 미등재(CGMP 미인증)` }
       : stat('gmp', 'gmp', '식약처 GMP (CGMP)', null, 'GMP 목록 조회 실패'),
     stat('news', 'naverNews', '네이버 뉴스검색', news ? `${news.length}건 관련기사` : null, '기사 없음 또는 프록시 미설정'),
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,

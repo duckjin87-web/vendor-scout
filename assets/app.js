@@ -651,7 +651,7 @@ function render(report) {
       m.src_status.forEach((s) => {
         const canToggle = !!s.key;
         const ex = canToggle && excluded.has(s.key);
-        const row = el('label', 'ss ' + (ex ? 'excl' : (s.ok ? 'ok' : 'no')));
+        const row = el('label', 'ss ' + (ex ? 'excl' : (s.warn ? 'warn' : (s.ok ? 'ok' : 'no'))));
         const mark = ex ? '⊘' : (s.ok ? '✓' : '✗');
         const detail = ex ? '제외됨 — 사용자 설정' : (s.detail || '');
         row.innerHTML =
