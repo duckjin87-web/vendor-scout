@@ -53,6 +53,8 @@ function srcKeyOf(sourceStr) {
   if (/제조업|화장품제조/.test(s)) return 'maker';
   if (/GMP/.test(s)) return 'gmp';
   if (/뉴스/.test(s)) return 'news';
+  if (/공장|산업단지|산단/.test(s)) return 'factory';
+  if (/국세청|사업자상태/.test(s)) return 'nts';
   return null; // 기업기본정보 등 핵심/비-API 항목은 제외 불가
 }
 
@@ -75,6 +77,7 @@ const PARAM_MAP = {
   npsDetail: { seq: 'seq', ym: 'dataCrtYm' },
   maker:     { name: 'bssh_nm' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
+  factory:   { name: 'cmpnyNm', rows: 'numOfRows' }, // 산단공 공장등록 — 회사명 검색
 };
 
 // data.go 공통 에러 메시지 → 사용자 조치 안내
@@ -313,6 +316,8 @@ async function finishLive(name, corp) {
     nps: npsLookup(nm, corp.bzno),
     maker: proxyGet('maker', { name: nm }),
     gmp: proxyGet('gmp', { rows: '500' }),
+    factory: proxyGet('factory', { name: nm, rows: '30' }),
+    nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
   };
   const keys = Object.keys(calls);
@@ -324,10 +329,10 @@ async function finishLive(name, corp) {
       : { ok: false, err: String(settled[i].reason && settled[i].reason.message || settled[i].reason) };
   });
 
-  // 카카오 실측 이동거리 — 제조소 주소 확보 후(가장 정확한 방문지) 길찾기
-  const mkList = res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const mkAddr = mkList[0] ? (mkList[0].ADDR ?? mkList[0].addr ?? mkList[0].SITE_ADDR ?? null) : null;
-  const visitAddr = mkAddr || corp.addr || null;
+  // 카카오 실측 이동거리 — 공장(산단공) 주소 우선, 없으면 본점. 가장 정확한 방문지로 길찾기.
+  const fList = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
+  const fAddr = fList[0] ? (fList[0].lotNoAddr ?? fList[0].roadNmAddr ?? fList[0].adres ?? fList[0].ADRES ?? fList[0].fctryAddr ?? null) : null;
+  const visitAddr = fAddr || corp.addr || null;
   let travel = null, kakaoErr = null;
   try { travel = await kakaoTravel(visitAddr); }
   catch (e) { kakaoErr = e && e.message ? e.message : String(e); }

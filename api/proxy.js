@@ -13,6 +13,7 @@ const DATAGO = {
   npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2/getDetailInfoSearchV2',
   maker:     'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01',
   gmp:       'https://apis.data.go.kr/1471000/CsmtcsGmpStbltCompInfo/getCsmtcsGmpStbltCompInfo',
+  factory:   'https://apis.data.go.kr/B550624/fctryRegistPrdctnInfo/getFctryPrdctnService', // 한국산업단지공단 공장등록(생산)정보 — cmpnyNm 검색
 };
 
 const CORS = {
@@ -46,8 +47,8 @@ async function relay(target, label, init) {
   return new Response(body, { status: 200, headers: JSON_HDR });
 }
 
-// 식약처 1471000 API만 json 지정에 `type` 파라미터를 씀.
-const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp']);
+// json 지정에 `type` 파라미터를 쓰는 서비스(식약처 1471000 · 산단공 B550624).
+const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp', 'factory']);
 // 국민연금은 V2(camelCase) 엔드포인트 사용 — V1(getBassInfoSearch)은 폐기되어 500.
 // V2는 json 지정에 `dataType` 파라미터를 쓴다(resultType/type 아님).
 const NPS = new Set(['npsSearch', 'npsDetail']);
@@ -107,6 +108,31 @@ async function handleFetchPage(url) {
   return jsonRes({ status: up.status, url: up.url, text });
 }
 
+// 국세청 사업자상태 — odcloud POST(JSON body). data.go 키 그대로 사용.
+async function handleNtsStatus(url, env) {
+  if (!env.DATA_GO_KR_API_KEY) return jsonRes({ error: 'DATA_GO_KR_API_KEY 미설정' }, 500);
+  const bno = (url.searchParams.get('b_no') || '').replace(/\D/g, '');
+  if (bno.length !== 10) return jsonRes({ error: '사업자번호 10자리 필요' }, 400);
+  const q = new URLSearchParams({ serviceKey: env.DATA_GO_KR_API_KEY });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  let up;
+  try {
+    up = await fetch(`https://api.odcloud.kr/api/nts-businessman/v1/status?${q}`, {
+      method: 'POST', signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ b_no: [bno] }),
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    return jsonRes({ error: '국세청 상태조회 실패', detail: String(e && e.message || e) }, 502);
+  }
+  clearTimeout(timer);
+  const body = await up.text().catch(() => '');
+  if (!up.ok) return jsonRes({ error: `국세청 상류 HTTP ${up.status}`, detail: body.slice(0, 300) }, 502);
+  return new Response(body, { status: 200, headers: JSON_HDR });
+}
+
 // 카카오 — 주소검색(좌표) / 길찾기(실측 거리·시간). 둘 다 REST 키 헤더 인증.
 function handleKakao(url, env, kind) {
   if (!env.KAKAO_REST_KEY) return jsonRes({ error: 'KAKAO_REST_KEY 미설정' }, 500);
@@ -133,6 +159,7 @@ export default async function handler(req) {
     if (service === 'naverWeb')        return handleNaver(url, env, 'webkr');
     if (service === 'naverLocal')      return handleNaver(url, env, 'local');
     if (service === 'fetchPage')       return handleFetchPage(url);
+    if (service === 'ntsStatus')       return handleNtsStatus(url, env);
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
     if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
     if (DATAGO[service])               return handleDataGo(url, service, env);

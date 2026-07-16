@@ -35,6 +35,16 @@ function fc(key, checklist, grade, source, asOf, note) {
 const CERTS = ['CGMP', 'ISO 22716', 'ISO 14001', '할랄(HALAL)', '비건(Vegan)'];
 function certList(oks) { return CERTS.map((label, i) => ({ label, ok: !!oks[i] })); }
 
+// 목록 응답에서 상호가 포함된 레코드 찾기(필드명이 API마다 달라 전체 값 스캔). stripCorp는 런타임(app.js) 전역.
+function matchByName(name, list) {
+  const key = stripCorp(name).replace(/\s/g, '');
+  if (key.length < 2 || !Array.isArray(list)) return null;
+  return list.find((it) => Object.values(it).some((v) => {
+    const gn = stripCorp(String(v == null ? '' : v)).replace(/\s/g, '');
+    return gn.length >= 3 && gn.includes(key);
+  })) || null;
+}
+
 
 // ── 방문 이동거리 추정 (한국콜마 세종 기준점) ──
 const REF_POINT = { name: '한국콜마', addr: '세종특별자치시 전의면 산단길 22-17', lat: 36.6988177, lng: 127.2153174 };
@@ -439,15 +449,28 @@ function assembleLiveReport(name, corp, res) {
   const mkList = R.maker && R.maker.ok ? listOf(R.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const mk = mkList[0];
   const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? null) : null;
-  const mkAddr = mk ? (mk.ADDR ?? mk.addr ?? mk.SITE_ADDR ?? null) : null;
+
+  // 국세청 사업자상태 (odcloud: {data:[{b_stt, tax_type, ...}]})
+  const ntsItem = R.nts && R.nts.ok && R.nts.data && Array.isArray(R.nts.data.data) ? R.nts.data.data[0] : null;
+  const bStt = ntsItem ? (ntsItem.b_stt || null) : null;            // 계속사업자 / 휴업자 / 폐업자
+  const bSttCd = ntsItem ? (ntsItem.b_stt_cd || null) : null;       // 01 계속 / 02 휴업 / 03 폐업
+  const bTax = ntsItem ? (ntsItem.tax_type || null) : null;
+
+  // 산단공 공장등록(생산)정보 — 회사명 검색 결과에서 상호 일치 건
+  const fctList = R.factory && R.factory.ok ? listOf(R.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
+  const fctHit = matchByName(name, fctList) || fctList[0] || null;
+  const fctAddr = fctHit ? (fctHit.lotNoAddr ?? fctHit.roadNmAddr ?? fctHit.adres ?? fctHit.ADRES ?? fctHit.fctryAddr ?? null) : null;
+  const fctProduct = fctHit ? (fctHit.mainProductCn ?? fctHit.prductNm ?? fctHit.MAIN_PRDLST ?? null) : null;
 
   const basic = [
     f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
     f('사업자등록번호', corp?.bzno || null, 'A', '금융위 기업기본정보', today),
+    f('사업자 상태', bStt, bStt ? 'A' : 'D', '국세청 사업자상태', bStt ? today : null, bStt ? (bTax || null) : why('nts', '국세청 상태 조회 실패 — 사업자번호/승인 확인')),
     f('대표자', corp?.rep || null, 'A', '금융위 기업기본정보', today),
     f('설립일', fmtDate(corp?.estbDt), 'A', '금융위 기업기본정보', fmtDate(corp?.estbDt)),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
     f('제조업 등록', mk ? `등록${mkNo ? ` (제${mkNo}호)` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null, mk ? null : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
+    f('공장 소재지', fctAddr, fctAddr ? 'A' : 'D', '산업단지공단 공장등록', fctAddr ? today : null, fctAddr ? `★ 실제 공장 주소${fctProduct ? ` · 생산: ${fctProduct}` : ''}` : why('factory', '공장등록 조회 결과 없음 — 미등록 공장(임대/소규모) 또는 상호 불일치')),
   ];
 
   // 식약처 기능성 보고품목 (rpt)
@@ -470,13 +493,7 @@ function assembleLiveReport(name, corp, res) {
   // 식약처 GMP 적합업소 (CGMP 등록여부) — 적합업체 전체목록에서 상호로 필터
   // 업체명 필드 키가 API마다 달라(BSSH_NM/CMPNY_NM/…) 모든 필드값을 훑어 상호 포함 여부로 매칭
   const gmpList = R.gmp && R.gmp.ok ? listOf(R.gmp.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const cmpKey = stripCorp(name).replace(/\s/g, '');
-  const gmpHit = cmpKey.length >= 2 ? gmpList.find((g) =>
-    Object.values(g).some((v) => {
-      const gn = stripCorp(String(v == null ? '' : v)).replace(/\s/g, '');
-      return gn.length >= 3 && gn.includes(cmpKey);
-    })
-  ) : null;
+  const gmpHit = matchByName(name, gmpList);
   const hasCgmp = !!gmpHit;
 
   // 카카오 이동거리 {km, min, method} — navi=모빌리티 실측 / coord=카카오맵 좌표추정
@@ -498,7 +515,7 @@ function assembleLiveReport(name, corp, res) {
     f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     f('방문 이동거리',
-      kkTravel ? travelText(kkTravel) : travelText(estimateTravel(mkAddr || corp?.addr || npsAddr)),
+      kkTravel ? travelText(kkTravel) : travelText(estimateTravel(fctAddr || corp?.addr || npsAddr)),
       kkNavi ? 'B' : 'C',
       kkNavi ? '카카오내비 길찾기 (실측)' : (kkTravel ? '카카오맵 좌표 기반 추정' : '좌표 추정 (지역중심)'),
       today,
@@ -550,10 +567,12 @@ function assembleLiveReport(name, corp, res) {
   };
   const src_status = [
     { name: '금융위 기업기본정보', ok: true, detail: `기준정보 확보 (${corp?.crno || '법인번호 미상'})` },
+    { key: 'nts', name: '국세청 사업자상태', ok: !!bStt, detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}` : ((R.nts && !R.nts.ok) ? (R.nts.err || '조회 실패') : '조회 실패 — 사업자번호/승인 확인') },
     stat('finance', 'finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '재무 데이터 없음(외감 비대상 추정)'),
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null, '0건 — 기능성 미취급 또는 상호 불일치'),
     stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `${npsData.count}건 매칭${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
     stat('maker', 'maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
+    { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, detail: fctAddr ? `공장 확인${fctProduct ? ' · ' + fctProduct : ''}` : ((R.factory && !R.factory.ok) ? (R.factory.err || '조회 실패') : '공장등록 없음 — 미등록/임대/상호불일치') },
     (R.gmp && R.gmp.ok)
       ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `적합업체 ${gmpList.length}곳 중 미해당 (CGMP 미인증)` }
       : stat('gmp', 'gmp', '식약처 GMP (CGMP)', null, 'GMP 목록 조회 실패'),
@@ -561,8 +580,12 @@ function assembleLiveReport(name, corp, res) {
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
   ].filter(Boolean);
 
-  // 리스크 플래그 — 본점(등기) 주소와 국민연금 사업장(실근무지) 주소 상이 → 실제 생산현장 확인 필요
   const risk_flags = [];
+  // 국세청 상태가 계속사업자가 아니면 최우선 경고
+  if (bStt && bSttCd && bSttCd !== '01') {
+    risk_flags.push({ type: `${bStt}`, detail: `국세청 사업자상태가 '${bStt}' — 정상 영업 여부 확인 필요. 거래 전 반드시 재확인` });
+  }
+  // 본점(등기)주소와 국민연금 사업장(실근무지) 주소 상이 → 실제 생산현장 확인 필요
   const norm = (s) => String(s || '').replace(/\s|특별자치시|특별시|광역시|번길|번지|[()]/g, '').slice(0, 8);
   if (corp?.addr && npsAddr && norm(corp.addr) !== norm(npsAddr)) {
     risk_flags.push({ type: '주소 상이', detail: `본점(등기) ${corp.addr} ↔ 사업장(연금) ${npsAddr} — 등기 본점과 실제 근무 사업장이 다름. 방문 전 실제 생산현장 주소 확인 필요` });
