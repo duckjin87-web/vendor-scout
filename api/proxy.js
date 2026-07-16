@@ -9,8 +9,8 @@ const DATAGO = {
   corp:      'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2',
   finance:   'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2',
   rpt:       'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
-  npsSearch: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch',
-  npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getDetailInfoSearch',
+  npsSearch: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2/getBassInfoSearchV2',
+  npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2/getDetailInfoSearchV2',
   maker:     'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01',
   customs:   'https://apis.data.go.kr/1220000/nitemtrade/getNitemtradeList',
   gmp:       'https://apis.data.go.kr/1471000/CsmtcsGmpStbltCompInfo/getCsmtcsGmpStbltCompInfo',
@@ -49,8 +49,8 @@ async function relay(target, label, init) {
 
 // 식약처 1471000 API만 json 지정에 `type` 파라미터를 씀.
 const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp']);
-// NPS(B552015)는 resultType=json을 주면 서버 JSON 직렬화 버그로 500(Unexpected errors) →
-// 네이티브 XML로 받고 브라우저에서 파싱한다.
+// 국민연금은 V2(camelCase) 엔드포인트 사용 — V1(getBassInfoSearch)은 폐기되어 500.
+// V2는 json 지정에 `dataType` 파라미터를 쓴다(resultType/type 아님).
 const NPS = new Set(['npsSearch', 'npsDetail']);
 
 function handleDataGo(url, service, env) {
@@ -59,6 +59,7 @@ function handleDataGo(url, service, env) {
   for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
   q.set('serviceKey', env.DATA_GO_KR_API_KEY);
   if (NPS.has(service)) {
+    if (!q.has('dataType'))  q.set('dataType', 'json');
     if (!q.has('pageNo'))    q.set('pageNo', '1');
     if (!q.has('numOfRows')) q.set('numOfRows', '100');
   } else {

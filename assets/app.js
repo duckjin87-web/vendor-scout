@@ -72,6 +72,8 @@ const PARAM_MAP = {
   corp:      { name: 'corpNm' },
   finance:   { crno: 'crno' },
   rpt:       { name: 'entp_name' },
+  npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo' }, // 국민연금 V2 — camelCase
+  npsDetail: { seq: 'seq', ym: 'dataCrtYm' },
   maker:     { name: 'bssh_nm' },
   customs:   { hs: 'hsSgn', from: 'strtYymm', to: 'endYymm' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
@@ -183,59 +185,21 @@ function stripCorp(s) {
 
 // NPS(B552015) 응답 파서 — resultType=json이면 서버가 500 크래시 → XML로 받아 파싱.
 // (혹시 JSON이면 그대로 파싱) 반환: item 객체 배열.
-function parseNpsBody(text) {
-  try {
-    const j = JSON.parse(text);
-    return itemsOf(j);
-  } catch { /* XML */ }
-  const doc = new DOMParser().parseFromString(text, 'application/xml');
-  if (doc.getElementsByTagName('parsererror').length) throw new Error(`NPS 응답 파싱 실패: ${text.slice(0, 80)}`);
-  const tag = (name) => { const n = doc.getElementsByTagName(name)[0]; return n ? n.textContent.trim() : null; };
-  const code = tag('resultCode');
-  if (code && code !== '00' && code !== '0') throw new Error(friendlyDataGoErr(tag('resultMsg') || `API 오류(code ${code})`));
-  return [...doc.getElementsByTagName('item')].map((it) => {
-    const o = {};
-    for (const c of it.children) o[c.tagName] = c.textContent.trim();
-    return o;
-  });
-}
-
-// NPS 프록시 호출(XML) — params는 실제 파라미터명 그대로 전달(빈 값은 제거)
-async function npsRaw(service, params) {
-  if (!getProxy()) throw new Error('프록시 미설정 — 국민연금은 프록시 경유 전용');
-  const clean = { service };
-  for (const [k, v] of Object.entries(params)) if (v != null && v !== '') clean[k] = v;
-  let res;
-  try { res = await fetch(buildProxyUrl(clean), { headers: { Accept: 'application/xml' } }); }
-  catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
-  if (!res.ok) throw new Error(await proxyErrMsg(res));
-  return parseNpsBody(await res.text());
-}
-
-// 국민연금 2단계: 사업장 검색 → 첫 건 seq로 상세조회(가입자수는 상세에만 있음)
-// getBassInfoSearch는 상호명(한글) 단독 검색 시 백엔드 500이 잦다 →
-// 사업자등록번호(숫자) 우선, 실패 시 상호명 순으로 시도.
+// 국민연금 2단계(V2·JSON): 사업장 검색 → 첫 건 seq로 상세조회(가입자수 jnngpCnt는 상세에만 있음)
+// 사업자등록번호(bzowrRgstNo) 우선, 0건이면 상호명(wkplNm)으로 폴백.
 async function npsLookup(nm, bzno) {
   const digits = bzno ? String(bzno).replace(/\D/g, '') : '';
-  const attempts = [];
-  if (digits.length >= 10) attempts.push({ bzowr_rgst_no: digits });        // 사업자번호 10자리
-  if (digits.length >= 6) attempts.push({ bzowr_rgst_no: digits.slice(0, 6) }); // 앞 6자리(마스킹 형식)
-  attempts.push({ wkpl_nm: nm });                                            // 상호명(폴백)
-
-  let items = null, lastErr = null;
-  for (const params of attempts) {
-    try { const r = await npsRaw('npsSearch', params); items = r; if (r.length) break; }
-    catch (e) { lastErr = e; }
+  let items = [];
+  if (digits.length >= 10) {
+    try { items = itemsOf(await proxyGet('npsSearch', { bz: digits })); } catch { /* 상호명으로 폴백 */ }
   }
-  if (items === null) throw lastErr || new Error('국민연금 조회 실패');
+  if (!items.length) items = itemsOf(await proxyGet('npsSearch', { name: nm }));
 
   const hit = items[0];
   let detail = null;
   if (hit && hit.seq != null && hit.seq !== '') {
-    try {
-      const d = await npsRaw('npsDetail', { seq: hit.seq, data_crt_ym: hit.dataCrtYm });
-      detail = d[0] || null;
-    } catch { /* 상세 실패해도 검색 결과는 사용 */ }
+    try { detail = itemsOf(await proxyGet('npsDetail', { seq: hit.seq, ym: hit.dataCrtYm }))[0] || null; }
+    catch { /* 상세 실패해도 검색 결과는 사용 */ }
   }
   return { search: hit || null, detail, count: items.length };
 }
@@ -522,6 +486,13 @@ function renderTradeRef(tradeRef) {
   return b;
 }
 
+// 방문지 주소 선택 — 제조소(식약처) > 본점(금융위) > 사업장(연금) 순
+function visitAddress(report) {
+  const fields = [...(report.basic || []), ...(report.capacity || [])];
+  const val = (k) => { const f = fields.find((x) => x.key === k); return f && f.value ? f.value : null; };
+  return val('제조소 소재지') || val('본점주소') || val('사업장 주소 (연금기준)') || null;
+}
+
 function render(report) {
   currentReport = report;
   const root = $('#report');
@@ -542,6 +513,14 @@ function render(report) {
   const printBtn = el('button', 'act primary', '🖨 인쇄 / PDF로 저장');
   printBtn.addEventListener('click', () => window.print());
   actions.appendChild(el('span', 'act-hint', '방문 전 리포트로 저장 →'));
+  // 🗺 카카오맵에서 공장 위치 보기 (제조소 주소 우선) — 별도 키 불필요, 새 탭에서 로드맵 표시
+  const visitAddr = visitAddress(report);
+  if (visitAddr) {
+    const mapBtn = el('button', 'act', '🗺 카카오맵에서 공장 위치');
+    mapBtn.title = `카카오맵에서 「${visitAddr}」 위치를 로드맵으로 표시`;
+    mapBtn.addEventListener('click', () => window.open(`https://map.kakao.com/?q=${encodeURIComponent(visitAddr)}`, '_blank', 'noopener'));
+    actions.appendChild(mapBtn);
+  }
   actions.appendChild(dlBtn);
   actions.appendChild(printBtn);
   root.appendChild(actions);

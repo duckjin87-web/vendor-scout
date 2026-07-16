@@ -22,8 +22,8 @@ const DATAGO_SERVICES = {
   corp: 'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2',
   finance: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2',
   rpt: 'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
-  npsSearch: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getBassInfoSearch',
-  npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireService/getDetailInfoSearch',
+  npsSearch: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2/getBassInfoSearchV2',
+  npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2/getDetailInfoSearchV2',
   maker: 'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01',
   customs: 'https://apis.data.go.kr/1220000/nitemtrade/getNitemtradeList',
   gmp: 'https://apis.data.go.kr/1471000/CsmtcsGmpStbltCompInfo/getCsmtcsGmpStbltCompInfo',
@@ -47,6 +47,7 @@ async function handleDataGo(url, service, env) {
   for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
   q.set('serviceKey', env.DATA_GO_KR_API_KEY);
   if (NPS.has(service)) {
+    if (!q.has('dataType')) q.set('dataType', 'json');
     if (!q.has('pageNo')) q.set('pageNo', '1');
     if (!q.has('numOfRows')) q.set('numOfRows', '100');
   } else {

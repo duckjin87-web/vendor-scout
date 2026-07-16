@@ -485,7 +485,7 @@ function assembleLiveReport(name, corp, res) {
   const npsData = R.nps && R.nps.ok ? R.nps.data : null;
   const nps = npsData ? npsData.search : null;
   const npsDet = npsData ? npsData.detail : null;
-  // XML 태그명: 가입자수=jnngpCnt, 도로명주소=wkplRoadNmDetAddr, 법정동주소=ldongAddrMgpldongNm 등
+  // V2 JSON 필드: 가입자수=jnngpCnt(상세), 도로명주소=wkplRoadNmDetAddr, 법정동=ldongAddrMgpldongNm
   const empRaw = (npsDet && (npsDet.jnngpCnt ?? npsDet.subscrCnt)) ?? (nps && (nps.jnngpCnt ?? nps.subscrCnt)) ?? null;
   const empVal = (empRaw != null && empRaw !== '') ? empRaw : null;
   const pick = (o, ...ks) => { if (!o) return null; for (const k of ks) if (o[k] != null && o[k] !== '') return o[k]; return null; };
