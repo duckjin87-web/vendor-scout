@@ -110,30 +110,37 @@ async function handleFetchPage(url) {
 }
 
 // 국세청 사업자상태 — odcloud POST(JSON body). data.go 키 그대로 사용.
+// odcloud는 간헐적으로 500 "EOF"를 반환 → 고정길이 바이트 전송 + 최대 3회 재시도.
 async function handleNtsStatus(url, env) {
   if (!env.DATA_GO_KR_API_KEY) return jsonRes({ error: 'DATA_GO_KR_API_KEY 미설정' }, 500);
   const bno = (url.searchParams.get('b_no') || '').replace(/\D/g, '');
   if (bno.length !== 10) return jsonRes({ error: '사업자번호 10자리 필요' }, 400);
   const q = new URLSearchParams({ serviceKey: env.DATA_GO_KR_API_KEY });
-  // 본문을 고정길이 바이트로 전송 — 문자열 body의 chunked 전송 시 odcloud가 EOF(500) 반환하는 문제 회피
+  const target = `https://api.odcloud.kr/api/nts-businessman/v1/status?${q}`;
   const bodyBytes = new TextEncoder().encode(JSON.stringify({ b_no: [bno] }));
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 15000);
-  let up;
-  try {
-    up = await fetch(`https://api.odcloud.kr/api/nts-businessman/v1/status?${q}`, {
-      method: 'POST', signal: ctrl.signal,
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'Content-Length': String(bodyBytes.length) },
-      body: bodyBytes,
-    });
-  } catch (e) {
+  let lastStatus = 0, lastBody = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    let up;
+    try {
+      up = await fetch(target, {
+        method: 'POST', signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'Content-Length': String(bodyBytes.length) },
+        body: bodyBytes,
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      lastStatus = 0; lastBody = String(e && e.message || e);
+      continue; // 네트워크 오류 → 재시도
+    }
     clearTimeout(timer);
-    return jsonRes({ error: '국세청 상태조회 실패', detail: String(e && e.message || e) }, 502);
+    const body = await up.text().catch(() => '');
+    if (up.ok) return new Response(body, { status: 200, headers: JSON_HDR });
+    lastStatus = up.status; lastBody = body;
+    if (up.status !== 500) break; // 500(EOF)만 재시도, 그 외는 즉시 반환
   }
-  clearTimeout(timer);
-  const body = await up.text().catch(() => '');
-  if (!up.ok) return jsonRes({ error: `국세청 상류 HTTP ${up.status}`, detail: body.slice(0, 300) }, 502);
-  return new Response(body, { status: 200, headers: JSON_HDR });
+  return jsonRes({ error: lastStatus ? `국세청 상류 HTTP ${lastStatus}` : '국세청 상태조회 실패', detail: (lastBody || '').slice(0, 300) }, 502);
 }
 
 // 카카오 — 주소검색(좌표) / 길찾기(실측 거리·시간). 둘 다 REST 키 헤더 인증.

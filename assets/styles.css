@@ -43,20 +43,23 @@ a:hover { text-decoration: underline; }
 
 /* Header */
 .topbar { border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 10; }
-.topbar .wrap { display: flex; align-items: center; gap: 14px; height: 60px; }
+.topbar .wrap { display: flex; align-items: center; gap: 10px; min-height: 60px; padding-top: 8px; padding-bottom: 8px; }
 .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; }
 .logo .mark {
-  width: 30px; height: 30px; border-radius: 8px;
+  width: 30px; height: 30px; border-radius: 8px; flex: 0 0 auto;
   background: linear-gradient(135deg, var(--accent), #7aa2ff);
   display: grid; place-items: center; color: #fff; font-size: 15px; font-weight: 800;
 }
-.logo small { font-weight: 500; color: var(--muted); font-size: 12px; }
+/* vendor-scout / 화장품 제조업체 사전검증 을 두 줄로 */
+.logo .logo-txt { display: flex; flex-direction: column; line-height: 1.25; }
+.logo .logo-txt b { font-weight: 800; font-size: 16px; }
+.logo small { font-weight: 500; color: var(--muted); font-size: 11.5px; }
 .topbar .spacer { flex: 1; }
 .topbar .demo-badge {
   font-size: 11px; font-weight: 600; color: var(--gC); background: var(--gC-bg);
   padding: 4px 9px; border-radius: 999px; border: 1px solid transparent;
 }
-.topbar .ghlink { font-size: 13px; color: var(--muted); }
+.topbar .ghlink { font-size: 13px; color: var(--muted); white-space: nowrap; flex: 0 0 auto; }
 
 /* Hero / search */
 .hero { padding: 40px 0 20px; }
@@ -151,6 +154,7 @@ a:hover { text-decoration: underline; }
 .proxybtn {
   font-size: 12px; font-weight: 600; color: var(--muted); background: var(--panel);
   border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; cursor: pointer; transition: all .15s;
+  white-space: nowrap; flex: 0 0 auto;
 }
 .proxybtn:hover { border-color: var(--accent); color: var(--accent); }
 .proxybtn.on { color: var(--gA); border-color: var(--gA); background: var(--gA-bg); }

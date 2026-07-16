@@ -419,7 +419,7 @@ function fieldRow(fld) {
   const info = fld.note ? ` <span class="ninfo" title="${esc(fld.note)}">ⓘ</span>` : '';
   const valHtml = Array.isArray(fld.checklist)
     ? checklistHtml(fld.checklist) + info
-    : (isGap ? '데이터 없음' : esc(fld.value)) + stale + info;
+    : (isGap ? '해당 없음' : esc(fld.value)) + stale + info;
   row.appendChild(el('div', 'v' + (isGap && !fld.checklist ? ' gap' : ''), valHtml));
 
   const src = el('div', 'src');
@@ -653,7 +653,7 @@ function render(report) {
     if (Array.isArray(m.src_status) && m.src_status.length) {
       const excluded = getExcluded();
       const sp = el('div', 'srcstat');
-      sp.appendChild(el('div', 'srchead', '📡 데이터 소스 상태 <span>체크 해제 → 리포트에서 제외</span>'));
+      sp.appendChild(el('div', 'srchead', '📡 데이터 소스 상태 <span>✓조회성공 · ✗실패 · 체크박스=리포트 포함(해제 시 제외)</span>'));
       m.src_status.forEach((s) => {
         const canToggle = !!s.key;
         const ex = canToggle && excluded.has(s.key);

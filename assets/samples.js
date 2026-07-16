@@ -109,7 +109,6 @@ const linear = {
     f('기능성 보고품목 수 (5년내)', 42, 'A', '식약처 보고품목 API', '2026-07-07'),
     f('신고 제형 분포', '크림, 로션, 앰플/세럼, 마스크팩, 젤', 'C', '식약처 보고품목 API', '2026-07-07', 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
     fc('품질인증', certList([1, 1, 1, 0, 1]), 'A', '식약처 GMP·인증기관', '2024-11-20', 'CGMP 적합업소(유효) + 국제 품질/윤리 인증'),
-    fc('PLT 거래여부', [{ label: 'KPP', ok: true }, { label: '아주렌탈', ok: false }], 'B', '렌탈 거래처 대사', '2026-07-07', '렌탈 파렛트 거래 이력'),
   ],
   finance: [
     f('매출액', '218억 원', 'A', '금융위 재무정보 API (2024년)', '2024-12-31'),
@@ -174,7 +173,6 @@ const beautylab = {
     f('기능성 보고품목 수 (5년내)', 3, 'A', '식약처 보고품목 API', '2026-07-07'),
     f('신고 제형 분포', '앰플/세럼', 'C', '식약처 보고품목 API', '2026-07-07', '단일 제형 — 소품목 소량 추정'),
     fc('품질인증', certList([0, 0, 0, 0, 0]), 'B', '식약처 GMP·인증기관', '2026-07-07', 'CGMP 적합업소 목록 미포함 — 인증 미확인'),
-    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'B', '렌탈 거래처 대사', '2026-07-07', '거래 이력 없음'),
   ],
   finance: [
     f('매출액', null, 'D', '금융위 재무정보 API', null, '데이터 미제출 법인 — 외감 비대상 (등기부/자체제출 폴백)'),
@@ -253,9 +251,6 @@ function generateReport(rawName) {
   const funcCount = ri(0, 76);
   const hasGmp = isMaker && chance(0.6);
   const pensionAddr = chance(0.7) ? hqAddr : `${region} ${pick(G_STREET)} ${ri(1, 99)}`;
-  // PLT: 공개 API 없음 → 규모·제조 기반 예측
-  const pScore = (isMaker ? 1 : 0) + (emp >= 80 ? 2 : emp >= 30 ? 1 : 0);
-  const pltLikely = pScore >= 3 ? '가능성 높음' : pScore >= 2 ? '보통' : '낮음/미상';
   const capacity = [
     f('재직자수 (국민연금 가입자)', `${emp}명`, 'B', '국민연금 사업장 API', '2026-05-31', '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조'),
     f('사업장 주소 (연금기준)', pensionAddr, 'C', '국민연금 사업장 정보', '2026-05-31'),
@@ -263,7 +258,6 @@ function generateReport(rawName) {
     f('기능성 보고품목 수 (5년내)', funcCount || null, funcCount ? 'A' : 'D', '식약처 보고품목 API', today, funcCount ? null : '보고 이력 없음 — 기능성 미취급 또는 공백'),
     f('신고 제형 분포', funcCount ? shuffle(G_FORMS).slice(0, ri(1, 5)).join(', ') : null, 'C', '식약처 보고품목 API', today, 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
     f('CGMP 적합업소', hasGmp ? '적합 (식약처 GMP 등재)' : null, hasGmp ? 'A' : 'D', '식약처 GMP API', hasGmp ? today : null, hasGmp ? 'CGMP 적합업소 — ISO/할랄/비건은 공개 API 없어 방문 시 인증서 확인' : 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)'),
-    f('PLT 렌탈 거래 (예측)', `예측: ${pltLikely}`, 'C', '휴리스틱 추정 (공개 API 없음)', today, 'KPP/아주렌탈 고객사 비공개 → 규모·수출 기반 추정. 방문 시 파렛트 임대라벨·계약서로 확정'),
   ];
 
   const hasFin = chance(0.7);
@@ -374,7 +368,6 @@ function mapMfdsReport(name, data) {
     f('기능성 보고품목 수 (전체)', list.length || null, exists ? 'A' : 'D', '식약처 보고품목 API', today),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', today, 'CAPA 직접 데이터 아님 — 실제 가동라인은 실사 확인'),
     fc('품질인증', certList([false, false, false, false, false]), 'A', '식약처 GMP·인증기관', null, 'GMP/ISO/할랄/비건 인증 API 연동 필요'),
-    fc('PLT 거래여부', [{ label: 'KPP', ok: false }, { label: '아주렌탈', ok: false }], 'B', '렌탈 거래처 대사', null, '렌탈 거래처 API 연동 필요'),
   ];
   const finance = ['매출액', '영업이익', '총자산', '총부채', '자본금'].map((k) =>
     f(k, null, 'D', '금융위 재무정보 API', null, '식약처 API 범위 밖 — 금융위 재무 API 연동 필요'));
@@ -511,20 +504,19 @@ function assembleLiveReport(name, corp, res) {
   const kkTravel = R.kakao && R.kakao.ok ? R.kakao.data : null;
   const kkNavi = kkTravel && kkTravel.method === 'navi';
 
-  // PLT(파렛트 렌탈) 거래여부 — 공개 API 없음 → 규모·제조등록 기반 휴리스틱 예측
-  const empN = Number(String(empVal || '').replace(/\D/g, '')) || 0;
-  const pltScore = (mk ? 1 : 0) + (empN >= 80 ? 2 : empN >= 30 ? 1 : 0);
-  const pltLikely = pltScore >= 3 ? '가능성 높음' : pltScore >= 2 ? '보통' : '낮음/미상';
-  const pltReason = [mk ? '자사제조' : null, empN ? `재직 ${empN}명` : null].filter(Boolean).join('·') || '판단근거 부족';
-
-  // 네이버 뉴스 (최근 기사)
+  // 네이버 뉴스 (최근 기사) — 제목/본문에 업체명이 실제 포함된 관련 기사만 채택
   const newsRaw = R.naverNews && R.naverNews.ok ? R.naverNews.data : null;
   const newsItems = newsRaw && newsRaw.items ? newsRaw.items : [];
-  const news = newsItems.length ? newsItems : null;
+  const newsKey = stripCorp(name).replace(/\s/g, '');
+  const relevantNews = newsKey.length >= 2 ? newsItems.filter((n) => {
+    const t = (String(n.title || '') + ' ' + String(n.description || '')).replace(/<\/?b>/g, '').replace(/\s/g, '');
+    return t.includes(newsKey);
+  }) : [];
+  const news = relevantNews.length ? relevantNews.slice(0, 5) : null;
 
   const capacity = [
-    f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
-    f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? today : null, fctEmpl ? '공장등록부 기준 종업원 — 국민연금 재직자수와 교차확인' : why('factory', '공장등록 없음')),
+    f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
+    f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? today : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     f('방문 이동거리',
       kkTravel ? travelText(kkTravel) : travelText(estimateTravel(fctAddr || corp?.addr || npsAddr)),
@@ -537,7 +529,6 @@ function assembleLiveReport(name, corp, res) {
     f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
     f('CGMP 적합업소', hasCgmp ? '적합 (식약처 GMP 등재)' : null, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 — ISO/할랄/비건은 공개 API 없어 방문 시 인증서 확인' : why('gmp', 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)')),
-    f('PLT 렌탈 거래 (예측)', `예측: ${pltLikely}`, 'C', '휴리스틱 추정 (공개 API 없음)', today, `${pltReason} · KPP/아주렌탈은 고객사 비공개 → 방문 시 파렛트 임대라벨·계약서로 확정`),
   ];
 
   // 재무 — 연도 중복 제거(같은 해 복수 제출 대비) 후 최신 3개년
@@ -594,7 +585,9 @@ function assembleLiveReport(name, corp, res) {
     (R.gmp && R.gmp.ok)
       ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: true, warn: !hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `미해당 — 적합업체 ${gmpList.length}곳 중 미등재(CGMP 미인증)` }
       : stat('gmp', 'gmp', '식약처 GMP (CGMP)', null, 'GMP 목록 조회 실패'),
-    stat('news', 'naverNews', '네이버 뉴스검색', news ? `${news.length}건 관련기사` : null, '기사 없음 또는 프록시 미설정'),
+    (R.naverNews && R.naverNews.ok)
+      ? { key: 'news', name: '네이버 뉴스검색', ok: !!news, warn: !news, detail: news ? `${news.length}건 관련기사` : `업체명 포함 기사 없음 (검색결과 ${newsItems.length}건 중)` }
+      : stat('news', 'naverNews', '네이버 뉴스검색', null, '기사 없음 또는 프록시 미설정'),
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
   ].filter(Boolean);
 
