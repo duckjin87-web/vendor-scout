@@ -212,9 +212,23 @@ async function npsRaw(service, params) {
   return parseNpsBody(await res.text());
 }
 
-// 국민연금 2단계: 사업장 검색(상호) → 첫 건 seq로 상세조회(가입자수는 상세에만 있음)
-async function npsLookup(nm) {
-  const items = await npsRaw('npsSearch', { wkpl_nm: nm });
+// 국민연금 2단계: 사업장 검색 → 첫 건 seq로 상세조회(가입자수는 상세에만 있음)
+// getBassInfoSearch는 상호명(한글) 단독 검색 시 백엔드 500이 잦다 →
+// 사업자등록번호(숫자) 우선, 실패 시 상호명 순으로 시도.
+async function npsLookup(nm, bzno) {
+  const digits = bzno ? String(bzno).replace(/\D/g, '') : '';
+  const attempts = [];
+  if (digits.length >= 10) attempts.push({ bzowr_rgst_no: digits });        // 사업자번호 10자리
+  if (digits.length >= 6) attempts.push({ bzowr_rgst_no: digits.slice(0, 6) }); // 앞 6자리(마스킹 형식)
+  attempts.push({ wkpl_nm: nm });                                            // 상호명(폴백)
+
+  let items = null, lastErr = null;
+  for (const params of attempts) {
+    try { const r = await npsRaw('npsSearch', params); items = r; if (r.length) break; }
+    catch (e) { lastErr = e; }
+  }
+  if (items === null) throw lastErr || new Error('국민연금 조회 실패');
+
   const hit = items[0];
   let detail = null;
   if (hit && hit.seq != null && hit.seq !== '') {
@@ -237,7 +251,7 @@ async function finishLive(name, corp) {
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
     rpt: proxyGet('rpt', { name: nm }),
-    nps: npsLookup(nm),
+    nps: npsLookup(nm, corp.bzno),
     maker: proxyGet('maker', { name: nm }),
     customs: proxyGet('customs', { hs: '33', from: ym(custStart), to: ym(custEnd) }),
     gmp: proxyGet('gmp', { rows: '500' }),
