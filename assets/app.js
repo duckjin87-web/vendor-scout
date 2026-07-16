@@ -164,12 +164,14 @@ async function proxyOnlyGet(service, params) {
   return res.json();
 }
 
-// 카카오 길찾기 — 한국콜마(기준점)에서 방문지까지 실측 도로거리·소요시간
-// 실패 시 구체적 사유로 throw → 상태 패널에 원인 표시(키 미설정/좌표변환/내비 미승인 구분)
+// 카카오 이동거리 — 한국콜마(기준점)→방문지.
+//  1순위: 카카오모빌리티 길찾기(실측). 이용신청 안 돼 있으면 실패 → 2순위.
+//  2순위: 카카오맵 Local API로 양 지점 정확 좌표 → 하버사인×도로계수로 추정(모빌리티 불필요).
+// 좌표 변환(주소검색)까지 실패하면 throw → 상태 패널에 사유 표시(키·재배포 확인).
 const KOLMAR_ADDR = '세종특별자치시 전의면 산단길 22-17'; // 한국콜마 기준점
 let _kolmarCoord = null; // 세션 내 캐시(기준점 좌표는 고정)
 async function kakaoGeocode(addr) {
-  const data = await proxyOnlyGet('kakaoGeocode', { query: addr }); // 실패 시 proxyErrMsg 전파
+  const data = await proxyOnlyGet('kakaoGeocode', { query: addr }); // 실패 시 proxyErrMsg 전파(401 등)
   const doc = data && data.documents && data.documents[0];
   if (!doc) return null;
   const lng = Number(doc.x), lat = Number(doc.y);
@@ -178,20 +180,28 @@ async function kakaoGeocode(addr) {
 async function kakaoTravel(destAddr) {
   if (!getProxy()) throw new Error('프록시 미설정');
   if (!destAddr) throw new Error('방문 주소 없음');
-  if (!_kolmarCoord) _kolmarCoord = await kakaoGeocode(KOLMAR_ADDR);
+  if (!_kolmarCoord) _kolmarCoord = await kakaoGeocode(KOLMAR_ADDR); // 실패(401 등) 시 여기서 throw
   if (!_kolmarCoord) throw new Error('기준점(한국콜마) 좌표 변환 실패');
   const dest = await kakaoGeocode(destAddr);
   if (!dest) throw new Error(`방문지 좌표 변환 실패: ${destAddr}`);
-  const dir = await proxyOnlyGet('kakaoDirections', {
-    origin: `${_kolmarCoord.lng},${_kolmarCoord.lat}`,
-    destination: `${dest.lng},${dest.lat}`,
-  });
-  const route = dir && dir.routes && dir.routes[0];
-  if (!route) throw new Error('길찾기 응답에 경로 없음');
-  if (route.result_code != null && route.result_code !== 0) throw new Error(`길찾기 오류: ${route.result_msg || route.result_code}`);
-  const sum = route.summary;
-  if (!sum) throw new Error('길찾기 요약 없음');
-  return { km: Math.round(sum.distance / 1000), min: Math.round(sum.duration / 60) };
+
+  // 1순위: 모빌리티 실측
+  try {
+    const dir = await proxyOnlyGet('kakaoDirections', {
+      origin: `${_kolmarCoord.lng},${_kolmarCoord.lat}`,
+      destination: `${dest.lng},${dest.lat}`,
+    });
+    const route = dir && dir.routes && dir.routes[0];
+    if (route && (route.result_code == null || route.result_code === 0) && route.summary) {
+      return { km: Math.round(route.summary.distance / 1000), min: Math.round(route.summary.duration / 60), method: 'navi' };
+    }
+  } catch { /* 모빌리티 미이용 → 좌표 기반 추정으로 폴백 */ }
+
+  // 2순위: 정확 좌표 하버사인 × 도로우회계수(1.3), 평균 62km/h
+  const straight = haversineKm(_kolmarCoord.lat, _kolmarCoord.lng, dest.lat, dest.lng);
+  if (straight < 1.5) return { km: 0, min: 0, same: true, method: 'coord' };
+  const km = Math.round(straight * 1.3);
+  return { km, min: Math.round((km / 62) * 60), method: 'coord' };
 }
 
 // 응답에서 아이템 배열 추출 (공통 중첩 경로들 시도)
