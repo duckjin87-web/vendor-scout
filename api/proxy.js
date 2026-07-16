@@ -12,7 +12,6 @@ const DATAGO = {
   npsSearch: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2/getBassInfoSearchV2',
   npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2/getDetailInfoSearchV2',
   maker:     'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01',
-  customs:   'https://apis.data.go.kr/1220000/nitemtrade/getNitemtradeList',
   gmp:       'https://apis.data.go.kr/1471000/CsmtcsGmpStbltCompInfo/getCsmtcsGmpStbltCompInfo',
 };
 
@@ -70,15 +69,42 @@ function handleDataGo(url, service, env) {
   return relay(`${DATAGO[service]}?${q}`, `data.go(${service})`);
 }
 
-function handleNaverNews(url, env) {
+// 네이버 검색(news/webkr/local) — kind로 엔드포인트 선택
+function handleNaver(url, env, kind) {
   if (!env.NAVER_CLIENT_ID || !env.NAVER_CLIENT_SECRET) return jsonRes({ error: 'NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정' }, 500);
   const q = new URLSearchParams();
   for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
-  if (!q.has('display')) q.set('display', '5');
-  if (!q.has('sort'))    q.set('sort', 'date');
-  return relay(`https://openapi.naver.com/v1/search/news.json?${q}`, '네이버 뉴스', {
+  if (kind === 'news' && !q.has('sort')) q.set('sort', 'date');
+  if (!q.has('display')) q.set('display', kind === 'news' ? '5' : '10');
+  const path = kind === 'webkr' ? 'webkr' : kind === 'local' ? 'local' : 'news';
+  return relay(`https://openapi.naver.com/v1/search/${path}.json?${q}`, `네이버 ${kind}`, {
     headers: { 'X-Naver-Client-Id': env.NAVER_CLIENT_ID, 'X-Naver-Client-Secret': env.NAVER_CLIENT_SECRET },
   });
+}
+
+// 임의 페이지 텍스트 취득 — 홈페이지 대조용(대표자·주소 매칭). http(s)만, 200KB 상한.
+async function handleFetchPage(url) {
+  const target = url.searchParams.get('url');
+  if (!target || !/^https?:\/\//i.test(target)) return jsonRes({ error: 'url 파라미터(http/https) 필요' }, 400);
+  // SSRF 최소 방어 — 내부/사설 호스트 차단
+  let host = '';
+  try { host = new URL(target).hostname; } catch { return jsonRes({ error: '잘못된 url' }, 400); }
+  if (/^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|::1$)/i.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
+    return jsonRes({ error: '내부 호스트 접근 불가' }, 400);
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  let up;
+  try {
+    up = await fetch(target, { redirect: 'follow', signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (vendor-scout)' } });
+  } catch (e) {
+    clearTimeout(timer);
+    return jsonRes({ error: '페이지 호출 실패', detail: String(e && e.message || e) }, 502);
+  }
+  clearTimeout(timer);
+  const buf = await up.arrayBuffer().catch(() => null);
+  const text = buf ? new TextDecoder('utf-8', { fatal: false }).decode(buf).slice(0, 200000) : '';
+  return jsonRes({ status: up.status, url: up.url, text });
 }
 
 // 카카오 — 주소검색(좌표) / 길찾기(실측 거리·시간). 둘 다 REST 키 헤더 인증.
@@ -103,7 +129,10 @@ export default async function handler(req) {
     const service = url.searchParams.get('service');
     const env = process.env;
 
-    if (service === 'naverNews')       return handleNaverNews(url, env);
+    if (service === 'naverNews')       return handleNaver(url, env, 'news');
+    if (service === 'naverWeb')        return handleNaver(url, env, 'webkr');
+    if (service === 'naverLocal')      return handleNaver(url, env, 'local');
+    if (service === 'fetchPage')       return handleFetchPage(url);
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
     if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
     if (DATAGO[service])               return handleDataGo(url, service, env);

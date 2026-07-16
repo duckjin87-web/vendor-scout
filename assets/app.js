@@ -51,7 +51,6 @@ function srcKeyOf(sourceStr) {
   if (/기능성|보고품목/.test(s)) return 'rpt';
   if (/국민연금/.test(s)) return 'nps';
   if (/제조업|화장품제조/.test(s)) return 'maker';
-  if (/관세청|수출입/.test(s)) return 'customs';
   if (/GMP/.test(s)) return 'gmp';
   if (/뉴스/.test(s)) return 'news';
   return null; // 기업기본정보 등 핵심/비-API 항목은 제외 불가
@@ -75,7 +74,6 @@ const PARAM_MAP = {
   npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo' }, // 국민연금 V2 — camelCase
   npsDetail: { seq: 'seq', ym: 'dataCrtYm' },
   maker:     { name: 'bssh_nm' },
-  customs:   { hs: 'hsSgn', from: 'strtYymm', to: 'endYymm', rows: 'numOfRows' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
 };
 
@@ -153,7 +151,7 @@ async function proxyGet(service, logical) {
   return parseDataGo(res);
 }
 
-// 네이버 뉴스 / 카카오 — 프록시 전용 (CORS 차단 → 브라우저 직접 호출 불가, 응답이 data.go 형식 아님)
+// 네이버 뉴스/웹 / 카카오 / 페이지 대조 — 프록시 전용 (CORS 차단, 응답이 data.go 형식 아님)
 async function proxyOnlyGet(service, params) {
   const proxy = getProxy();
   if (!proxy) throw new Error('프록시 미설정 — 이 소스는 프록시 경유 전용');
@@ -162,6 +160,52 @@ async function proxyOnlyGet(service, params) {
   catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
   if (!res.ok) throw new Error(await proxyErrMsg(res));
   return res.json();
+}
+
+// ── 홈페이지 추적 ──
+// 네이버 웹문서 검색으로 후보 사이트 추출 → 각 페이지에서 상호·대표자·사업자번호·주소 대조.
+// 2개 이상 매칭되면 '확정 제안'. 포털·블로그·쇼핑·구인 도메인은 후보에서 제외.
+const HP_SKIP = /(^|\.)(naver|daum|kakao|tistory|blog|cafe|youtube|instagram|facebook|linkedin|jobkorea|saramin|wanted|incruit|catch|nicebizinfo|wikipedia|namu\.wiki|google|11st|coupang|gmarket|auction|ssg|smartstore|blogspot|medium|threads|x)\./i;
+function hpAddrCores(addr) {
+  return String(addr || '').replace(/\s/g, '').match(/[가-힣]{2,}(읍|면|동|리|가|로|길)/g) || [];
+}
+async function findHomepage(nm, corp) {
+  if (!getProxy()) return null;
+  let web;
+  try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 화장품`, display: '20' }); }
+  catch (e) { return { proposed: null, candidates: [], err: e.message }; }
+  const items = (web && web.items) || [];
+  const seen = new Set(); const cands = [];
+  for (const it of items) {
+    let host;
+    try { host = new URL(it.link).hostname.replace(/^www\./, ''); } catch { continue; }
+    if (HP_SKIP.test(host) || seen.has(host)) continue;
+    seen.add(host);
+    cands.push({ url: `https://${host}`, host, title: String(it.title || '').replace(/<\/?b>/g, '') });
+    if (cands.length >= 4) break;
+  }
+  if (!cands.length) return { proposed: null, candidates: [] };
+
+  const nameCore = stripCorp(nm).replace(/\s/g, '');
+  const rep = corp && corp.rep ? String(corp.rep).replace(/\s/g, '') : '';
+  const bz = corp && corp.bzno ? String(corp.bzno).replace(/\D/g, '') : '';
+  const bzFmt = bz.length === 10 ? `${bz.slice(0, 3)}-${bz.slice(3, 5)}-${bz.slice(5)}` : '';
+  const addrCores = hpAddrCores(corp && corp.addr);
+
+  const scored = await Promise.all(cands.map(async (c) => {
+    let page;
+    try { page = await proxyOnlyGet('fetchPage', { url: c.url }); } catch { return { ...c, matches: [], score: 0 }; }
+    const text = String((page && page.text) || '').replace(/\s/g, '');
+    const m = [];
+    if (nameCore && text.includes(nameCore)) m.push('상호');
+    if (rep && text.includes(rep)) m.push('대표자');
+    if (bz && (text.includes(bz) || (bzFmt && text.includes(bzFmt)))) m.push('사업자번호');
+    if (addrCores.length && addrCores.some((a) => text.includes(a))) m.push('주소');
+    return { ...c, matches: m, score: m.length };
+  }));
+  scored.sort((a, b) => b.score - a.score);
+  const proposed = scored[0] && scored[0].score >= 2 ? scored[0] : null; // 2개 이상 매칭 → 확정 제안
+  return { proposed, candidates: scored };
 }
 
 // 카카오 이동거리 — 한국콜마(기준점)→방문지.
@@ -263,17 +307,11 @@ async function npsLookup(nm, bzno) {
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
-  const now = new Date();
-  const ym = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  // 관세청: 조회기간 1년 이내 → 완료된 지난달까지 최근 3개월(누적행 왜곡 최소화)
-  const custEnd = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const custStart = new Date(now.getFullYear(), now.getMonth() - 3, 1);
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
     rpt: proxyGet('rpt', { name: nm }),
     nps: npsLookup(nm, corp.bzno),
     maker: proxyGet('maker', { name: nm }),
-    customs: proxyGet('customs', { hs: '33', from: ym(custStart), to: ym(custEnd), rows: '900' }),
     gmp: proxyGet('gmp', { rows: '500' }),
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
   };
@@ -512,23 +550,28 @@ function renderNews(news) {
   return b;
 }
 
-function renderTradeRef(tradeRef) {
-  if (!tradeRef) return null;
-  const fmtUsd = (v) => {
-    if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
-    if (v >= 1e6) return `$${Math.round(v / 1e6)}M`;
-    return `$${(v / 1e6).toFixed(1)}M`;
-  };
-  const b = el('div', 'traderef');
-  const chips = (tradeRef.topCountries || []).map((c, i) => `<span class="tr-chip${i === 0 ? ' top' : ''}">${esc(c)}</span>`).join('');
-  b.innerHTML =
-    `<h4>🌐 화장품 수출시장 <span>업종 참고 · 개별 업체 아님</span></h4>` +
-    `<div class="tr-kw">` +
-      `<span class="tr-k"><i>주요 수출국</i>${chips || '<span class="tr-chip">데이터 없음</span>'}</span>` +
-      `<span class="tr-k"><i>업종 수출규모 (${esc(tradeRef.period || '최근')})</i><b>${fmtUsd(tradeRef.totalExportUsd)}</b></span>` +
-    `</div>` +
-    `<div class="tr-note">※ 관세청 HS33 업종 전체 통계 — 이 업체 실적 아님. K-뷰티 주요 판로 참고용</div>`;
-  return b;
+// 홈페이지 추적 결과를 박스에 렌더 (검색중 → 결과 교체)
+function renderHomepageInto(box, hp) {
+  const chip = (m) => `<span class="hp-m">✓ ${esc(m)}</span>`;
+  if (!hp) { box.innerHTML = '<h4>🔎 홈페이지 추적</h4><div class="hp-none">검색 실패 또는 프록시 미설정</div>'; return; }
+  if (hp.err) { box.innerHTML = `<h4>🔎 홈페이지 추적</h4><div class="hp-none">검색 실패: ${esc(hp.err)}</div>`; return; }
+  const p = hp.proposed;
+  let html = `<h4>🔎 홈페이지 추적 <span>업체명+화장품 웹검색 → 페이지 대조</span></h4>`;
+  if (p) {
+    html += `<div class="hp-top">` +
+      `<span class="hp-badge">확정 제안</span>` +
+      `<a href="${esc(p.url)}" target="_blank" rel="noopener" class="hp-url">${esc(p.host)}</a>` +
+      `<div class="hp-ms">${p.matches.map(chip).join('')} <em>(${p.matches.length}개 일치)</em></div>` +
+      `</div>`;
+  } else {
+    html += `<div class="hp-none">2개 이상 일치하는 확정 사이트 없음 — 아래 후보 수동 확인</div>`;
+  }
+  const others = (hp.candidates || []).filter((c) => !p || c.host !== p.host);
+  if (others.length) {
+    html += `<div class="hp-cands"><i>후보</i>` + others.map((c) =>
+      `<a href="${esc(c.url)}" target="_blank" rel="noopener" class="hp-cand">${esc(c.host)}${c.matches.length ? ` <b>${c.matches.join('·')}</b>` : ''}</a>`).join('') + `</div>`;
+  }
+  box.innerHTML = html;
 }
 
 // 방문지 주소 선택 — 제조소(식약처) > 본점(금융위) > 사업장(연금) 순
@@ -632,8 +675,23 @@ function render(report) {
   blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic)));
   blocks.appendChild(block('생산역량 · 인원', '🏭', visible(report.capacity)));
   if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
-  if (!excl.has('customs')) { const trb = renderTradeRef(report.trade_ref); if (trb) blocks.appendChild(trb); }
   if (!excl.has('news')) { const newsB = renderNews(report.news); if (newsB) blocks.appendChild(newsB); }
+
+  // 🔎 홈페이지 추적 — 실데이터일 때만, 지연 로드(첫 렌더 이후 비동기). 결과는 report에 캐시.
+  if (m.live) {
+    const hpBox = el('div', 'hpbox');
+    blocks.appendChild(hpBox);
+    if (report._homepage !== undefined) {
+      renderHomepageInto(hpBox, report._homepage);
+    } else {
+      hpBox.innerHTML = '<h4>🔎 홈페이지 추적 <span>검색 중…</span></h4>';
+      const getV = (k) => { const f = report.basic.find((x) => x.key === k); return f && f.value; };
+      findHomepage(report.meta.vendor_name, { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호') })
+        .then((hp) => { report._homepage = hp || null; renderHomepageInto(hpBox, report._homepage); })
+        .catch(() => { report._homepage = null; renderHomepageInto(hpBox, null); });
+    }
+  }
+
   const diffBlock = renderDiff(report.diff_from_prev);
   if (diffBlock) blocks.appendChild(diffBlock);
   root.appendChild(blocks);
