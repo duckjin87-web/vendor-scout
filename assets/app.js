@@ -137,15 +137,43 @@ async function proxyGet(service, logical) {
   return parseDataGo(res);
 }
 
-// 네이버 뉴스 — 프록시 전용 (CORS 차단 → 브라우저 직접 호출 불가, 응답이 data.go 형식 아님)
+// 네이버 뉴스 / 카카오 — 프록시 전용 (CORS 차단 → 브라우저 직접 호출 불가, 응답이 data.go 형식 아님)
 async function proxyOnlyGet(service, params) {
   const proxy = getProxy();
-  if (!proxy) throw new Error('프록시 미설정 — 네이버 뉴스는 프록시 경유 전용');
+  if (!proxy) throw new Error('프록시 미설정 — 이 소스는 프록시 경유 전용');
   let res;
   try { res = await fetch(buildProxyUrl({ service, ...params }), { headers: { Accept: 'application/json' } }); }
   catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
   if (!res.ok) throw new Error(await proxyErrMsg(res));
   return res.json();
+}
+
+// 카카오 길찾기 — 한국콜마(기준점)에서 방문지까지 실측 도로거리·소요시간
+const KOLMAR_ADDR = '세종특별자치시 전의면 산단길 22-17'; // 한국콜마 기준점
+let _kolmarCoord = null; // 세션 내 캐시(기준점 좌표는 고정)
+async function kakaoGeocode(addr) {
+  const data = await proxyOnlyGet('kakaoGeocode', { query: addr });
+  const doc = data && data.documents && data.documents[0];
+  if (!doc) return null;
+  const lng = Number(doc.x), lat = Number(doc.y);
+  return (isFinite(lng) && isFinite(lat)) ? { lng, lat } : null;
+}
+// 반환: { km, min } 또는 null(키 미설정·주소 실패 시 → 하버사인 추정으로 폴백)
+async function kakaoTravel(destAddr) {
+  if (!getProxy() || !destAddr) return null;
+  try {
+    if (!_kolmarCoord) _kolmarCoord = await kakaoGeocode(KOLMAR_ADDR);
+    const dest = await kakaoGeocode(destAddr);
+    if (!_kolmarCoord || !dest) return null;
+    const dir = await proxyOnlyGet('kakaoDirections', {
+      origin: `${_kolmarCoord.lng},${_kolmarCoord.lat}`,
+      destination: `${dest.lng},${dest.lat}`,
+    });
+    const route = dir && dir.routes && dir.routes[0];
+    const sum = route && route.summary;
+    if (!sum || (route.result_code != null && route.result_code !== 0)) return null;
+    return { km: Math.round(sum.distance / 1000), min: Math.round(sum.duration / 60) };
+  } catch { return null; }
 }
 
 // 응답에서 아이템 배열 추출 (공통 중첩 경로들 시도)
@@ -229,6 +257,16 @@ async function finishLive(name, corp) {
       ? { ok: true, data: settled[i].value }
       : { ok: false, err: String(settled[i].reason && settled[i].reason.message || settled[i].reason) };
   });
+
+  // 카카오 실측 이동거리 — 제조소 주소 확보 후(가장 정확한 방문지) 길찾기
+  const mkList = res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
+  const mkAddr = mkList[0] ? (mkList[0].ADDR ?? mkList[0].addr ?? mkList[0].SITE_ADDR ?? null) : null;
+  const visitAddr = mkAddr || corp.addr || null;
+  const travel = await kakaoTravel(visitAddr);
+  res.kakao = travel
+    ? { ok: true, data: travel }
+    : { ok: false, err: getProxy() ? '카카오 길찾기 실패(키·좌표 확인) — 추정치 대체' : '프록시 미설정' };
+
   return window.assembleLiveReport(corp.corpNm || name, corp, res);
 }
 

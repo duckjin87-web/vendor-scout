@@ -528,6 +528,9 @@ function assembleLiveReport(name, corp, res) {
   const hasCgmp = !!gmpHit;
   const gmpCerts = certList([hasCgmp, false, false, false, false]);
 
+  // 카카오 실측 이동거리 {km, min} — 없으면 하버사인 추정으로 폴백
+  const kkTravel = R.kakao && R.kakao.ok ? R.kakao.data : null;
+
   // 네이버 뉴스 (최근 기사)
   const newsRaw = R.naverNews && R.naverNews.ok ? R.naverNews.data : null;
   const newsItems = newsRaw && newsRaw.items ? newsRaw.items : [];
@@ -536,7 +539,12 @@ function assembleLiveReport(name, corp, res) {
   const capacity = [
     f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '4대보험 가입 재직자 — 파견·일용·프리랜서 미포함. 방문 시 실인원 대조' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
-    f('방문 이동거리', travelText(estimateTravel(mkAddr || corp?.addr || npsAddr)), 'C', '좌표 추정 (하버사인)', today, '도로사정·출발지에 따라 실제와 차이 가능 — 네이버지도 재확인'),
+    f('방문 이동거리',
+      kkTravel ? travelText(kkTravel) : travelText(estimateTravel(mkAddr || corp?.addr || npsAddr)),
+      kkTravel ? 'B' : 'C',
+      kkTravel ? '카카오내비 길찾기 (한국콜마 기준)' : '좌표 추정 (하버사인)',
+      today,
+      kkTravel ? '실제 도로 경로 기준 거리·예상 소요시간' : '직선거리 추정 — 도로사정 차이 가능. 카카오맵 버튼으로 재확인'),
     f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
     fc('품질인증 (CGMP)', gmpCerts, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 명단 확인 — 식약처 GMP 적합업체 현황 등재' : why('gmp', 'CGMP 적합업소 미등재 — ISO/할랄/비건은 인증기관별 개별 확인')),
@@ -592,7 +600,8 @@ function assembleLiveReport(name, corp, res) {
       ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `적합업체 ${gmpList.length}곳 중 미해당 (CGMP 미인증)` }
       : stat('gmp', 'gmp', '식약처 GMP (CGMP)', null, 'GMP 목록 조회 실패'),
     stat('news', 'naverNews', '네이버 뉴스검색', news ? `${news.length}건 관련기사` : null, '기사 없음 또는 프록시 미설정'),
-  ];
+    R.kakao ? { name: '카카오 길찾기 (이동거리)', ok: !!kkTravel, detail: kkTravel ? `실측 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
+  ].filter(Boolean);
 
   return {
     meta: {

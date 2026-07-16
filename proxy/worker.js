@@ -92,6 +92,23 @@ async function handleNaverNews(url, env) {
   });
 }
 
+async function handleKakao(url, env, kind) {
+  if (!env.KAKAO_REST_KEY) return json({ error: 'server missing KAKAO_REST_KEY secret' }, 500);
+  const q = new URLSearchParams();
+  for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
+  const base = kind === 'geocode'
+    ? 'https://dapi.kakao.com/v2/local/search/address.json'
+    : 'https://apis-navi.kakaomobility.com/v1/directions';
+  let upstream;
+  try {
+    upstream = await fetch(`${base}?${q}`, { headers: { Authorization: `KakaoAK ${env.KAKAO_REST_KEY}` }, cf: { cacheTtl: 600, cacheEverything: true } });
+  } catch (e) {
+    return json({ error: 'Kakao upstream failed', detail: String(e) }, 502);
+  }
+  const body = await upstream.text();
+  return new Response(body, { status: upstream.status, headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' } });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
@@ -101,6 +118,8 @@ export default {
     const service = url.searchParams.get('service');
 
     if (service === 'naverNews') return handleNaverNews(url, env);
+    if (service === 'kakaoGeocode') return handleKakao(url, env, 'geocode');
+    if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
     if (DATAGO_SERVICES[service]) return handleDataGo(url, service, env);
 
     return json({ error: 'unknown service' }, 400);

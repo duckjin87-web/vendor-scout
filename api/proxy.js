@@ -81,6 +81,19 @@ function handleNaverNews(url, env) {
   });
 }
 
+// 카카오 — 주소검색(좌표) / 길찾기(실측 거리·시간). 둘 다 REST 키 헤더 인증.
+function handleKakao(url, env, kind) {
+  if (!env.KAKAO_REST_KEY) return jsonRes({ error: 'KAKAO_REST_KEY 미설정' }, 500);
+  const q = new URLSearchParams();
+  for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
+  const base = kind === 'geocode'
+    ? 'https://dapi.kakao.com/v2/local/search/address.json'
+    : 'https://apis-navi.kakaomobility.com/v1/directions';
+  return relay(`${base}?${q}`, kind === 'geocode' ? '카카오 주소검색' : '카카오 길찾기', {
+    headers: { Authorization: `KakaoAK ${env.KAKAO_REST_KEY}` },
+  });
+}
+
 export default async function handler(req) {
   try {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
@@ -90,8 +103,10 @@ export default async function handler(req) {
     const service = url.searchParams.get('service');
     const env = process.env;
 
-    if (service === 'naverNews') return handleNaverNews(url, env);
-    if (DATAGO[service])         return handleDataGo(url, service, env);
+    if (service === 'naverNews')       return handleNaverNews(url, env);
+    if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
+    if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
+    if (DATAGO[service])               return handleDataGo(url, service, env);
 
     return jsonRes({ error: `unknown service: ${service}` }, 400);
   } catch (e) {
