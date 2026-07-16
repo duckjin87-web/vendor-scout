@@ -119,9 +119,10 @@ async function handleNtsStatus(url, env) {
   const target = `https://api.odcloud.kr/api/nts-businessman/v1/status?${q}`;
   const bodyBytes = new TextEncoder().encode(JSON.stringify({ b_no: [bno] }));
   let lastStatus = 0, lastBody = '';
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // 최대 2회, 각 7초 — Edge 함수 실행 한도(504) 초과 방지
+  for (let attempt = 0; attempt < 2; attempt++) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12000);
+    const timer = setTimeout(() => ctrl.abort(), 7000);
     let up;
     try {
       up = await fetch(target, {

@@ -35,6 +35,23 @@ function fc(key, checklist, grade, source, asOf, note) {
 const CERTS = ['CGMP', 'ISO 22716', 'ISO 14001', '할랄(HALAL)', '비건(Vegan)'];
 function certList(oks) { return CERTS.map((label, i) => ({ label, ok: !!oks[i] })); }
 
+// 재무 건전성 평가(최신연도) — 근거: 부채비율 200% 이하 양호(한국은행 기업경영분석 제조업 통상 기준),
+// 400% 초과 위험, 자본총계 ≤ 0 = 자본잠식(부실), 영업손실=주의. 참고지표이며 최종판단은 신용조회 권장.
+function assessFinance(hist) {
+  if (!hist || !hist.length) return null;
+  const L = hist[hist.length - 1];
+  const equity = (L.assets != null && L.debt != null) ? L.assets - L.debt : null; // 자본총계 ≈ 자산-부채(억)
+  const debtRatio = (equity && equity > 0) ? Math.round((L.debt / equity) * 100) : null;
+  const reasons = [];
+  let level = '양호';
+  if (equity != null && equity <= 0) { level = '위험'; reasons.push('자본잠식 (자본총계 ≤ 0)'); }
+  else if (debtRatio != null && debtRatio > 400) { level = '위험'; reasons.push(`부채비율 ${debtRatio}% (400% 초과)`); }
+  else if (debtRatio != null && debtRatio > 200) { level = '주의'; reasons.push(`부채비율 ${debtRatio}% (200% 초과)`); }
+  if (L.operatingProfit != null && L.operatingProfit < 0) { if (level === '양호') level = '주의'; reasons.push('영업손실(적자)'); }
+  if (!reasons.length) reasons.push(`부채비율 ${debtRatio != null ? debtRatio + '%' : '—'} · 영업흑자`);
+  return { level, debtRatio, equity, year: L.year, reasons };
+}
+
 // 목록 응답에서 상호가 포함된 레코드 찾기(필드명이 API마다 달라 전체 값 스캔). stripCorp는 런타임(app.js) 전역.
 function matchByName(name, list) {
   const key = stripCorp(name).replace(/\s/g, '');
@@ -324,7 +341,8 @@ function generateReport(rawName) {
       max_age_years: 5,
       generated: true,
     },
-    basic, capacity, finance, finance_history, crosscheck, risk_flags,
+    basic, capacity, finance, finance_history, finance_health: assessFinance(finance_history),
+    crosscheck, risk_flags,
     diff_from_prev: [],
     news: [
       { title: `${name}, ${pick(['신규 라인 가동', 'CGMP 인증 획득', '해외 수출 확대', '신규 거래처 확보', '품질관리 강화'])} 소식`, link: '#', pubDate: `2026-${pad(ri(1,6),2)}-${pad(ri(1,28),2)}`, description: `화장품 제조업체 ${name}이(가) 최근 ${pick(['생산 역량 강화', '수출 시장 개척', '품질 인증 확대', 'OEM 수주 확대'])}에 나서고 있다.` },
@@ -493,6 +511,9 @@ function assembleLiveReport(name, corp, res) {
   const pick = (o, ...ks) => { if (!o) return null; for (const k of ks) if (o[k] != null && o[k] !== '') return o[k]; return null; };
   const npsAddr = pick(nps, 'wkplRoadNmDetAddr', 'wkplRoadNmDtlAddr', 'ldongAddrMgpldongNm', 'ldongAddr')
     || pick(npsDet, 'wkplRoadNmDetAddr', 'wkplRoadNmDtlAddr', 'ldongAddrMgpldongNm') || null;
+  // 국민연금 자료 기준년월(dataCrtYm, YYYYMM) → 갱신일 표기
+  const npsYmRaw = pick(npsDet, 'dataCrtYm') || pick(nps, 'dataCrtYm');
+  const npsYm = npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1.$2') : null;
 
   // 식약처 GMP 적합업소 (CGMP 등록여부) — 적합업체 전체목록에서 상호로 필터
   // 업체명 필드 키가 API마다 달라(BSSH_NM/CMPNY_NM/…) 모든 필드값을 훑어 상호 포함 여부로 매칭
@@ -515,8 +536,8 @@ function assembleLiveReport(name, corp, res) {
   const news = relevantNews.length ? relevantNews.slice(0, 5) : null;
 
   const capacity = [
-    f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? today : null, empVal != null ? '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
-    f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? today : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
+    f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명${npsYm ? ` (${npsYm} 기준)` : ''}` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null, empVal != null ? '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
+    f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     f('방문 이동거리',
       kkTravel ? travelText(kkTravel) : travelText(estimateTravel(fctAddr || corp?.addr || npsAddr)),
@@ -601,14 +622,23 @@ function assembleLiveReport(name, corp, res) {
   if (corp?.addr && npsAddr && norm(corp.addr) !== norm(npsAddr)) {
     risk_flags.push({ type: '주소 상이', detail: `본점(등기) ${corp.addr} ↔ 사업장(연금) ${npsAddr} — 등기 본점과 실제 근무 사업장이 다름. 방문 전 실제 생산현장 주소 확인 필요` });
   }
+  // 재무 건전성 — 위험 등급이면 리스크로 승격
+  const finance_health = assessFinance(finance_history);
+  if (finance_health && finance_health.level === '위험') {
+    risk_flags.push({ type: '재무 위험', detail: `${finance_health.year}년 재무: ${finance_health.reasons.join(' · ')} — 거래 전 신용조회·선급금·담보 검토 권장` });
+  }
 
   return {
     meta: {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
       version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
       max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
+      // 길찾기(카카오·티맵) 연동용 — 기준점(한국콜마)→방문지
+      ref_point: { name: REF_POINT.name, addr: REF_POINT.addr, lat: REF_POINT.lat, lng: REF_POINT.lng },
+      visit_addr: (kkTravel && kkTravel.destAddr) || fctAddr || corp?.addr || npsAddr || null,
+      visit_coord: (kkTravel && kkTravel.dest && isFinite(kkTravel.dest.lat) && isFinite(kkTravel.dest.lng)) ? { lat: kkTravel.dest.lat, lng: kkTravel.dest.lng } : null,
     },
-    basic, capacity, finance, finance_history, crosscheck, risk_flags, diff_from_prev: [],
+    basic, capacity, finance, finance_history, finance_health, crosscheck, risk_flags, diff_from_prev: [],
     news, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
   };
 }

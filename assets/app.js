@@ -246,15 +246,15 @@ async function kakaoTravel(destAddr) {
     });
     const route = dir && dir.routes && dir.routes[0];
     if (route && (route.result_code == null || route.result_code === 0) && route.summary) {
-      return { km: Math.round(route.summary.distance / 1000), min: Math.round(route.summary.duration / 60), method: 'navi' };
+      return { km: Math.round(route.summary.distance / 1000), min: Math.round(route.summary.duration / 60), method: 'navi', dest, destAddr };
     }
   } catch { /* 모빌리티 미이용 → 좌표 기반 추정으로 폴백 */ }
 
   // 2순위: 정확 좌표 하버사인 × 도로우회계수(1.3), 평균 62km/h
   const straight = haversineKm(_kolmarCoord.lat, _kolmarCoord.lng, dest.lat, dest.lng);
-  if (straight < 1.5) return { km: 0, min: 0, same: true, method: 'coord' };
+  if (straight < 1.5) return { km: 0, min: 0, same: true, method: 'coord', dest, destAddr };
   const km = Math.round(straight * 1.3);
-  return { km, min: Math.round((km / 62) * 60), method: 'coord' };
+  return { km, min: Math.round((km / 62) * 60), method: 'coord', dest, destAddr };
 }
 
 // 응답에서 아이템 배열 추출 (공통 중첩 경로들 시도)
@@ -503,6 +503,18 @@ function financeBlock(report) {
   const chartN = hist.length ? '그래프 6지표 · 표 자본금' : `${fields.length}개 필드`;
   b.appendChild(el('h3', null, `<span class="ic">💰</span>재무 (금융위)<span class="cnt">${chartN}</span>`));
 
+  // 재무 건전성 평가 배너 (양호/주의/위험)
+  const fh = report.finance_health;
+  if (fh) {
+    const lv = fh.level === '위험' ? 'bad' : fh.level === '주의' ? 'mid' : 'good';
+    const fb = el('div', 'finhealth ' + lv);
+    fb.innerHTML =
+      `<span class="fh-badge">${esc(fh.level)}</span>` +
+      `<span class="fh-txt">${esc(fh.year)}년 · ${esc(fh.reasons.join(' · '))}</span>` +
+      `<span class="fh-note" title="근거: 부채비율 200% 이하 양호(한국은행 기업경영분석 통상 기준)·400% 초과 위험, 자본잠식(자본총계≤0) 부실, 영업손실 주의. 참고지표이며 최종판단은 신용조회 권장">ⓘ 기준</span>`;
+    b.appendChild(fb);
+  }
+
   if (hist.length) {
     const years = hist.map((d) => d.year);
     const w = el('div', 'finwrap');
@@ -614,11 +626,34 @@ function render(report) {
   actions.appendChild(el('span', 'act-hint', '방문 전 리포트로 저장 →'));
   // 🗺 카카오맵에서 공장 위치 보기 (제조소 주소 우선) — 별도 키 불필요, 새 탭에서 로드맵 표시
   const visitAddr = visitAddress(report);
+  // 길찾기 목적지 — 실데이터 리포트는 meta.visit_addr(공장 실주소) 우선, 없으면 필드값
+  const routeAddr = (m && m.visit_addr) || visitAddr;
+  const refAddr = (m && m.ref_point && m.ref_point.addr) || KOLMAR_ADDR;
+  const refName = (m && m.ref_point && m.ref_point.name) || '한국콜마';
+  const coord = m && m.visit_coord;
   if (visitAddr) {
     const mapBtn = el('button', 'act', '🗺 카카오맵에서 공장 위치');
     mapBtn.title = `카카오맵에서 「${visitAddr}」 위치를 로드맵으로 표시`;
     mapBtn.addEventListener('click', () => window.open(`https://map.kakao.com/?q=${encodeURIComponent(visitAddr)}`, '_blank', 'noopener'));
     actions.appendChild(mapBtn);
+  }
+  // 🧭 카카오맵 길찾기 (한국콜마 → 방문지, 웹 경로 안내) — 주소만 있으면 동작
+  if (routeAddr) {
+    const kkRoute = el('button', 'act', '🧭 카카오맵 길찾기');
+    kkRoute.title = `${refName} → 「${routeAddr}」 자동차 경로 (카카오맵)`;
+    kkRoute.addEventListener('click', () =>
+      window.open(`https://map.kakao.com/?sName=${encodeURIComponent(refAddr)}&eName=${encodeURIComponent(routeAddr)}`, '_blank', 'noopener'));
+    actions.appendChild(kkRoute);
+  }
+  // 🚗 티맵 길찾기 (앱 스킴) — 정확 좌표가 있을 때만. 모바일 티맵 앱에서 경로 안내.
+  if (coord && isFinite(coord.lat) && isFinite(coord.lng)) {
+    const rp = (m && m.ref_point) || {};
+    const tmapBtn = el('button', 'act', '🚗 티맵 길찾기');
+    tmapBtn.title = `${refName} → 「${routeAddr || '방문지'}」 자동차 경로 (티맵 앱)`;
+    const tmapUrl = `tmap://route?goalname=${encodeURIComponent(routeAddr || '방문지')}&goalx=${coord.lng}&goaly=${coord.lat}`
+      + (isFinite(rp.lat) && isFinite(rp.lng) ? `&startname=${encodeURIComponent(refName)}&startx=${rp.lng}&starty=${rp.lat}` : '');
+    tmapBtn.addEventListener('click', () => { window.location.href = tmapUrl; });
+    actions.appendChild(tmapBtn);
   }
   actions.appendChild(dlBtn);
   actions.appendChild(printBtn);

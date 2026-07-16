@@ -189,6 +189,17 @@ a:hover { text-decoration: underline; }
 .field.cgmp { background: var(--gA-bg); box-shadow: inset 3px 0 0 var(--gA); }
 
 /* 재무 3개년 추이 그래프 */
+/* 재무 건전성 배너 */
+.finhealth { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 16px 10px; padding: 8px 12px; border-radius: 10px; font-size: 12.5px; }
+.finhealth .fh-badge { font-weight: 800; font-size: 12px; padding: 2px 10px; border-radius: 999px; }
+.finhealth .fh-txt { color: var(--text); }
+.finhealth .fh-note { font-size: 11px; color: var(--faint); margin-left: auto; cursor: help; white-space: nowrap; }
+.finhealth.good { background: var(--gA-bg); }
+.finhealth.good .fh-badge { background: var(--gA); color: #fff; }
+.finhealth.mid { background: var(--gC-bg); }
+.finhealth.mid .fh-badge { background: var(--gC); color: #fff; }
+.finhealth.bad { background: var(--risk-bg); }
+.finhealth.bad .fh-badge { background: var(--risk); color: #fff; }
 .finwrap { padding: 12px 16px 6px; border-bottom: 1px solid var(--border); }
 .finhead { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .finhead .finnote { font-size: 10.5px; color: var(--accent); }
