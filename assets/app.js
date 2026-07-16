@@ -480,32 +480,6 @@ function renderRiskFlags(flags) {
   return box;
 }
 
-function renderCrosscheck(rows) {
-  const b = el('div', 'block full');
-  b.appendChild(el('h3', null, `<span class="ic">🔍</span>방문 크로스체크 시트<span class="cnt">${rows.length}건 검증 대기</span>`));
-  if (!rows.length) {
-    b.appendChild(el('div', 'empty', '크로스체크 대상 없음 — 모든 필드가 A/B 등급이며 상충 없음'));
-    return b;
-  }
-  const table = el('table', 'xtable');
-  table.innerHTML = `<thead><tr>
-    <th style="width:26%">검증 항목</th><th style="width:34%">조회값 (expected)</th>
-    <th style="width:22%">방문 확인</th><th style="width:18%">출처유형</th></tr></thead>`;
-  const tb = el('tbody');
-  rows.forEach((r) => {
-    const tr = el('tr');
-    const isGap = r.expected == null;
-    tr.innerHTML =
-      `<td>${esc(r.key)}</td>` +
-      `<td class="exp${isGap ? ' gap' : ''}">${isGap ? '데이터 없음 → 현장 확보 필요' : esc(r.expected)}</td>` +
-      `<td><span class="pending">☐ 미검증</span></td>` +
-      `<td><span class="srcpill">${esc(r.src_type)}</span></td>`;
-    tb.appendChild(tr);
-  });
-  table.appendChild(tb);
-  b.appendChild(table);
-  return b;
-}
 
 function renderNews(news) {
   if (!news || !news.length) return null;
@@ -649,7 +623,6 @@ function render(report) {
   if (!excl.has('news')) { const newsB = renderNews(report.news); if (newsB) blocks.appendChild(newsB); }
   const diffBlock = renderDiff(report.diff_from_prev);
   if (diffBlock) blocks.appendChild(diffBlock);
-  blocks.appendChild(renderCrosscheck(report.crosscheck.filter((r) => { const k = srcKeyOf(r.src_type); return !k || !excl.has(k); })));
   root.appendChild(blocks);
 
   // Legend

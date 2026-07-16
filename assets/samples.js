@@ -480,7 +480,6 @@ function assembleLiveReport(name, corp, res) {
     f('설립일', fmtDate(corp?.estbDt), 'A', '금융위 기업기본정보', fmtDate(corp?.estbDt)),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
     f('제조업 등록', mk ? `등록${mkNo ? ` (제${mkNo}호)` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null, mk ? null : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
-    f('제조소 소재지', mkAddr, mkAddr ? 'A' : 'D', '식약처 화장품제조업 API', mkAddr ? today : null, mkAddr ? '★ 방문지 기준 주소' : why('maker', '제조소 주소 미확보')),
   ];
 
   // 식약처 기능성 보고품목 (rpt)
