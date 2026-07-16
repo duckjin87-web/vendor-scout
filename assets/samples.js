@@ -516,11 +516,12 @@ function assembleLiveReport(name, corp, res) {
       const name = COUNTRY_KO[code] || it.statKor || it.cntryNm || code || '기타';
       byCountry[name] = (byCountry[name] || 0) + exp;
     });
+    // 국가 detail 합산이 실제 총액(월별 ALL행은 누적치일 수 있어 사용하지 않음)
     const topCountries = Object.entries(byCountry).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([n]) => n);
     trade_ref = {
-      totalExportUsd: allExp || totalExp, totalImportUsd: allImp || totalImp,
-      topCountries, itemCount: custList.length, hsCode: '33',
-      note: '관세청 품목별 국가별 수출입실적 — 화장품(HS33) 업종 전체 통계이며 개별 업체 수치가 아닙니다',
+      totalExportUsd: totalExp || allExp, totalImportUsd: totalImp || allImp,
+      topCountries, hsCode: '33', period: '최근 3개월',
+      note: 'HS33 화장품 업종 전체 통계 · 개별 업체 실적 아님',
     };
   }
 
@@ -565,7 +566,6 @@ function assembleLiveReport(name, corp, res) {
     f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
     f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
     f('CGMP 적합업소', hasCgmp ? '적합 (식약처 GMP 등재)' : null, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 — ISO/할랄/비건은 공개 API 없어 방문 시 인증서 확인' : why('gmp', 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)')),
-    f('수출 실적 (업종)', trade_ref ? `화장품(HS33) 수출 총 $${Math.round(trade_ref.totalExportUsd / 1e6)}M` : null, trade_ref ? 'C' : 'D', '관세청 수출입실적 API', trade_ref ? today : null, trade_ref ? '관세청 업종 통계 — 업체별 수출은 무역협회/자체자료 확인' : '관세청 API 연동 실패 또는 데이터 없음'),
     f('PLT 렌탈 거래 (예측)', `예측: ${pltLikely}`, 'C', '휴리스틱 추정 (공개 API 없음)', today, `${pltReason} · KPP/아주렌탈은 고객사 비공개 → 방문 시 파렛트 임대라벨·계약서로 확정`),
   ];
 
@@ -620,13 +620,20 @@ function assembleLiveReport(name, corp, res) {
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
   ].filter(Boolean);
 
+  // 리스크 플래그 — 본점(등기) 주소와 국민연금 사업장(실근무지) 주소 상이 → 실제 생산현장 확인 필요
+  const risk_flags = [];
+  const norm = (s) => String(s || '').replace(/\s|특별자치시|특별시|광역시|번길|번지|[()]/g, '').slice(0, 8);
+  if (corp?.addr && npsAddr && norm(corp.addr) !== norm(npsAddr)) {
+    risk_flags.push({ type: '주소 상이', detail: `본점(등기) ${corp.addr} ↔ 사업장(연금) ${npsAddr} — 등기 본점과 실제 근무 사업장이 다름. 방문 전 실제 생산현장 주소 확인 필요` });
+  }
+
   return {
     meta: {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
       version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
       max_age_years: 5, live: true, src_status,
     },
-    basic, capacity, finance, finance_history, crosscheck, risk_flags: [], diff_from_prev: [],
+    basic, capacity, finance, finance_history, crosscheck, risk_flags, diff_from_prev: [],
     trade_ref, news,
   };
 }

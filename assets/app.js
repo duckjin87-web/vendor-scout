@@ -265,9 +265,9 @@ async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
   const now = new Date();
   const ym = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  // 관세청: 조회기간은 1년 이내만 허용 → 완료된 지난달까지 최근 6개월
+  // 관세청: 조회기간 1년 이내 → 완료된 지난달까지 최근 3개월(누적행 왜곡 최소화)
   const custEnd = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const custStart = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+  const custStart = new Date(now.getFullYear(), now.getMonth() - 3, 1);
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
     rpt: proxyGet('rpt', { name: nm }),
@@ -517,14 +517,17 @@ function renderTradeRef(tradeRef) {
   const fmtUsd = (v) => {
     if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
     if (v >= 1e6) return `$${Math.round(v / 1e6)}M`;
-    return `$${v.toLocaleString()}`;
+    return `$${(v / 1e6).toFixed(1)}M`;
   };
   const b = el('div', 'traderef');
+  const chips = (tradeRef.topCountries || []).map((c, i) => `<span class="tr-chip${i === 0 ? ' top' : ''}">${esc(c)}</span>`).join('');
   b.innerHTML =
-    `<h4>🌐 화장품 업종 수출입 참고 <span>(관세청 HS33 · ${tradeRef.itemCount}건)</span></h4>` +
-    `<div class="tr-row"><b>수출 총액:</b> ${fmtUsd(tradeRef.totalExportUsd)}</div>` +
-    (tradeRef.topCountries.length ? `<div class="tr-row"><b>주요 수출국:</b> ${esc(tradeRef.topCountries.join(', '))}</div>` : '') +
-    `<div class="tr-note">※ ${esc(tradeRef.note)}</div>`;
+    `<h4>🌐 화장품 수출시장 <span>업종 참고 · 개별 업체 아님</span></h4>` +
+    `<div class="tr-kw">` +
+      `<span class="tr-k"><i>주요 수출국</i>${chips || '<span class="tr-chip">데이터 없음</span>'}</span>` +
+      `<span class="tr-k"><i>업종 수출규모 (${esc(tradeRef.period || '최근')})</i><b>${fmtUsd(tradeRef.totalExportUsd)}</b></span>` +
+    `</div>` +
+    `<div class="tr-note">※ 관세청 HS33 업종 전체 통계 — 이 업체 실적 아님. K-뷰티 주요 판로 참고용</div>`;
   return b;
 }
 
