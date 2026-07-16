@@ -83,6 +83,16 @@ a:hover { text-decoration: underline; }
 }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
 
+/* 최근 검색 */
+.recent { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.recent.hidden { display: none; }
+.recent .rc-lbl { font-size: 11.5px; font-weight: 700; color: var(--faint); letter-spacing: .02em; }
+.recent .rc-chip {
+  font-size: 13px; padding: 5px 13px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text-2, var(--muted)); transition: all .15s;
+}
+.recent .rc-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
 /* Report */
 .report { padding: 8px 0 60px; scroll-margin-top: 76px; }
 .hidden { display: none !important; }

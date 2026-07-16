@@ -727,9 +727,32 @@ function renderDiff(diff) {
   return b;
 }
 
+// ── 최근 검색 (검색창 아래 최대 3개) ──
+const RECENT_KEY = 'vs_recent';
+const getRecent = () => { try { return JSON.parse(_ls(RECENT_KEY) || '[]'); } catch { return []; } };
+function pushRecent(q) {
+  q = (q || '').trim();
+  if (!q) return;
+  const list = getRecent().filter((x) => x !== q);
+  list.unshift(q);
+  _sls(RECENT_KEY, JSON.stringify(list.slice(0, 3)));
+}
+function renderRecent() {
+  const box = $('#recent');
+  if (!box) return;
+  const list = getRecent();
+  if (!list.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.classList.remove('hidden');
+  box.innerHTML = '<span class="rc-lbl">최근 검색</span>' + list.map((q) =>
+    `<button type="button" class="rc-chip" data-q="${esc(q)}">${esc(q)}</button>`).join('');
+  box.querySelectorAll('.rc-chip').forEach((c) =>
+    c.addEventListener('click', () => { $('#q').value = c.dataset.q; lookup(c.dataset.q); }));
+}
+
 function lookup(name) {
   const key = (name || '').trim();
   if (!key) return;
+  pushRecent(key); renderRecent();
   const db = window.VENDOR_SAMPLES || {};
   let report = db[key];
   if (!report) {
@@ -812,10 +835,5 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     lookup($('#q').value);
   });
-  document.querySelectorAll('.chip').forEach((c) =>
-    c.addEventListener('click', () => {
-      $('#q').value = c.dataset.name;
-      lookup(c.dataset.name);
-    })
-  );
+  renderRecent(); // 최근 검색 칩 초기 표시
 });
