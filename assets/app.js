@@ -78,6 +78,7 @@ const PARAM_MAP = {
   maker:     { name: 'bssh_nm' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
   factory:   { name: 'cmpnyNm', rows: 'numOfRows' }, // 산단공 공장등록 — 회사명 검색
+  recall:    { rows: 'numOfRows' }, // 화장품 회수·판매중지 — 목록형, 프론트에서 업체명 필터
 };
 
 // data.go 공통 에러 메시지 → 사용자 조치 안내
@@ -323,6 +324,7 @@ async function finishLive(name, corp) {
     maker: proxyGet('maker', { name: nm }),
     gmp: proxyGet('gmp', { rows: '500' }),
     factory: proxyGet('factory', { name: nm, rows: '30' }),
+    recall: proxyGet('recall', { rows: '1000' }),
     nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
   };
@@ -551,6 +553,23 @@ function renderRiskFlags(flags) {
   return box;
 }
 
+// ⚠ 화장품 회수·판매중지 이력 — 있으면 최우선 리스크 패널로 표시
+function renderRecalls(recalls) {
+  if (!recalls || !recalls.length) return null;
+  const box = el('div', 'recallbox');
+  box.appendChild(el('h3', null, `⚠ 회수·판매중지 이력 ${recalls.length}건 — 식약처 (품질·안전 리스크)`));
+  const ul = el('ul');
+  recalls.slice(0, 8).forEach((r) => {
+    const li = el('li');
+    const head = [r.date ? `<b>${esc(r.date)}</b>` : '', r.product ? esc(r.product) : ''].filter(Boolean).join(' · ');
+    li.innerHTML = `<div class="rc-h">${head || '상세'}</div>` + (r.reason ? `<div class="rc-r">${esc(r.reason)}</div>` : '');
+    ul.appendChild(li);
+  });
+  box.appendChild(ul);
+  if (recalls.length > 8) box.appendChild(el('div', 'rc-more', `외 ${recalls.length - 8}건`));
+  return box;
+}
+
 // 🔀 교차검증 자동진단 — 인력/주소를 여러 출처로 대조한 결과 패널
 function renderCrossDiag(cd) {
   if (!cd || !cd.items || !cd.items.length) return null;
@@ -725,6 +744,9 @@ function render(report) {
 
   const rf = renderRiskFlags(report.risk_flags);
   if (rf) root.appendChild(rf);
+
+  const rc = renderRecalls(report.recalls);
+  if (rc) root.appendChild(rc);
 
   const cd = renderCrossDiag(report.cross_diag);
   if (cd) root.appendChild(cd);

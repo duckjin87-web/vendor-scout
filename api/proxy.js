@@ -14,6 +14,7 @@ const DATAGO = {
   maker:     'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01',
   gmp:       'https://apis.data.go.kr/1471000/CsmtcsGmpStbltCompInfo/getCsmtcsGmpStbltCompInfo',
   factory:   'https://apis.data.go.kr/B550624/fctryRegistInfo/getFctryPrdctnService_v2', // 산단공 공장등록 생산정보 v2 — cmpnyNm 검색
+  recall:    'https://apis.data.go.kr/1471000/CsmtcsRtrvlSleStpgeInfo/getCsmtcsRtrvlSleStpgeInfo', // 식약처 화장품 회수·판매중지 정보
 };
 
 const CORS = {
@@ -48,7 +49,7 @@ async function relay(target, label, init) {
 }
 
 // json 지정에 `type` 파라미터를 쓰는 서비스(식약처 1471000 · 산단공 공장등록 v2).
-const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp', 'factory']);
+const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp', 'factory', 'recall']);
 // 국민연금은 V2(camelCase) 엔드포인트 사용 — V1(getBassInfoSearch)은 폐기되어 500.
 // V2는 json 지정에 `dataType` 파라미터를 쓴다(resultType/type 아님).
 const NPS = new Set(['npsSearch', 'npsDetail']);

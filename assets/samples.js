@@ -577,6 +577,23 @@ function assembleLiveReport(name, corp, res) {
   }) : [];
   const news = relevantNews.length ? relevantNews.slice(0, 5) : null;
 
+  // 식약처 화장품 회수·판매중지 — 목록에서 업체명 일치 건. 응답 필드명 확정 전이라 값 스캔으로 견고하게 추출.
+  const recallListAll = R.recall && R.recall.ok ? listOf(R.recall.data, ['response.body.items.item', 'body.items', 'items']) : [];
+  const recallKey = stripCorp(name).replace(/\s/g, '');
+  const recallHits = recallKey.length >= 2 ? recallListAll.filter((rec) =>
+    Object.values(rec).some((v) => stripCorp(String(v == null ? '' : v)).replace(/\s/g, '').includes(recallKey))) : [];
+  const recalls = recallHits.map((rec) => {
+    const ent = Object.entries(rec).filter(([, v]) => v != null && String(v).trim() !== '');
+    const byKey = (re) => { const hit = ent.find(([k]) => re.test(k)); return hit ? String(hit[1]).trim() : null; };
+    const isDate = (s) => /(\d{4})[-.\/]?\d{2}[-.\/]?\d{2}|^\d{8}$/.test(String(s).trim());
+    const product = byKey(/PRDUCT|PRDT|PRDLST|PRODUCT|GOODS|품목|제품/i);
+    const reason = byKey(/RESN|RSN|REASON|사유|위반|불량/i) || byKey(/_CN$|CONT|내용|DVLP/i);
+    let date = null;
+    for (const [k, v] of ent) if (/DE$|_DE|DT$|YMD|DATE|DAY|ORDER|일자|일$/i.test(k) && isDate(v)) { date = String(v).trim(); break; }
+    if (!date) for (const [, v] of ent) if (isDate(v)) { date = String(v).trim(); break; }
+    return { product: product || null, reason: reason || null, date: fmtDate(date) || date || null };
+  }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+
   const capacity = [
     f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명${npsYm ? ` (${npsYm} 기준)` : ''}` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null, empVal != null ? '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
@@ -651,6 +668,10 @@ function assembleLiveReport(name, corp, res) {
     (R.naverNews && R.naverNews.ok)
       ? { key: 'news', name: '네이버 뉴스검색', ok: !!news, warn: !news, detail: news ? `${news.length}건 관련기사` : `업체명 포함 기사 없음 (검색결과 ${newsItems.length}건 중)` }
       : stat('news', 'naverNews', '네이버 뉴스검색', null, '기사 없음 또는 프록시 미설정'),
+    // 회수·판매중지: 조회 성공 시 이력 유무 표시(이력 있으면 warn=위험 신호), 실패 시 연결오류
+    (R.recall && R.recall.ok)
+      ? { key: 'recall', name: '식약처 회수·판매중지', ok: true, warn: recalls.length > 0, detail: recalls.length ? `⚠ 회수·판매중지 이력 ${recalls.length}건` : `이력 없음 (전체 ${recallListAll.length}건 조회)` }
+      : stat('recall', 'recall', '식약처 회수·판매중지', null, '회수정보 조회 실패'),
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
   ].filter(Boolean);
 
@@ -671,6 +692,12 @@ function assembleLiveReport(name, corp, res) {
   if (finance_health && finance_health.level === '위험') {
     risk_flags.push({ type: '재무 위험', detail: `${finance_health.year}년 재무: ${finance_health.reasons.join(' · ')} — 거래 전 신용조회·선급금·담보 검토 권장` });
   }
+  // 회수·판매중지 이력 — 최우선 품질/안전 리스크
+  if (recalls.length) {
+    const latest = recalls[0];
+    const bits = [latest.date, latest.product, latest.reason].filter(Boolean).join(' · ');
+    risk_flags.push({ type: '회수·판매중지', detail: `회수·판매중지 이력 ${recalls.length}건 (최근: ${bits || '상세 확인'}) — 품질·안전 사고 이력. 거래 전 반드시 원인·재발방지 확인` });
+  }
 
   return {
     meta: {
@@ -682,7 +709,7 @@ function assembleLiveReport(name, corp, res) {
       visit_addr: (kkTravel && kkTravel.destAddr) || fctAddr || corp?.addr || npsAddr || null,
       visit_coord: (kkTravel && kkTravel.dest && isFinite(kkTravel.dest.lat) && isFinite(kkTravel.dest.lng)) ? { lat: kkTravel.dest.lat, lng: kkTravel.dest.lng } : null,
     },
-    basic, capacity, finance, finance_history, finance_health, cross_diag, crosscheck, risk_flags, diff_from_prev: [],
+    basic, capacity, finance, finance_history, finance_health, cross_diag, recalls, crosscheck, risk_flags, diff_from_prev: [],
     news, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
   };
 }
