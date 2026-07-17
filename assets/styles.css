@@ -180,7 +180,7 @@ a:hover { text-decoration: underline; }
 .field .k .ktxt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .field .v { font-size: 13px; font-weight: 500; min-width: 0; word-break: break-word; }
 .field .v.gap { color: var(--faint); font-style: italic; font-weight: 400; }
-.field .src { font-size: 10px; color: var(--faint); text-align: right; line-height: 1.25; word-break: keep-all; }
+.field .src { font-size: 10.5px; color: var(--faint); text-align: right; line-height: 1.3; }
 .field .src .asof { color: var(--faint); }
 .field .stale { font-size: 10.5px; color: var(--gC); margin-left: 4px; white-space: nowrap; }
 .field .ninfo { font-size: 10.5px; color: var(--faint); cursor: help; }
@@ -367,7 +367,6 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .summary { grid-template-columns: 1fr; text-align: left; }
   .summary .stats { justify-content: flex-start; text-align: left; }
   .grade-badge { width: 60px; height: 60px; font-size: 30px; }
-  /* 모바일도 3열 유지 — 출처+날짜를 우측 3열에 두 줄로(값 옆), 행 높이 축소 */
-  .field { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) auto; gap: 8px; }
-  .field .src { grid-column: auto; text-align: right; max-width: 96px; }
+  .field { grid-template-columns: 1fr 1fr; }
+  .field .src { grid-column: 1 / -1; text-align: left; }
 }
