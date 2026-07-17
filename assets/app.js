@@ -324,7 +324,7 @@ async function finishLive(name, corp) {
     maker: proxyGet('maker', { name: nm }),
     gmp: proxyGet('gmp', { rows: '500' }),
     factory: proxyGet('factory', { name: nm, rows: '30' }),
-    recall: proxyGet('recall', { rows: '1000' }),
+    recall: proxyGet('recall', { rows: '500' }),
     nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
   };

@@ -464,7 +464,7 @@ function mapCorpCandidates(data) {
   const raw = (data && data.response && data.response.body && data.response.body.items && data.response.body.items.item)
     || (data && data.body && data.body.items) || [];
   const list = Array.isArray(raw) ? raw : [raw].filter(Boolean);
-  return list.map((c) => ({
+  const mapped = list.map((c) => ({
     corpNm: c.corpNm || c.enpNm || c.corp_nm || '',
     crno: c.crno || null,
     bzno: c.bzno || null,
@@ -473,6 +473,15 @@ function mapCorpCandidates(data) {
     estbDt: c.enpEstbDt || null,
     raw: c,
   })).filter((c) => c.corpNm || c.crno);
+  // 중복 제거 — 같은 법인(crno) 또는 같은 사업자(bzno)는 1건만.
+  // 둘 다 없으면 상호+대표+주소 조합으로 판별. (동일 업체가 대표/표기 차이로 수십 건 중복되는 현상 방지)
+  const seen = new Set();
+  return mapped.filter((c) => {
+    const sig = c.crno ? `c:${c.crno}` : c.bzno ? `b:${c.bzno}` : `k:${c.corpNm}|${c.rep || ''}|${c.addr || ''}`;
+    if (seen.has(sig)) return false;
+    seen.add(sig);
+    return true;
+  });
 }
 
 // 중첩 응답에서 배열 추출 (여러 경로 시도)
