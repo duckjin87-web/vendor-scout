@@ -52,6 +52,48 @@ function assessFinance(hist) {
   return { level, debtRatio, equity, year: L.year, reasons };
 }
 
+// 교차검증 자동진단 — 서로 다른 출처의 같은 항목(인력·주소)을 대조해 정합/불일치를 자동 판정.
+// status: match(일치) / warn(불일치·주의) / na(대조 불가). level: ok / mid / high / na.
+function crossVerify(ctx) {
+  const { empNps, empFct, addrHq, addrNps, addrFct } = ctx;
+  const items = [];
+  // 주소 정규화 — 행정구역 접미/괄호/공백 제거 후 앞부분만 비교(번지·상세주소 차이 무시)
+  const normA = (s) => String(s || '').replace(/특별자치시|특별자치도|특별시|광역시/g, '').replace(/\s|[()]/g, '');
+  const shortA = (s) => normA(s).replace(/(\d+번?[길로])?\d[-\d]*(번지|호|층)?.*$/, '').slice(0, 9);
+
+  // 1) 인력 정합성 — 국민연금 재직자수(월 갱신·현재) ↔ 공장등록 종업원수(등록시점 스냅샷)
+  const n1 = Number(empNps), n2 = Number(empFct);
+  if (isFinite(n1) && n1 > 0 && isFinite(n2) && n2 > 0) {
+    const ratio = Math.max(n1, n2) / Math.min(n1, n2);
+    if (ratio <= 1.5) items.push({ label: '인력 정합성', status: 'match', detail: `국민연금 ${n1}명 ≈ 공장등록 ${n2}명 — 신고 인력 정합` });
+    else {
+      const grow = n1 > n2;
+      items.push({ label: '인력 정합성', status: 'warn', severe: ratio >= 3,
+        detail: `국민연금 ${n1}명 ↔ 공장등록 ${n2}명 (약 ${ratio.toFixed(1)}배 차이) — ${grow
+          ? '현재(연금) 인력이 더 많음: 공장등록 이후 증원 추정'
+          : '공장등록 신고값이 더 큼: 인력 축소·라인 이전 또는 과다신고 가능'}. 실제 가동 인력 방문 확인 권장` });
+    }
+  } else {
+    const miss = [(!isFinite(n1) || !n1) ? '국민연금 재직자수' : null, (!isFinite(n2) || !n2) ? '공장등록 종업원수' : null].filter(Boolean);
+    items.push({ label: '인력 정합성', status: 'na', detail: `대조 불가 — ${miss.join(' · ')} 미확보` });
+  }
+
+  // 2) 주소 정합성 — 본점(등기) ↔ 연금 사업장(실근무) ↔ 공장 소재지(실생산)
+  const addrs = [['본점(등기)', addrHq], ['연금 사업장', addrNps], ['공장 소재지', addrFct]].filter(([, v]) => v);
+  if (addrs.length >= 2) {
+    const uniq = [...new Set(addrs.map(([, v]) => shortA(v)))];
+    if (uniq.length === 1) items.push({ label: '주소 정합성', status: 'match', detail: `${addrs.map(([l]) => l).join(' · ')} 동일 권역 — 등기·근무·생산지 일치` });
+    else items.push({ label: '주소 정합성', status: 'warn', detail: `${addrs.map(([l, v]) => `${l} ${v}`).join(' / ')} — 소재지 상이. 실제 생산현장(공장/연금 사업장) 기준으로 방문` });
+  } else {
+    items.push({ label: '주소 정합성', status: 'na', detail: '대조할 주소 2건 미만 (일부 출처 미확보)' });
+  }
+
+  const warnCount = items.filter((x) => x.status === 'warn').length;
+  const naAll = items.every((x) => x.status === 'na');
+  const level = naAll ? 'na' : (warnCount === 0 ? 'ok' : (warnCount >= 2 ? 'high' : 'mid'));
+  return { items, level, warnCount };
+}
+
 // 목록 응답에서 상호가 포함된 레코드 찾기(필드명이 API마다 달라 전체 값 스캔). stripCorp는 런타임(app.js) 전역.
 function matchByName(name, list) {
   const key = stripCorp(name).replace(/\s/g, '');
@@ -617,11 +659,13 @@ function assembleLiveReport(name, corp, res) {
   if (bStt && bSttCd && bSttCd !== '01') {
     risk_flags.push({ type: `${bStt}`, detail: `국세청 사업자상태가 '${bStt}' — 정상 영업 여부 확인 필요. 거래 전 반드시 재확인` });
   }
-  // 본점(등기)주소와 국민연금 사업장(실근무지) 주소 상이 → 실제 생산현장 확인 필요
-  const norm = (s) => String(s || '').replace(/\s|특별자치시|특별시|광역시|번길|번지|[()]/g, '').slice(0, 8);
-  if (corp?.addr && npsAddr && norm(corp.addr) !== norm(npsAddr)) {
-    risk_flags.push({ type: '주소 상이', detail: `본점(등기) ${corp.addr} ↔ 사업장(연금) ${npsAddr} — 등기 본점과 실제 근무 사업장이 다름. 방문 전 실제 생산현장 주소 확인 필요` });
-  }
+  // 교차검증 자동진단 — 인력(연금 vs 공장)·주소(본점 vs 연금 vs 공장) 대조
+  const cross_diag = crossVerify({ empNps: empVal, empFct: fctEmpl, addrHq: corp?.addr, addrNps: npsAddr, addrFct: fctAddr });
+  cross_diag.items.forEach((c) => {
+    if (c.status !== 'warn') return;
+    if (c.label === '주소 정합성') risk_flags.push({ type: '주소 상이', detail: `${c.detail}` });
+    if (c.label === '인력 정합성' && c.severe) risk_flags.push({ type: '인력 불일치', detail: `${c.detail}` });
+  });
   // 재무 건전성 — 위험 등급이면 리스크로 승격
   const finance_health = assessFinance(finance_history);
   if (finance_health && finance_health.level === '위험') {
@@ -638,7 +682,7 @@ function assembleLiveReport(name, corp, res) {
       visit_addr: (kkTravel && kkTravel.destAddr) || fctAddr || corp?.addr || npsAddr || null,
       visit_coord: (kkTravel && kkTravel.dest && isFinite(kkTravel.dest.lat) && isFinite(kkTravel.dest.lng)) ? { lat: kkTravel.dest.lat, lng: kkTravel.dest.lng } : null,
     },
-    basic, capacity, finance, finance_history, finance_health, crosscheck, risk_flags, diff_from_prev: [],
+    basic, capacity, finance, finance_history, finance_health, cross_diag, crosscheck, risk_flags, diff_from_prev: [],
     news, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
   };
 }

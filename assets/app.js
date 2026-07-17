@@ -551,6 +551,24 @@ function renderRiskFlags(flags) {
   return box;
 }
 
+// 🔀 교차검증 자동진단 — 인력/주소를 여러 출처로 대조한 결과 패널
+function renderCrossDiag(cd) {
+  if (!cd || !cd.items || !cd.items.length) return null;
+  const lv = cd.level === 'high' ? 'bad' : cd.level === 'mid' ? 'mid' : cd.level === 'ok' ? 'good' : 'na';
+  const box = el('div', 'crossdiag ' + lv);
+  const head = cd.level === 'ok' ? '출처 간 정합' : cd.level === 'na' ? '대조 데이터 부족' : `불일치 ${cd.warnCount}건 — 방문 확인 권장`;
+  box.appendChild(el('h3', null, `🔀 교차검증 자동진단 <span class="cd-sum">${esc(head)}</span>`));
+  const ul = el('ul');
+  cd.items.forEach((c) => {
+    const ic = c.status === 'match' ? '✓' : c.status === 'warn' ? '⚠' : '—';
+    const li = el('li', 'cd-' + c.status);
+    li.innerHTML = `<span class="cd-ic">${ic}</span><span class="cd-lb">${esc(c.label)}</span><span class="cd-dt">${esc(c.detail)}</span>`;
+    ul.appendChild(li);
+  });
+  box.appendChild(ul);
+  return box;
+}
+
 
 function renderNews(news) {
   if (!news || !news.length) return null;
@@ -707,6 +725,9 @@ function render(report) {
 
   const rf = renderRiskFlags(report.risk_flags);
   if (rf) root.appendChild(rf);
+
+  const cd = renderCrossDiag(report.cross_diag);
+  if (cd) root.appendChild(cd);
 
   const blocks = el('div', 'blocks');
   blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic)));

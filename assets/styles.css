@@ -200,6 +200,32 @@ a:hover { text-decoration: underline; }
 .finhealth.mid .fh-badge { background: var(--gC); color: #fff; }
 .finhealth.bad { background: var(--risk-bg); }
 .finhealth.bad .fh-badge { background: var(--risk); color: #fff; }
+
+/* 🔀 교차검증 자동진단 패널 */
+.crossdiag { margin: 0 0 14px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--card, #fff); }
+.crossdiag h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 13.5px; font-weight: 700; margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.crossdiag h3 .cd-sum { font-size: 11.5px; font-weight: 600; margin-left: auto; white-space: nowrap; }
+.crossdiag.good { box-shadow: inset 3px 0 0 var(--gA); }
+.crossdiag.good h3 .cd-sum { color: var(--gA); }
+.crossdiag.mid { box-shadow: inset 3px 0 0 var(--gC); }
+.crossdiag.mid h3 .cd-sum { color: var(--gC); }
+.crossdiag.bad { box-shadow: inset 3px 0 0 var(--risk); }
+.crossdiag.bad h3 .cd-sum { color: var(--risk); }
+.crossdiag.na h3 .cd-sum { color: var(--faint); }
+.crossdiag ul { list-style: none; margin: 0; padding: 4px 0; }
+.crossdiag li { display: grid; grid-template-columns: 18px auto 1fr; gap: 8px; align-items: baseline; padding: 6px 14px; font-size: 12px; }
+.crossdiag li + li { border-top: 1px dashed var(--border); }
+.crossdiag .cd-ic { font-weight: 800; text-align: center; }
+.crossdiag .cd-lb { font-weight: 600; color: var(--muted); white-space: nowrap; }
+.crossdiag .cd-dt { color: var(--text); line-height: 1.4; }
+.crossdiag li.cd-match .cd-ic { color: var(--gA); }
+.crossdiag li.cd-warn .cd-ic { color: var(--risk); }
+.crossdiag li.cd-warn .cd-dt { color: var(--risk); }
+.crossdiag li.cd-na .cd-ic, .crossdiag li.cd-na .cd-dt { color: var(--faint); }
+@media (max-width: 560px) {
+  .crossdiag li { grid-template-columns: 18px 1fr; }
+  .crossdiag li .cd-dt { grid-column: 1 / -1; }
+}
 .finwrap { padding: 12px 16px 6px; border-bottom: 1px solid var(--border); }
 .finhead { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .finhead .finnote { font-size: 10.5px; color: var(--accent); }
