@@ -628,7 +628,6 @@ function render(report) {
   const visitAddr = visitAddress(report);
   // 길찾기 목적지 — 실데이터 리포트는 meta.visit_addr(공장 실주소) 우선, 없으면 필드값
   const routeAddr = (m && m.visit_addr) || visitAddr;
-  const refAddr = (m && m.ref_point && m.ref_point.addr) || KOLMAR_ADDR;
   const refName = (m && m.ref_point && m.ref_point.name) || '한국콜마';
   const coord = m && m.visit_coord;
   if (visitAddr) {
@@ -636,14 +635,6 @@ function render(report) {
     mapBtn.title = `카카오맵에서 「${visitAddr}」 위치를 로드맵으로 표시`;
     mapBtn.addEventListener('click', () => window.open(`https://map.kakao.com/?q=${encodeURIComponent(visitAddr)}`, '_blank', 'noopener'));
     actions.appendChild(mapBtn);
-  }
-  // 🧭 카카오맵 길찾기 (한국콜마 → 방문지, 웹 경로 안내) — 주소만 있으면 동작
-  if (routeAddr) {
-    const kkRoute = el('button', 'act', '🧭 카카오맵 길찾기');
-    kkRoute.title = `${refName} → 「${routeAddr}」 자동차 경로 (카카오맵)`;
-    kkRoute.addEventListener('click', () =>
-      window.open(`https://map.kakao.com/?sName=${encodeURIComponent(refAddr)}&eName=${encodeURIComponent(routeAddr)}`, '_blank', 'noopener'));
-    actions.appendChild(kkRoute);
   }
   // 🚗 티맵 길찾기 (앱 스킴) — 정확 좌표가 있을 때만. 모바일 티맵 앱에서 경로 안내.
   if (coord && isFinite(coord.lat) && isFinite(coord.lng)) {
