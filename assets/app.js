@@ -656,7 +656,7 @@ function visitAddress(report) {
   return val('제조소 소재지') || val('본점주소') || val('사업장 주소 (연금기준)') || null;
 }
 
-function render(report) {
+function render(report, opts = {}) {
   currentReport = report;
   const root = $('#report');
   root.innerHTML = '';
@@ -782,8 +782,8 @@ function render(report) {
       hpBox.innerHTML = '<h4>🔎 홈페이지 추적 <span>검색 중…</span></h4>';
       const getV = (k) => { const f = report.basic.find((x) => x.key === k); return f && f.value; };
       findHomepage(report.meta.vendor_name, { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호'), factoryHomepage: report.meta.factory_homepage })
-        .then((hp) => { report._homepage = hp || null; renderHomepageInto(hpBox, report._homepage); })
-        .catch(() => { report._homepage = null; renderHomepageInto(hpBox, null); });
+        .then((hp) => { report._homepage = hp || null; renderHomepageInto(hpBox, report._homepage); saveLastReport(report); })
+        .catch(() => { report._homepage = null; renderHomepageInto(hpBox, null); saveLastReport(report); });
     }
   }
 
@@ -798,7 +798,10 @@ function render(report) {
     ['A', 'B', 'C', 'D'].map((g) => `<span class="item"><span class="dot badge-${g}"></span>${g} · ${GRADE_LABEL[g]}</span>`).join('');
   root.appendChild(lg);
 
-  root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // 조회 리포트 저장 — 새로고침/재방문 시 복원용 (새 조회 전까지 유지)
+  saveLastReport(report);
+
+  if (!opts.noScroll) root.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function renderDiff(diff) {
@@ -826,6 +829,15 @@ function pushRecent(q) {
   const list = getRecent().filter((x) => x !== q);
   list.unshift(q);
   _sls(RECENT_KEY, JSON.stringify(list.slice(0, 3)));
+}
+
+// ── 마지막 조회 리포트 유지 (새로고침·탭 복귀·재방문 시 복원, 새 조회 전까지 표시) ──
+const LAST_KEY = 'vs_last_report';
+function saveLastReport(report) {
+  try { if (report && report.meta) _sls(LAST_KEY, JSON.stringify(report)); } catch { /* 용량초과 등 무시 */ }
+}
+function loadLastReport() {
+  try { const s = _ls(LAST_KEY); return s ? JSON.parse(s) : null; } catch { return null; }
 }
 function renderRecent() {
   const box = $('#recent');
@@ -923,7 +935,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('#searchForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    lookup($('#q').value);
+    const q = $('#q').value.trim();
+    if (!q) { // 빈 검색 = 초기화(저장 리포트 삭제 후 초기 화면)
+      _sls(LAST_KEY, '');
+      currentReport = null;
+      const root = $('#report'); root.classList.add('hidden'); root.innerHTML = '';
+      return;
+    }
+    lookup(q);
   });
   renderRecent(); // 최근 검색 칩 초기 표시
+
+  // 마지막 조회 리포트 복원 — 새로고침·탭 복귀·재방문 시 그대로 표시(새 업체 조회 시 교체)
+  const last = loadLastReport();
+  if (last && last.meta && last.meta.vendor_name) {
+    $('#q').value = last.meta.vendor_name;
+    render(last, { noScroll: true });
+  }
 });
