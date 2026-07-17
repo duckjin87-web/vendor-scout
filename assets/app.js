@@ -299,19 +299,34 @@ function stripCorp(s) {
 // 사업자등록번호(bzowrRgstNo) 우선, 0건이면 상호명(wkplNm)으로 폴백.
 async function npsLookup(nm, bzno) {
   const digits = bzno ? String(bzno).replace(/\D/g, '') : '';
-  let items = [];
+  let items = [], byBzno = false;
   if (digits.length >= 10) {
-    try { items = itemsOf(await proxyGet('npsSearch', { bz: digits })); } catch { /* 상호명으로 폴백 */ }
+    try { items = itemsOf(await proxyGet('npsSearch', { bz: digits })); byBzno = items.length > 0; } catch { /* 상호명으로 폴백 */ }
   }
   if (!items.length) items = itemsOf(await proxyGet('npsSearch', { name: nm }));
+  if (!items.length) return { search: null, detail: null, count: 0, total: null, sites: 0, byBzno };
 
-  const hit = items[0];
-  let detail = null;
-  if (hit && hit.seq != null && hit.seq !== '') {
-    try { detail = itemsOf(await proxyGet('npsDetail', { seq: hit.seq, ym: hit.dataCrtYm }))[0] || null; }
-    catch { /* 상세 실패해도 검색 결과는 사용 */ }
-  }
-  return { search: hit || null, detail, count: items.length };
+  // 대기업은 본사·공장별로 국민연금 사업장이 분리 등록됨 → 가입자수를 사업장별로 조회해 합산.
+  // 가입자수(jnngpCnt)는 상세조회에만 있어 seq별 병렬 호출(상위 20개 제한).
+  const targets = items.slice(0, 20).filter((it) => it.seq != null && it.seq !== '');
+  const details = await Promise.all(targets.map((it) =>
+    proxyGet('npsDetail', { seq: it.seq, ym: it.dataCrtYm }).then((d) => itemsOf(d)[0] || null).catch(() => null)));
+  const cnt = (d) => Number(d && (d.jnngpCnt ?? d.subscrCnt)) || 0;
+  const counts = details.map(cnt);
+  const sumAll = counts.reduce((a, b) => a + b, 0);
+  let maxIdx = 0; counts.forEach((c, i) => { if (c > counts[maxIdx]) maxIdx = i; });
+
+  // 사업자번호 조회면 전 사업장이 동일 사업자 → 합산 안전. 상호명 조회는 타 계열사 혼입 위험 → 최대 사업장 1곳만.
+  const total = byBzno ? (sumAll || null) : (counts[maxIdx] || null);
+  const activeSites = counts.filter((c) => c > 0).length;
+  return {
+    search: items[maxIdx] || items[0] || null,      // 대표(최대) 사업장 — 주소/기준월 표기용
+    detail: details[maxIdx] || details[0] || null,
+    count: items.length,
+    total,
+    sites: byBzno ? activeSites : 1,
+    byBzno,
+  };
 }
 
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립

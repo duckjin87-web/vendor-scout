@@ -557,8 +557,11 @@ function assembleLiveReport(name, corp, res) {
   const nps = npsData ? npsData.search : null;
   const npsDet = npsData ? npsData.detail : null;
   // V2 JSON 필드: 가입자수=jnngpCnt(상세), 도로명주소=wkplRoadNmDetAddr, 법정동=ldongAddrMgpldongNm
-  const empRaw = (npsDet && (npsDet.jnngpCnt ?? npsDet.subscrCnt)) ?? (nps && (nps.jnngpCnt ?? nps.subscrCnt)) ?? null;
-  const empVal = (empRaw != null && empRaw !== '') ? empRaw : null;
+  // total = 동일 사업자번호의 전 사업장 가입자 합산(대기업 본사·공장 분리등록 대응)
+  const npsTotal = npsData ? npsData.total : null;
+  const npsSites = npsData ? (npsData.sites || 0) : 0;
+  const empRawSingle = (npsDet && (npsDet.jnngpCnt ?? npsDet.subscrCnt)) ?? (nps && (nps.jnngpCnt ?? nps.subscrCnt)) ?? null;
+  const empVal = (npsTotal != null && npsTotal !== '') ? npsTotal : ((empRawSingle != null && empRawSingle !== '') ? empRawSingle : null);
   const pick = (o, ...ks) => { if (!o) return null; for (const k of ks) if (o[k] != null && o[k] !== '') return o[k]; return null; };
   const npsAddr = pick(nps, 'wkplRoadNmDetAddr', 'wkplRoadNmDtlAddr', 'ldongAddrMgpldongNm', 'ldongAddr')
     || pick(npsDet, 'wkplRoadNmDetAddr', 'wkplRoadNmDtlAddr', 'ldongAddrMgpldongNm') || null;
@@ -604,7 +607,15 @@ function assembleLiveReport(name, corp, res) {
   }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 
   const capacity = [
-    f('재직자수 (국민연금 가입자)', empVal != null ? `${empVal}명${npsYm ? ` (${npsYm} 기준)` : ''}` : null, empVal != null ? 'B' : 'D', '국민연금 사업장 API', empVal != null ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null, empVal != null ? '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함' : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
+    f('재직자수 (국민연금 가입자)',
+      empVal != null ? `${empVal}명${npsSites > 1 ? ` (${npsSites}개 사업장 합산)` : ''}${npsYm ? ` · ${npsYm} 기준` : ''}` : null,
+      empVal != null ? 'B' : 'D', '국민연금 사업장 API',
+      empVal != null ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null,
+      empVal != null
+        ? (npsSites > 1
+            ? `★ 동일 사업자번호의 ${npsSites}개 국민연금 사업장(본사·공장 등) 가입자 합산 — 4대보험 재직자(월 갱신). 파견·일용·프리랜서 미포함`
+            : '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함')
+        : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     f('방문 이동거리',
@@ -665,7 +676,7 @@ function assembleLiveReport(name, corp, res) {
         : (!R.nts ? '미호출(사업자번호 없음)' : (!R.nts.ok ? `⚠ 연결 실패: ${R.nts.err}` : '조회 성공 · 해당 사업자 정보 없음')) },
     stat('finance', 'finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '재무 데이터 없음(외감 비대상 추정)'),
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null, '0건 — 기능성 미취급 또는 상호 불일치'),
-    stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `${npsData.count}건 매칭${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
+    stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `사업장 ${npsData.count}곳${npsSites > 1 ? `(${npsSites}곳 합산)` : ''}${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
     stat('maker', 'maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
     { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, warn: !fctAddr && !!(R.factory && R.factory.ok),
       detail: fctAddr ? `공장 확인${fctEmpl ? ` · 종업원 ${fctEmpl}명` : ''}${fctProduct ? ' · ' + fctProduct : ''}`
