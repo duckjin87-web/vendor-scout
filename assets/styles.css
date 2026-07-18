@@ -319,6 +319,18 @@ a:hover { text-decoration: underline; }
 .hpbox .hp-cand { font-size: 12.5px; color: var(--muted); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; }
 .hpbox .hp-cand:hover { border-color: var(--accent); color: var(--accent); }
 .hpbox .hp-cand b { font-weight: 700; color: var(--gA); }
+/* 🏭 홈페이지 발췌 — 생산능력·인증 */
+.hpbox .hp-ext { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.hpbox .hp-ext-h { font-size: 12.5px; font-weight: 700; margin-bottom: 7px; }
+.hpbox .hp-ext-h span { font-weight: 500; color: var(--faint); font-size: 10.5px; margin-left: 4px; }
+.hpbox .hp-row { display: grid; grid-template-columns: 58px 1fr; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 12.5px; }
+.hpbox .hp-row > i { font-style: normal; font-size: 11px; font-weight: 700; color: var(--faint); }
+.hpbox .hp-tag { display: inline-block; font-weight: 800; font-size: 11px; color: var(--accent); background: var(--panel2, rgba(47,109,246,.1)); border: 1px solid var(--accent); border-radius: 6px; padding: 1px 8px; }
+.hpbox .hp-cert { display: inline-block; font-weight: 600; font-size: 11.5px; color: var(--gA); background: var(--gA-bg); border-radius: 6px; padding: 2px 8px; margin: 2px 0; }
+.hpbox .hp-capa { margin: 0; padding: 0; list-style: none; }
+.hpbox .hp-capa li { font-size: 12px; color: var(--text); padding: 2px 0 2px 12px; position: relative; line-height: 1.4; }
+.hpbox .hp-capa li::before { content: "·"; position: absolute; left: 2px; color: var(--faint); }
+.hpbox .hp-ext-none { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--faint); line-height: 1.45; }
 
 /* 뉴스 */
 .newsbox { grid-column: 1 / -1; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; }

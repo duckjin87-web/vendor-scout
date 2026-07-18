@@ -173,13 +173,94 @@ const HP_SKIP = /(^|\.)(naver|daum|kakao|tistory|blog|cafe|youtube|instagram|fac
 function hpAddrCores(addr) {
   return String(addr || '').replace(/\s/g, '').match(/[가-힣]{2,}(읍|면|동|리|가|로|길)/g) || [];
 }
+// ── 홈페이지 정보 추출 (생산 CAPA · 인증) ──
+// HTML → 가독 텍스트 (script/style·태그 제거, 엔티티·공백 정리)
+function htmlToText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<(?:br|\/li|\/p|\/div|\/h[1-6]|\/tr|\/td|\/th|\/section)\b[^>]*>/gi, '\n') // 블록 경계 → 줄바꿈(문장 분리 보존)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&#\d+;/g, ' ')
+    .replace(/[ \t\f\v\r]+/g, ' ')
+    .replace(/ *\n[ \n]*/g, '\n').trim();
+}
+// 인증 키워드 사전 — 홈페이지에 게재된 인증 문구 탐지(과대광고 아닌 표기 여부만)
+const CERT_PATTERNS = [
+  { label: 'ISO 22716 (화장품GMP)', re: /ISO\s*22716/i },
+  { label: 'ISO 9001 (품질)', re: /ISO\s*9001/i },
+  { label: 'ISO 14001 (환경)', re: /ISO\s*14001/i },
+  { label: 'ISO 45001 (안전보건)', re: /ISO\s*45001/i },
+  { label: 'CGMP (우수화장품제조)', re: /\bCGMP\b|우수화장품\s*제조|우수화장품\s*및\s*품질관리/i },
+  { label: '할랄(HALAL)', re: /할랄|HALAL|JAKIM|\bMUI\b/i },
+  { label: '비건(VEGAN)', re: /비건|VEGAN/i },
+  { label: 'EWG', re: /\bEWG\b/i },
+  { label: '미국 FDA', re: /\bFDA\b/i },
+  { label: '중국 NMPA(위생허가)', re: /\bNMPA\b|\bCFDA\b|위생허가/i },
+  { label: 'ECOCERT/COSMOS(유기농)', re: /ECOCERT|COSMOS|유기농\s*인증/i },
+  { label: '크루얼티프리', re: /cruelty[\s-]*free|크루얼티\s*프리|leaping\s*bunny/i },
+  { label: '더마테스트', re: /dermatest|더마테스트/i },
+  { label: '피부저자극테스트', re: /피부\s*저?\s*자극\s*(테스트|시험)/i },
+  { label: '특허', re: /특허\s*(제?\s*[\d\-]+\s*호|출원|등록|보유)/i },
+  { label: '벤처·이노비즈', re: /벤처기업\s*인증|이노비즈|INNO-?BIZ|메인비즈/i },
+];
+// 동일 도메인 링크 추출 (서브페이지 탐색용)
+function extractLinks(html, baseUrl) {
+  let origin = ''; try { origin = new URL(baseUrl).origin; } catch { return []; }
+  const out = []; const re = /<a\b[^>]*href\s*=\s*["']([^"'#\s]+)["'][^>]*>([\s\S]*?)<\/a>/gi; let m;
+  while ((m = re.exec(html)) && out.length < 80) {
+    let abs; try { abs = new URL(m[1], baseUrl).href; } catch { continue; }
+    if (!/^https?:/i.test(abs)) continue;
+    try { if (new URL(abs).origin !== origin) continue; } catch { continue; }
+    out.push({ href: abs, anchor: htmlToText(m[2]) });
+  }
+  return out;
+}
+// 생산능력 관련 문장 발췌 (키워드 + 숫자가 함께 있는 짧은 구절)
+function extractCapaSnippets(text) {
+  const parts = String(text).split(/\n+|[.。!?]\s|\s{3,}/).map((s) => s.trim()).filter(Boolean);
+  const KEY = /(생산\s*능력|생산량|월\s*생산|연간?\s*생산|일\s*생산|생산\s*라인|자동화\s*라인|충전\s*라인|생산\s*설비|생산\s*시설|공장\s*면적|연면적|부지|대지\s*면적|생산\s*규모|생산\s*capa|capacity|㎡|평)/i;
+  const NUM = /\d/;
+  const out = [];
+  for (const p of parts) {
+    if (p.length < 5 || p.length > 140) continue;
+    if (KEY.test(p) && NUM.test(p)) { const s = p.replace(/\s{2,}/g, ' ').trim(); if (!out.includes(s)) out.push(s); }
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+// 확정 홈페이지에서 인증·생산능력 추출 (메인 + 관련 서브페이지 최대 2개)
+async function extractSiteInfo(baseUrl, mainHtml) {
+  let html = mainHtml;
+  if (!html) { try { const p = await proxyOnlyGet('fetchPage', { url: baseUrl }); html = (p && p.text) || ''; } catch { html = ''; } }
+  if (!html) return null;
+  const texts = [htmlToText(html)]; const pages = [baseUrl];
+  const REL = /(인증|certif|품질|quality|생산|시설|facilit|공장|factory|설비|장비|회사\s*소개|about|company|연구|R&?D|사업|business)/i;
+  const seen = new Set([baseUrl.replace(/\/+$/, '')]); const targets = [];
+  for (const l of extractLinks(html, baseUrl)) {
+    const key = l.href.replace(/\/+$/, ''); if (seen.has(key)) continue;
+    if (REL.test(l.anchor) || REL.test(l.href)) { targets.push(l.href); seen.add(key); }
+    if (targets.length >= 2) break;
+  }
+  const subs = await Promise.all(targets.map((u) =>
+    proxyOnlyGet('fetchPage', { url: u }).then((p) => ({ u, t: htmlToText((p && p.text) || '') })).catch(() => null)));
+  subs.forEach((s) => { if (s && s.t) { texts.push(s.t); pages.push(s.u); } });
+  const all = texts.join('\n').slice(0, 400000);
+  const certs = CERT_PATTERNS.filter((c) => c.re.test(all)).map((c) => c.label);
+  const capa = extractCapaSnippets(all);
+  const oem = ['OEM', 'ODM', 'OGM', 'OBM'].filter((k) => new RegExp(`\\b${k}\\b`, 'i').test(all));
+  return (certs.length || capa.length || oem.length) ? { certs, capa, oemOdm: oem, pages } : null;
+}
+
 async function findHomepage(nm, corp) {
   if (!getProxy()) return null;
   // 공장등록부에 홈페이지가 있으면 그게 공식 확정 — 웹검색보다 신뢰
   const fctHp = corp && corp.factoryHomepage ? String(corp.factoryHomepage).trim() : '';
   if (fctHp && /^https?:\/\//i.test(fctHp)) {
     let host = fctHp; try { host = new URL(fctHp).hostname.replace(/^www\./, ''); } catch {}
-    return { proposed: { url: fctHp, host, matches: ['공장등록부 등재'], score: 3 }, candidates: [] };
+    const proposed = { url: fctHp, host, matches: ['공장등록부 등재'], score: 3 };
+    try { proposed.extract = await extractSiteInfo(fctHp, null); } catch { /* 추출 실패 무시 */ }
+    return { proposed, candidates: [] };
   }
   let web;
   try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 화장품`, display: '20' }); }
@@ -205,16 +286,20 @@ async function findHomepage(nm, corp) {
   const scored = await Promise.all(cands.map(async (c) => {
     let page;
     try { page = await proxyOnlyGet('fetchPage', { url: c.url }); } catch { return { ...c, matches: [], score: 0 }; }
-    const text = String((page && page.text) || '').replace(/\s/g, '');
+    const rawHtml = String((page && page.text) || '');
+    const text = rawHtml.replace(/\s/g, '');
     const m = [];
     if (nameCore && text.includes(nameCore)) m.push('상호');
     if (rep && text.includes(rep)) m.push('대표자');
     if (bz && (text.includes(bz) || (bzFmt && text.includes(bzFmt)))) m.push('사업자번호');
     if (addrCores.length && addrCores.some((a) => text.includes(a))) m.push('주소');
-    return { ...c, matches: m, score: m.length };
+    return { ...c, matches: m, score: m.length, html: rawHtml };
   }));
   scored.sort((a, b) => b.score - a.score);
   const proposed = scored[0] && scored[0].score >= 2 ? scored[0] : null; // 2개 이상 매칭 → 확정 제안
+  // 확정 사이트에서만 인증·생산능력 추출(오매칭 사이트 정보 방지). 이미 받은 HTML 재사용.
+  if (proposed) { try { proposed.extract = await extractSiteInfo(proposed.url, proposed.html); } catch { /* 무시 */ } }
+  scored.forEach((c) => { delete c.html; }); // 원문 HTML은 저장 용량 커서 제거
   return { proposed, candidates: scored };
 }
 
@@ -638,6 +723,17 @@ function renderHomepageInto(box, hp) {
       `<a href="${esc(p.url)}" target="_blank" rel="noopener" class="hp-url">${esc(p.host)}</a>` +
       `<div class="hp-ms">${p.matches.map(chip).join('')} <em>(${p.matches.length}개 일치)</em></div>` +
       `</div>`;
+    // 🏭 홈페이지 발췌 — 생산능력·인증(자동추출). 홈페이지 게재값이라 방문 시 원본 확인 필요.
+    const ex = p.extract;
+    if (ex && (ex.certs.length || ex.capa.length || ex.oemOdm.length)) {
+      html += `<div class="hp-ext"><div class="hp-ext-h">🏭 홈페이지 발췌 <span>자동추출 · 게재정보(방문 시 인증서 원본 확인)</span></div>`;
+      if (ex.oemOdm.length) html += `<div class="hp-row"><i>생산모델</i><span>${ex.oemOdm.map((o) => `<b class="hp-tag">${esc(o)}</b>`).join(' ')}</span></div>`;
+      if (ex.certs.length) html += `<div class="hp-row"><i>인증</i><span>${ex.certs.map((c) => `<b class="hp-cert">${esc(c)}</b>`).join(' ')}</span></div>`;
+      if (ex.capa.length) html += `<div class="hp-row"><i>생산능력</i><ul class="hp-capa">${ex.capa.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></div>`;
+      html += `</div>`;
+    } else {
+      html += `<div class="hp-ext-none">홈페이지에서 인증·생산능력 문구를 추출하지 못함 (자바스크립트 렌더링 사이트이거나 미게재 — 사이트 직접 확인)</div>`;
+    }
   } else {
     html += `<div class="hp-none">2개 이상 일치하는 확정 사이트 없음 — 아래 후보 수동 확인</div>`;
   }
