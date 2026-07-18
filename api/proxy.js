@@ -25,27 +25,51 @@ const CORS = {
 const JSON_HDR = { ...CORS, 'Content-Type': 'application/json; charset=utf-8' };
 
 const jsonRes = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: JSON_HDR });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 상류 호출 공통 — 타임아웃·네트워크오류·비정상응답을 항상 CORS JSON으로 정규화(플랫폼 500 크래시 방지)
+// 상류가 5xx인데 HTML 점검/오류페이지를 주면 지저분한 원문 대신 사람이 읽을 문구로 정규화
+function cleanUpstreamDetail(body, status) {
+  const b = String(body || '');
+  if (/<!DOCTYPE|<html/i.test(b)) {
+    if (status === 503) return '상대(공공데이터) 서버 점검·과부하(503) — 일시적 오류. 잠시 후 자동 정상화됩니다';
+    if (status === 502 || status === 504) return `상대 서버 응답 지연(${status}) — 일시적`;
+    return `상대 서버 오류(HTTP ${status})`;
+  }
+  return b.slice(0, 250);
+}
+
+// 상류 호출 공통 — 타임아웃·네트워크오류·비정상응답을 항상 CORS JSON으로 정규화(플랫폼 500 크래시 방지).
+// 일시적 장애(5xx·429·타임아웃)는 짧게 재시도해 순간 blip을 자동 복구.
 async function relay(target, label, init) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 20000); // data.go가 느려도 20초에 깔끔히 종료
-  let upstream;
-  try {
-    upstream = await fetch(target, { ...init, signal: ctrl.signal });
-  } catch (e) {
+  const TRANSIENT = new Set([502, 503, 504, 429]);
+  const ATTEMPTS = 3, PER_MS = 8000;
+  const DEADLINE = Date.now() + 18000; // Edge 실행한도(504) 방지 — 총예산 18초
+  let lastStatus = 0, lastBody = '', lastErr = '';
+  for (let i = 0; i < ATTEMPTS; i++) {
+    const remaining = DEADLINE - Date.now();
+    if (remaining < 1500) break; // 남은 예산 부족 → 중단
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), Math.min(PER_MS, remaining));
+    let upstream;
+    try {
+      upstream = await fetch(target, { ...init, signal: ctrl.signal });
+    } catch (e) {
+      clearTimeout(timer);
+      const aborted = e && e.name === 'AbortError';
+      lastStatus = aborted ? 504 : 0;
+      lastErr = aborted ? '타임아웃' : String(e && e.message || e);
+      if (i < ATTEMPTS - 1 && Date.now() + 900 < DEADLINE) { await sleep(600); continue; } // 순간 오류 재시도
+      return jsonRes({ error: `${label} 상류 호출 실패`, detail: lastErr }, aborted ? 504 : 502);
+    }
     clearTimeout(timer);
-    const aborted = e && e.name === 'AbortError';
-    return jsonRes({ error: `${label} 상류 호출 실패`, detail: aborted ? '타임아웃(20초 초과)' : String(e && e.message || e) }, aborted ? 504 : 502);
+    const body = await upstream.text().catch(() => '');
+    if (upstream.ok) return new Response(body, { status: 200, headers: JSON_HDR });
+    lastStatus = upstream.status; lastBody = body;
+    // 일시적 5xx·429는 백오프 후 재시도(예산 내), 그 외(4xx 등)는 즉시 반환
+    if (TRANSIENT.has(upstream.status) && i < ATTEMPTS - 1 && Date.now() + 900 < DEADLINE) { await sleep(700); continue; }
+    break;
   }
-  clearTimeout(timer);
-
-  const body = await upstream.text().catch(() => '');
-  // 상류가 2xx가 아니면, 상태·본문 일부를 실어 원인이 화면에 보이게 한다
-  if (!upstream.ok) {
-    return jsonRes({ error: `${label} 상류 HTTP ${upstream.status}`, upstreamStatus: upstream.status, detail: body.slice(0, 300) }, 502);
-  }
-  return new Response(body, { status: 200, headers: JSON_HDR });
+  return jsonRes({ error: `${label} 상류 HTTP ${lastStatus || ''}`.trim(), upstreamStatus: lastStatus, detail: cleanUpstreamDetail(lastBody, lastStatus) }, 502);
 }
 
 // json 지정에 `type` 파라미터를 쓰는 서비스(식약처 1471000 · 산단공 공장등록 v2).
