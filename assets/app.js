@@ -142,6 +142,26 @@ async function proxyErrMsg(res) {
   return body ? body.slice(0, 200) : `프록시 HTTP ${res.status}`;
 }
 
+// 브라우저 fetch 재시도 — 순간 네트워크 실패("Failed to fetch")·연결끊김을 짧게 재시도.
+// (프록시 도달 전 클라이언트단 실패라 서버 재시도로는 못 잡음)
+async function fetchRetry(url, opts, tries = 3) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try { return await fetch(url, opts); }
+    catch (e) { lastErr = e; if (i < tries - 1) await new Promise((r) => setTimeout(r, 500 * (i + 1))); }
+  }
+  throw lastErr;
+}
+
+// 동시성 제한 병렬 실행 — 브라우저 동시연결 포화("Failed to fetch") 방지
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let idx = 0;
+  const worker = async () => { while (idx < items.length) { const i = idx++; out[i] = await fn(items[i], i); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 // 공공데이터 조회 — 프록시 경유. logical: { name?, crno?, bz6?, seq?, ym?, hs?, from?, to? }
 async function proxyGet(service, logical) {
   const map = PARAM_MAP[service];
@@ -149,7 +169,7 @@ async function proxyGet(service, logical) {
   if (!getProxy()) throw new Error('프록시 미설정 — 우측 상단 실데이터 연결에 프록시 주소(/api/proxy)를 입력하세요');
   const url = buildProxyUrl({ service, ...mapParams(logical, map) });
   let res;
-  try { res = await fetch(url, { headers: { Accept: 'application/json' } }); }
+  try { res = await fetchRetry(url, { headers: { Accept: 'application/json' } }); }
   catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
   if (!res.ok) throw new Error(await proxyErrMsg(res));
   return parseDataGo(res);
@@ -160,7 +180,7 @@ async function proxyOnlyGet(service, params) {
   const proxy = getProxy();
   if (!proxy) throw new Error('프록시 미설정 — 이 소스는 프록시 경유 전용');
   let res;
-  try { res = await fetch(buildProxyUrl({ service, ...params }), { headers: { Accept: 'application/json' } }); }
+  try { res = await fetchRetry(buildProxyUrl({ service, ...params }), { headers: { Accept: 'application/json' } }); }
   catch (e) { throw new Error(`프록시 연결 실패: ${e.message}`); }
   if (!res.ok) throw new Error(await proxyErrMsg(res));
   return res.json();
@@ -392,10 +412,10 @@ async function npsLookup(nm, bzno) {
   if (!items.length) return { search: null, detail: null, count: 0, total: null, sites: 0, byBzno };
 
   // 대기업은 본사·공장별로 국민연금 사업장이 분리 등록됨 → 가입자수를 사업장별로 조회해 합산.
-  // 가입자수(jnngpCnt)는 상세조회에만 있어 seq별 병렬 호출(상위 20개 제한).
-  const targets = items.slice(0, 20).filter((it) => it.seq != null && it.seq !== '');
-  const details = await Promise.all(targets.map((it) =>
-    proxyGet('npsDetail', { seq: it.seq, ym: it.dataCrtYm }).then((d) => itemsOf(d)[0] || null).catch(() => null)));
+  // 가입자수(jnngpCnt)는 상세조회에만 있어 seq별 호출(상위 18개, 동시 6개로 제한 — 연결 포화 방지).
+  const targets = items.slice(0, 18).filter((it) => it.seq != null && it.seq !== '');
+  const details = await mapLimit(targets, 6, (it) =>
+    proxyGet('npsDetail', { seq: it.seq, ym: it.dataCrtYm }).then((d) => itemsOf(d)[0] || null).catch(() => null));
   const cnt = (d) => Number(d && (d.jnngpCnt ?? d.subscrCnt)) || 0;
   const counts = details.map(cnt);
   const sumAll = counts.reduce((a, b) => a + b, 0);
