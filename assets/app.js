@@ -503,10 +503,13 @@ async function finishLive(name, corp) {
       : { ok: false, err: String(settled[i].reason && settled[i].reason.message || settled[i].reason) };
   });
 
-  // 카카오 실측 이동거리 — 공장(산단공) 주소 우선, 없으면 본점. 가장 정확한 방문지로 길찾기.
+  // 카카오 실측 이동거리 — 공장(산단공) > 식약처 제조소 > 본점 순으로 방문지 선택.
   const fList = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const fAddr = fList[0] ? (fList[0].rnAdres ?? fList[0].lnmAdres ?? fList[0].lotNoAddr ?? fList[0].roadNmAddr ?? fList[0].adres ?? fList[0].ADRES ?? fList[0].fctryAddr ?? null) : null;
-  const visitAddr = fAddr || corp.addr || null;
+  const mList = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
+  const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
+  const mAddr = mList[0] ? (mList[0].ADDR ?? mList[0].SITE_ADDR ?? mList[0].LOCP_ADDR ?? mList[0].locplc ?? Object.values(mList[0]).find(looksAddr) ?? null) : null;
+  const visitAddr = fAddr || mAddr || corp.addr || null;
   let travel = null, kakaoErr = null;
   try { travel = await kakaoTravel(visitAddr); }
   catch (e) { kakaoErr = e && e.message ? e.message : String(e); }
@@ -825,7 +828,7 @@ function renderHomepageInto(box, hp) {
 function visitAddress(report) {
   const fields = [...(report.basic || []), ...(report.capacity || [])];
   const val = (k) => { const f = fields.find((x) => x.key === k); return f && f.value ? f.value : null; };
-  return val('제조소 소재지') || val('본점주소') || val('사업장 주소 (연금기준)') || null;
+  return val('공장/제조소 소재지') || val('본점주소') || val('사업장 주소 (연금기준)') || null;
 }
 
 function render(report, opts = {}) {

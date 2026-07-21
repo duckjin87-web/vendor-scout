@@ -507,10 +507,10 @@ function assembleLiveReport(name, corp, res) {
     return emptyMsg;
   };
 
-  // 식약처 제조업 등록 (maker)
+  // 식약처 제조업 등록 (maker) — 상호 일치 건 선택
   const mkList = R.maker && R.maker.ok ? listOf(R.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const mk = mkList[0];
-  const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? null) : null;
+  const mk = matchByName(name, mkList) || mkList[0];
+  const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? mk.PRMISN_NO ?? mk.prmisnNo ?? null) : null;
 
   // 국세청 사업자상태 (odcloud: {data:[{b_stt, tax_type, ...}]})
   const ntsItem = R.nts && R.nts.ok && R.nts.data && Array.isArray(R.nts.data.data) ? R.nts.data.data[0] : null;
@@ -535,15 +535,27 @@ function assembleLiveReport(name, corp, res) {
   const fctNote = fctAddr ? ['★ 실제 공장 주소', fctProduct ? `생산: ${fctProduct}` : null, fctInduty || null, fctRegDe ? `등록 ${fctRegDe}` : null].filter(Boolean).join(' · ')
     : why('factory', '공장등록 조회 결과 없음 — 미등록 공장(임대/소규모) 또는 상호 불일치');
 
+  // 식약처 제조업 허가 레코드에서 대표자·소재지 추출 — 금융위 법인 미확보 시 이 값으로 보강
+  const mkRep = mk ? (mk.PRSNL_NM ?? mk.RPRSNTV ?? mk.prsdntNm ?? mk.reprsntvNm ?? mk.repNm ??
+    ((Object.entries(mk).find(([k, v]) => /대표|PRSNL|RPRSNTV|PRSDNT|REPRE/i.test(k) && v) || [])[1]) ?? null) : null;
+  const mkAddr = mk ? (mk.ADDR ?? mk.SITE_ADDR ?? mk.LOCP_ADDR ?? mk.locplc ?? mk.소재지 ??
+    Object.values(mk).find(looksAddr) ?? null) : null;
+
   const basic = [
     f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
     f('사업자등록번호', corp?.bzno || null, 'A', '금융위 기업기본정보', today),
     f('사업자 상태', bStt, bStt ? 'A' : 'D', '국세청 사업자상태', bStt ? today : null, bStt ? (bTax || null) : why('nts', '국세청 상태 조회 실패 — 사업자번호/승인 확인')),
-    f('대표자', corp?.rep || null, 'A', '금융위 기업기본정보', today),
+    f('대표자', corp?.rep || mkRep || null, (corp?.rep || mkRep) ? 'A' : 'D',
+      corp?.rep ? '금융위 기업기본정보' : '식약처 화장품제조업 API', (corp?.rep || mkRep) ? today : null,
+      corp?.rep ? null : (mkRep ? '식약처 제조업 허가상 대표자 (금융위 법인 미확보 보강)' : why('maker', '대표자 정보 없음'))),
     f('설립일', fmtDate(corp?.estbDt), 'A', '금융위 기업기본정보', fmtDate(corp?.estbDt)),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
-    f('제조업 등록', mk ? `등록${mkNo ? ` (제${mkNo}호)` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null, mk ? null : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
-    f('공장 소재지', fctAddr, fctAddr ? 'A' : 'D', '산업단지공단 공장등록', fctAddr ? today : null, fctNote),
+    f('제조업 등록', mk ? `등록${mkNo ? ` (허가 ${mkNo})` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null,
+      mk ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인') : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
+    f('공장/제조소 소재지', fctAddr || mkAddr || null, (fctAddr || mkAddr) ? 'A' : 'D',
+      fctAddr ? '산업단지공단 공장등록' : (mkAddr ? '식약처 화장품제조업 API' : '산업단지공단 공장등록'),
+      (fctAddr || mkAddr) ? today : null,
+      fctAddr ? fctNote : (mkAddr ? '식약처 제조업 허가상 제조소 소재지 (산단공 공장등록 없음)' : fctNote)),
   ];
 
   // 식약처 기능성 보고품목 (rpt)
