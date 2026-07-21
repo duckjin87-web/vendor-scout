@@ -377,21 +377,66 @@ function itemsOf(data) {
   return [];
 }
 
+// 레코드에서 키 패턴에 맞는 첫 값 추출(식약처 필드명이 API마다 달라 견고 추출)
+function pickByKey(rec, re) {
+  for (const [k, v] of Object.entries(rec || {})) {
+    if (v == null || String(v).trim() === '') continue;
+    if (re.test(k)) return String(v).trim();
+  }
+  return null;
+}
+// 식약처 화장품제조업 등록업체 기준 후보 — 상호명으로 조회해 등록 업체명(중복제거) 목록화
+async function mfdsCandidates(name) {
+  let list = [];
+  try { list = itemsOf(await proxyGet('maker', { name })); } catch { return []; }
+  const seen = new Set(); const out = [];
+  for (const r of list) {
+    const nm = pickByKey(r, /BSSH_NM|CMPNY_NM|ENTRPS_?NM|MANF|업체|회사|제조사/i) || pickByKey(r, /_NM$/i);
+    if (!nm) continue;
+    const key = stripCorp(nm).replace(/\s/g, '');
+    if (key.length < 2 || seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      corpNm: nm,
+      rep: pickByKey(r, /PRSNL|PRSDNT|RPRSNTV|REPRE|대표/i),
+      addr: pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i),
+      lcns: pickByKey(r, /LCNS_?NO|PERMIT|허가/i),
+      mfds: true,
+    });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+// 식약처 후보 선택 시: 정확한 등록업체명으로 금융위 재조회(법인 매칭되면 법인/재무 확보) → 없으면 상호명 조회
+async function finishLiveMfds(name, cand) {
+  const nk = (s) => stripCorp(s || '').replace(/\s/g, '');
+  try {
+    const cc = window.mapCorpCandidates(await proxyGet('corp', { name: cand.corpNm }));
+    const exact = cc.find((x) => nk(x.corpNm) === nk(cand.corpNm)) || (cc.length === 1 ? cc[0] : null);
+    if (exact) return await finishLive(cand.corpNm, exact);
+  } catch { /* 금융위 재조회 실패 → 상호명 기반 */ }
+  return await finishLive(cand.corpNm, { corpNm: cand.corpNm });
+}
+
 // 1단계: 기준정보(동명업체 후보) 조회 → {candidates} 또는 {report}
+//  금융위 법인 후보 우선 → 없으면 식약처 등록업체 기준 후보 추천 → 그래도 없으면 상호명 조회
 async function liveLookup(name) {
   let cands = [];
   try {
     const corpData = await proxyGet('corp', { name });
     cands = window.mapCorpCandidates(corpData);
-  } catch (e) { /* 기업기본정보 실패 → 식약처만으로 폴백 */ }
+  } catch (e) { /* 기업기본정보 실패 → 식약처 기준 추천으로 */ }
 
-  if (!cands.length) {
-    // 금융위 법인 검색 0건(개인사업자·법인명 불일치 등) → 상호명 기반으로 나머지 소스 최대한 조회
-    // (국민연금·제조업·공장등록·GMP·회수·뉴스는 상호명으로 조회 가능. 법인정보/재무/국세청은 미확보)
-    return { report: await finishLive(name, { corpNm: name }) };
-  }
   if (cands.length === 1) return { report: await finishLive(name, cands[0]) };
-  return { candidates: cands, name };
+  if (cands.length >= 2) return { candidates: cands, name, source: 'fsc' };
+
+  // 금융위 법인 0건(애매·개인사업자·명칭불일치) → 식약처 등록업체 기준 추천
+  const mfdsC = await mfdsCandidates(name);
+  if (mfdsC.length >= 2) return { candidates: mfdsC, name, source: 'mfds' };
+  if (mfdsC.length === 1) return { report: await finishLiveMfds(name, mfdsC[0]) };
+
+  // 식약처에도 후보 없음 → 상호명 기반으로 나머지 소스 최대한 조회
+  return { report: await finishLive(name, { corpNm: name }) };
 }
 
 // 법인 접두/접미어 제거 — 식약처/국민연금은 순수 상호로 조회해야 매칭됨
@@ -472,20 +517,30 @@ async function finishLive(name, corp) {
   return window.assembleLiveReport(corp.corpNm || name, corp, res);
 }
 
-// 동명업체 선택 UI
-function renderCandidates(name, cands) {
+// 동명업체 선택 UI — source: 'fsc'(금융위 법인) | 'mfds'(식약처 등록업체 기준)
+function renderCandidates(name, cands, source) {
   const root = $('#report');
   root.classList.remove('hidden');
   root.innerHTML = '';
+  const isMfds = source === 'mfds';
   const box = el('div', 'candbox');
-  box.appendChild(el('div', 'candhead', `「${esc(name)}」 동명·유사 업체 <b>${cands.length}건</b> — 조회할 업체를 선택하세요`));
+  const headSrc = isMfds ? '식약처 화장품제조업 등록업체 기준' : '금융위 법인 기준';
+  box.appendChild(el('div', 'candhead',
+    `「${esc(name)}」 ${isMfds ? '식약처 등록업체' : '동명·유사 업체'} <b>${cands.length}건</b> — 조회할 업체를 선택하세요` +
+    `<span class="candsub">${esc(headSrc)}${isMfds ? ' · 금융위 법인 미검색이라 식약처 등록명으로 추천' : ''}</span>`));
   cands.forEach((c) => {
     const card = el('button', 'cand');
-    const meta = [c.rep ? '대표 ' + esc(c.rep) : '', c.bzno ? '사업자 ' + esc(c.bzno) : '', c.addr ? esc(c.addr) : ''].filter(Boolean).join(' · ');
-    card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
+    const meta = [
+      c.rep ? '대표 ' + esc(c.rep) : '',
+      c.bzno ? '사업자 ' + esc(c.bzno) : '',
+      c.lcns ? '허가 ' + esc(c.lcns) : '',
+      c.addr ? esc(c.addr) : '',
+    ].filter(Boolean).join(' · ');
+    const tag = c.mfds ? '<span class="cand-tag">식약처 등록</span>' : '';
+    card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
     card.addEventListener('click', async () => {
       root.innerHTML = `<div class="empty">「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…</div>`;
-      try { render(await finishLive(name, c)); }
+      try { render(await (c.mfds ? finishLiveMfds(name, c) : finishLive(name, c))); }
       catch (e) { root.innerHTML = `<div class="empty">조회 실패: ${esc(e.message)}</div>`; }
     });
     box.appendChild(card);
@@ -1007,7 +1062,7 @@ function lookup(name) {
     root.classList.remove('hidden');
     root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}」</div>`;
     liveLookup(key)
-      .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates); else render(res.report); })
+      .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates, res.source); else render(res.report); })
       .catch((e) => {
         root.innerHTML =
           `<div class="empty">실데이터 조회 실패: ${esc(e.message)}<br>` +
