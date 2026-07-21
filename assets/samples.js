@@ -650,7 +650,7 @@ function assembleLiveReport(name, corp, res) {
     ];
   } else {
     finance = ['매출액', '영업이익', '총자산', '총부채', '자본금'].map((k) =>
-      f(k, null, 'D', '금융위 재무정보 API', null, why('finance', '재무 데이터 없음 (외감 비대상 추정)')));
+      f(k, null, 'D', '금융위 재무정보 API', null, why('finance', '금융위 재무 API 미수록 — 상장·공시대상 위주(비상장은 DART/신용조회로 확인)')));
   }
 
   const all = [...basic, ...capacity, ...finance];
@@ -674,7 +674,7 @@ function assembleLiveReport(name, corp, res) {
     { key: 'nts', name: '국세청 사업자상태', ok: !!bStt,
       detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}`
         : (!R.nts ? '미호출(사업자번호 없음)' : (!R.nts.ok ? `⚠ 연결 실패: ${R.nts.err}` : '조회 성공 · 해당 사업자 정보 없음')) },
-    stat('finance', 'finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '재무 데이터 없음(외감 비대상 추정)'),
+    stat('finance', 'finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '미수록 — 금융위 API는 상장·공시대상 위주(비상장은 DART/신용조회 확인)'),
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null, '0건 — 기능성 미취급 또는 상호 불일치'),
     stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `사업장 ${npsData.count}곳${npsSites > 1 ? `(${npsSites}곳 합산)` : ''}${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
     stat('maker', 'maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
