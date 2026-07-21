@@ -386,8 +386,9 @@ async function liveLookup(name) {
   } catch (e) { /* 기업기본정보 실패 → 식약처만으로 폴백 */ }
 
   if (!cands.length) {
-    const rptData = await proxyGet('rpt', { name });
-    return { report: window.mapMfdsReport(name, rptData) };
+    // 금융위 법인 검색 0건(개인사업자·법인명 불일치 등) → 상호명 기반으로 나머지 소스 최대한 조회
+    // (국민연금·제조업·공장등록·GMP·회수·뉴스는 상호명으로 조회 가능. 법인정보/재무/국세청은 미확보)
+    return { report: await finishLive(name, { corpNm: name }) };
   }
   if (cands.length === 1) return { report: await finishLive(name, cands[0]) };
   return { candidates: cands, name };
