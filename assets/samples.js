@@ -550,6 +550,7 @@ function assembleLiveReport(name, corp, res) {
   const rl = R.rpt && R.rpt.ok ? listOf(R.rpt.data, ['body.items', 'response.body.items.item']) : [];
   const fresh = rl.filter((i) => isFresh5(i.REPORT_DAY || i.report_day || i.PRDLST_REPORT_DE));
   const forms = [...new Set(fresh.map((i) => i.DOSAGE_FORM || i.dosage_form).filter(Boolean))];
+  const allForms = [...new Set(rl.map((i) => i.DOSAGE_FORM || i.dosage_form || i.PRDLST_TYPE).filter(Boolean))];
   const rptEmpty = '기능성 보고 이력 없음 — 기능성 미취급 또는 업체명 불일치';
 
   // 국민연금 (nps) — {search, detail, count} 형태 (검색→상세 2단계)
@@ -626,8 +627,9 @@ function assembleLiveReport(name, corp, res) {
       kkNavi ? '한국콜마 기준 실제 도로 경로 거리·소요시간'
         : (kkTravel ? '정확 좌표 직선거리×도로계수 추정 — 실측은 카카오내비(모빌리티) 신청 시 자동 전환'
         : '지역 중심점 직선거리 추정 — 카카오맵 버튼으로 재확인')),
-    f('기능성 보고품목 수 (5년내)', fresh.length || null, fresh.length ? 'A' : 'D', '식약처 보고품목 API', fresh.length ? today : null, fresh.length ? null : why('rpt', rptEmpty)),
-    f('신고 제형 분포', forms.length ? forms.join(', ') : null, 'C', '식약처 보고품목 API', forms.length ? today : null, forms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
+    f('기능성 보고품목 수', rl.length || null, rl.length ? (fresh.length ? 'A' : 'C') : 'D', '식약처 보고품목 API', rl.length ? today : null,
+      rl.length ? `전체 ${rl.length}건 · 최근 5년 ${fresh.length}건${fresh.length ? '' : ' — 최근 신고 없음(과거 이력)'}` : why('rpt', rptEmpty)),
+    f('신고 제형 분포', allForms.length ? allForms.join(', ') : null, 'C', '식약처 보고품목 API', allForms.length ? today : null, allForms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
     f('CGMP 적합업소', hasCgmp ? '적합 (식약처 GMP 등재)' : null, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 — ISO/할랄/비건은 공개 API 없어 방문 시 인증서 확인' : why('gmp', 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)')),
   ];
 
@@ -668,8 +670,11 @@ function assembleLiveReport(name, corp, res) {
     if (!r.ok) return { key, name: label, ok: false, detail: r.err };
     return okDetail != null ? { key, name: label, ok: true, detail: okDetail } : { key, name: label, ok: false, detail: emptyDetail };
   };
+  const hasCorp = !!(corp && (corp.crno || corp.bzno || corp.rep || corp.addr));
   const src_status = [
-    { name: '금융위 기업기본정보', ok: true, detail: `기준정보 확보 (${corp?.crno || '법인번호 미상'})` },
+    hasCorp
+      ? { name: '금융위 기업기본정보', ok: true, detail: `기준정보 확보 (${corp.crno || '법인번호 미상'})` }
+      : { name: '금융위 기업기본정보', ok: false, warn: true, detail: '법인 미검색 — 개인사업자이거나 법인명 불일치(상호명으로 타 소스 조회)' },
     // 연결 실패 / 조회성공·데이터없음 을 명확히 구분
     { key: 'nts', name: '국세청 사업자상태', ok: !!bStt,
       detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}`
@@ -724,6 +729,7 @@ function assembleLiveReport(name, corp, res) {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
       version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
       max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
+      no_corp: !hasCorp, // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회 안내용
       // 길찾기(카카오·티맵) 연동용 — 기준점(한국콜마)→방문지
       ref_point: { name: REF_POINT.name, addr: REF_POINT.addr, lat: REF_POINT.lat, lng: REF_POINT.lng },
       visit_addr: (kkTravel && kkTravel.destAddr) || fctAddr || corp?.addr || npsAddr || null,

@@ -844,6 +844,13 @@ function render(report, opts = {}) {
     root.appendChild(el('div', 'livenote',
       '🟢 <b>실데이터</b> — data.go.kr 공공 API 조회 결과입니다. ' +
       '값이 없는 항목은 <code>data_gap</code>으로 명시합니다.'));
+    // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회임을 안내
+    if (m.no_corp) {
+      root.appendChild(el('div', 'gennote',
+        '⚠️ <b>금융위 법인 정보를 찾지 못했습니다</b> — 개인사업자이거나 등록 법인명이 검색어와 다른 경우입니다. ' +
+        '상호명으로 <b>식약처·국민연금·공장등록·회수이력 등은 조회</b>했으나, <b>법인등록번호·재무·국세청 상태</b>는 법인 매칭이 안 돼 비어 있습니다. ' +
+        '정확한 <b>법인명</b> 또는 <b>(주)</b> 포함 명칭으로 다시 검색해 보세요.'));
+    }
     // 📡 소스별 조회 상태 — 무엇이 왜 비었는지 + 체크 해제 시 리포트에서 제외
     if (Array.isArray(m.src_status) && m.src_status.length) {
       const excluded = getExcluded();
