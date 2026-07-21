@@ -39,15 +39,16 @@ function cleanUpstreamDetail(body, status) {
 }
 
 // 상류 호출 공통 — 타임아웃·네트워크오류·비정상응답을 항상 CORS JSON으로 정규화(플랫폼 500 크래시 방지).
-// 일시적 장애(5xx·429·타임아웃)는 짧게 재시도해 순간 blip을 자동 복구.
+// 느린 공공 API에는 넉넉한 타임아웃(첫 시도 우선), 빠르게 실패하는 5xx·네트워크오류만 재시도.
+// 타임아웃(느린 응답)은 재시도해도 예산만 소모하므로 재시도하지 않는다.
 async function relay(target, label, init) {
   const TRANSIENT = new Set([502, 503, 504, 429]);
-  const ATTEMPTS = 3, PER_MS = 8000;
-  const DEADLINE = Date.now() + 18000; // Edge 실행한도(504) 방지 — 총예산 18초
+  const ATTEMPTS = 3, PER_MS = 19000; // 시도당 최대 19초 — data.go 느린 응답(GMP 500건 등) 수용
+  const DEADLINE = Date.now() + 23000; // Edge 실행한도(≈25초) 안에서 총예산 23초
   let lastStatus = 0, lastBody = '', lastErr = '';
   for (let i = 0; i < ATTEMPTS; i++) {
     const remaining = DEADLINE - Date.now();
-    if (remaining < 1500) break; // 남은 예산 부족 → 중단
+    if (remaining < 2000) break; // 남은 예산 부족 → 중단
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), Math.min(PER_MS, remaining));
     let upstream;
@@ -57,16 +58,17 @@ async function relay(target, label, init) {
       clearTimeout(timer);
       const aborted = e && e.name === 'AbortError';
       lastStatus = aborted ? 504 : 0;
-      lastErr = aborted ? '타임아웃' : String(e && e.message || e);
-      if (i < ATTEMPTS - 1 && Date.now() + 900 < DEADLINE) { await sleep(600); continue; } // 순간 오류 재시도
+      lastErr = aborted ? '타임아웃(응답 지연)' : String(e && e.message || e);
+      // 네트워크 오류(즉시 실패)만 재시도. 타임아웃은 예산 크게 소모하므로 즉시 반환.
+      if (!aborted && Date.now() + 1500 < DEADLINE) { await sleep(500); continue; }
       return jsonRes({ error: `${label} 상류 호출 실패`, detail: lastErr }, aborted ? 504 : 502);
     }
     clearTimeout(timer);
     const body = await upstream.text().catch(() => '');
     if (upstream.ok) return new Response(body, { status: 200, headers: JSON_HDR });
     lastStatus = upstream.status; lastBody = body;
-    // 일시적 5xx·429는 백오프 후 재시도(예산 내), 그 외(4xx 등)는 즉시 반환
-    if (TRANSIENT.has(upstream.status) && i < ATTEMPTS - 1 && Date.now() + 900 < DEADLINE) { await sleep(700); continue; }
+    // 빠르게 실패하는 일시적 5xx·429만 백오프 후 재시도(점검/과부하 blip), 그 외(4xx 등)는 즉시 반환
+    if (TRANSIENT.has(upstream.status) && Date.now() + 1500 < DEADLINE) { await sleep(700); continue; }
     break;
   }
   return jsonRes({ error: `${label} 상류 HTTP ${lastStatus || ''}`.trim(), upstreamStatus: lastStatus, detail: cleanUpstreamDetail(lastBody, lastStatus) }, 502);
