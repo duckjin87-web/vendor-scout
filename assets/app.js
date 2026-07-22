@@ -345,20 +345,26 @@ async function aggLookup(nm) {
   if (!getProxy() || !nm) return null;
   const nk = stripCorp(nm).replace(/\s/g, '');
   let web;
-  try { web = await proxyOnlyGet('naverWeb', { query: nm, display: '25' }); } catch { return null; }
+  try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 화장품`, display: '25' }); } catch { return null; }
   const items = (web && web.items) || [];
-  let bzno = null, rep = null, host = null, url = null;
+  let bzno = null, rep = null, host = null, url = null, corpName = null;
   for (const it of items) {
     let h = ''; try { h = new URL(it.link).hostname; } catch { continue; }
-    if (!AGG_HOSTS.test(h)) continue;
     const t = (String(it.title || '') + ' ' + String(it.description || '')).replace(/<\/?b>/g, '');
     if (nk.length >= 2 && !t.replace(/\s/g, '').includes(nk)) continue; // 상호 불일치 배제
-    if (!bzno) { const m = t.match(/(\d{3})-(\d{2})-(\d{5})/) || t.match(/(?<!\d)(\d{10})(?!\d)/); if (m) bzno = m[0].replace(/\D/g, ''); }
-    if (!rep) { const m = t.match(/대표자?\s*[:\-]?\s*([가-힣]{2,4}\*{0,2})/) || t.match(/[-·]\s*([가-힣]{1,3}\*{1,2})/); if (m) rep = m[1]; }
-    if (!host) { host = h.replace(/^www\./, ''); url = it.link; }
-    if (bzno && rep) break;
+    const isAgg = AGG_HOSTS.test(h);
+    const bm = t.match(/(\d{3})-(\d{2})-(\d{5})/) || t.match(/(?<!\d)(\d{10})(?!\d)/);
+    const rm = t.match(/대표자?\s*[:\-]?\s*([가-힣]{2,4}\*{0,2})/) || t.match(/[가-힣]{2,}\s*[-·]\s*([가-힣]{1,3}\*{1,2})/);
+    // 집계 도메인이거나, (사업자번호 + 대표자) 둘 다 담긴 신뢰 결과만 채택
+    if (!isAgg && !(bm && rm)) continue;
+    if (!bzno && bm) bzno = bm[0].replace(/\D/g, '');
+    if (!rep && rm) rep = rm[1];
+    // 법인 형태 상호(주식회사/(주)) 포착 → 금융위 재검색용
+    if (!corpName) { const cm = t.match(/((?:주식회사|㈜|\(주\))\s*[가-힣A-Za-z0-9]{2,}|[가-힣A-Za-z0-9]{2,}\s*(?:주식회사|㈜))/); if (cm && cm[1].replace(/\s/g, '').includes(nk)) corpName = cm[1].replace(/\s+/g, ' ').trim(); }
+    if (!host && (bm || rm)) { host = h.replace(/^www\./, ''); url = it.link; } // 실제 값 나온 사이트로 귀속
+    if (bzno && rep && corpName) break;
   }
-  return (bzno || rep) ? { host: host || '집계사이트', url, bzno, rep, opneDe: null, status: null } : null;
+  return (bzno || rep || corpName) ? { host: host || '웹검색', url, bzno, rep, corpName, opneDe: null, status: null } : null;
 }
 
 // 카카오 이동거리 — 한국콜마(기준점)→방문지.
@@ -471,11 +477,15 @@ async function finishLiveMfds(name, cand) {
 // 1단계: 기준정보(동명업체 후보) 조회 → {candidates} 또는 {report}
 //  금융위 법인 후보 우선 → 없으면 식약처 등록업체 기준 후보 추천 → 그래도 없으면 상호명 조회
 async function liveLookup(name) {
-  let cands = [];
-  try {
-    const corpData = await proxyGet('corp', { name });
-    cands = window.mapCorpCandidates(corpData);
-  } catch (e) { /* 기업기본정보 실패 → 식약처 기준 추천으로 */ }
+  const tryCorp = async (q) => { try { return window.mapCorpCandidates(await proxyGet('corp', { name: q })); } catch { return []; } };
+  let cands = await tryCorp(name);
+  // 금융위가 순수 상호로 0건이면 법인 형태 변형으로 재시도(개인→법인 전환·표기차 대응)
+  if (!cands.length) {
+    for (const v of [`주식회사 ${name}`, `${name} 주식회사`, `(주)${name}`]) {
+      cands = await tryCorp(v);
+      if (cands.length) break;
+    }
+  }
 
   if (cands.length === 1) return { report: await finishLive(name, cands[0]) };
   if (cands.length >= 2) return { candidates: cands, name, source: 'fsc' };
@@ -826,19 +836,25 @@ function renderRecalls(recalls) {
   return box;
 }
 
-// 🏷 제조원 역추적 — 이 업체를 제조원/제조사로 표기한 웹문서(납품 브랜드·제품 추정)
+// 🔎 웹 언급 추적 — 업체 언급 웹문서를 유형(제조원·채용·기업보고서)으로 분류(활동·거래 단서)
 function renderOemTrace(list) {
   if (!list || !list.length) return null;
   const box = el('div', 'oembox');
-  box.appendChild(el('h4', null, `🏷 제조원 역추적 <span>이 업체를 '제조원'으로 표기한 웹문서 ${list.length}건 — 납품·거래 추정(참고)</span>`));
+  box.appendChild(el('h4', null, `🔎 웹 언급 추적 <span>업체 언급 웹문서 ${list.length}건 — 활동·거래 단서(참고)</span>`));
   const ul = el('ul');
   list.forEach((o) => {
     const li = el('li');
+    const tagCls = o.tag === '채용' ? 'ot-hire' : o.tag === '기업보고서' ? 'ot-report' : o.tag === '제조원/납품' ? 'ot-oem' : 'ot-etc';
+    const tag = o.tag ? `<span class="ot-tag ${tagCls}">${esc(o.tag)}</span>` : '';
     const t = o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.title || o.link)}</a>` : esc(o.title || '');
-    li.innerHTML = `<div class="ot-t">${t}</div>${o.desc ? `<div class="ot-d">${esc(o.desc)}</div>` : ''}`;
+    li.innerHTML = `<div class="ot-t">${tag}${t}</div>${o.desc ? `<div class="ot-d">${esc(o.desc)}</div>` : ''}`;
     ul.appendChild(li);
   });
   box.appendChild(ul);
+  // 기업보고서 언급이 있으면 재무가 어딘가 존재한다는 신호
+  if (list.some((o) => o.tag === '기업보고서')) {
+    box.appendChild(el('div', 'ot-hint', 'ℹ️ 기업신용보고서가 존재 — 비공개 재무자료 있음(신용조회 시 재무 확인 가능)'));
+  }
   return box;
 }
 

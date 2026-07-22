@@ -634,19 +634,23 @@ function assembleLiveReport(name, corp, res) {
   }) : [];
   const news = relevantNews.length ? relevantNews.slice(0, 5) : null;
 
-  // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
+  // 웹 언급 추적 — 업체를 언급한 웹문서를 유형(제조원·채용·기업보고서)으로 분류(활동·거래 단서)
   const oemRaw = R.oemTrace && R.oemTrace.ok ? R.oemTrace.data : null;
   const oemItems = (oemRaw && oemRaw.items) || [];
   const oemKey = stripCorp(name).replace(/\s/g, '');
   const MFG = /(제조원|제조사|OEM|ODM|생산|납품)/i;
+  const oemTag = (host, txt) => /saramin|jobkorea|wanted|incruit|jobplanet|catch\.co|albamon/i.test(host) ? '채용'
+    : /happycampus|nice|kisline|kportal|cretop|kised|creditn|report|기업보고서|신용/i.test(host + txt) ? '기업보고서'
+    : /제조원|OEM|ODM|납품/i.test(txt) ? '제조원/납품' : '언급';
   const oem_trace = oemKey.length >= 2 ? oemItems.filter((it) => {
     const t = (String(it.title || '') + ' ' + String(it.description || '')).replace(/<\/?b>/g, '');
     return t.replace(/\s/g, '').includes(oemKey) && MFG.test(t);
-  }).slice(0, 6).map((it) => ({
-    title: String(it.title || '').replace(/<\/?b>/g, ''),
-    link: it.link || '',
-    desc: String(it.description || '').replace(/<\/?b>/g, '').slice(0, 120),
-  })) : [];
+  }).slice(0, 6).map((it) => {
+    let host = ''; try { host = new URL(it.link).hostname; } catch { /* ignore */ }
+    const title = String(it.title || '').replace(/<\/?b>/g, '');
+    const desc = String(it.description || '').replace(/<\/?b>/g, '').slice(0, 120);
+    return { title, link: it.link || '', desc, tag: oemTag(host, title + ' ' + desc) };
+  }) : [];
 
   // 식약처 화장품 회수·판매중지 — 목록에서 업체명 일치 건. 응답 필드명 확정 전이라 값 스캔으로 견고하게 추출.
   const recallListAll = R.recall && R.recall.ok ? listOf(R.recall.data, ['response.body.items.item', 'body.items', 'items']) : [];
