@@ -345,7 +345,7 @@ async function aggLookup(nm) {
   if (!getProxy() || !nm) return null;
   const nk = stripCorp(nm).replace(/\s/g, '');
   let web;
-  try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 대표자 사업자등록번호`, display: '20' }); } catch { return null; }
+  try { web = await proxyOnlyGet('naverWeb', { query: nm, display: '25' }); } catch { return null; }
   const items = (web && web.items) || [];
   let bzno = null, rep = null, host = null, url = null;
   for (const it of items) {
@@ -562,17 +562,21 @@ async function finishLive(name, corp) {
     const mkR = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
     const fcR = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
     const aggBzno = res.bizAgg && res.bizAgg.ok && res.bizAgg.data ? res.bizAgg.data.bzno : null;
-    const bz2 = findBznoIn(mkR[0]) || findBznoIn(fcR[0]) || aggBzno;
-    if (bz2 && String(bz2).replace(/\D/g, '').length === 10) {
-      const b = String(bz2).replace(/\D/g, '');
-      // 국세청 사업자상태 — 1차에서 사업자번호 없어 실패했으면 추출 번호로 재조회
-      if (!res.nts || !res.nts.ok) {
-        try { res.nts = { ok: true, data: await proxyOnlyGet('ntsStatus', { b_no: b }) }; } catch (e) { /* 유지 */ }
+    // 레코드 전체를 훑어 사업자번호 후보 수집(첫 건만 보면 놓침) — 식약처 → 공장 → 집계 순
+    const bzFrom = (list) => { for (const r of list) { const b = findBznoIn(r); if (b) return b; } return null; };
+    const cands = [bzFrom(mkR), bzFrom(fcR), aggBzno]
+      .map((b) => b ? String(b).replace(/\D/g, '') : null).filter((b) => b && b.length === 10);
+    const uniqBz = [...new Set(cands)];
+    // 국세청 사업자상태 — 후보 번호들로 재조회, 실제 상태값 나오는 번호 채택
+    const ntsStatusOf = (d) => { const it = d && Array.isArray(d.data) ? d.data[0] : null; return it && it.b_stt ? String(it.b_stt).trim() : ''; };
+    if (!res.nts || !res.nts.ok || !ntsStatusOf(res.nts.data)) {
+      for (const b of uniqBz) {
+        try { const d = await proxyOnlyGet('ntsStatus', { b_no: b }); if (!res.nts || !res.nts.ok || ntsStatusOf(d)) res.nts = { ok: true, data: d }; if (ntsStatusOf(d)) break; } catch { /* 다음 후보 */ }
       }
-      // 국민연금 — 상호검색 결과가 약하면(합산 미확보) 사업자번호로 정확 재조회
-      if (!res.nps || !res.nps.ok || !(res.nps.data && res.nps.data.total)) {
-        try { const npsBz = await npsLookup(nm, b); if (npsBz && npsBz.count) res.nps = { ok: true, data: npsBz }; } catch { /* 유지 */ }
-      }
+    }
+    // 국민연금 — 상호검색 결과가 약하면(합산 미확보) 사업자번호로 정확 재조회
+    if (uniqBz[0] && (!res.nps || !res.nps.ok || !(res.nps.data && res.nps.data.total))) {
+      try { const npsBz = await npsLookup(nm, uniqBz[0]); if (npsBz && npsBz.count) res.nps = { ok: true, data: npsBz }; } catch { /* 유지 */ }
     }
   }
 
