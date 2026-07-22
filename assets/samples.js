@@ -94,6 +94,25 @@ function crossVerify(ctx) {
   return { items, level, warnCount };
 }
 
+// 레코드에서 사업자등록번호 추출 — 사업자번호 힌트 키 우선, 없으면 ###-##-##### 패턴 스캔.
+// (금융위 법인 미확보 시 식약처/공장 레코드에서 사업자번호를 건지면 국세청·국민연금 재조회 가능)
+function findBzno(rec) {
+  if (!rec) return null;
+  const dash = /(\d{3})-?(\d{2})-?(\d{5})/;
+  // 1) 키에 사업자번호 힌트가 있는 필드 우선
+  for (const [k, v] of Object.entries(rec)) {
+    if (!/사업자|BIZR|BZNO|BSNM|CORP_?NO|business|regist.*no/i.test(k)) continue;
+    const m = String(v == null ? '' : v).match(dash);
+    if (m) return m[1] + m[2] + m[3];
+  }
+  // 2) 값에서 사업자번호 형식(###-##-#####) 스캔 — 대시 있는 경우만(전화·허가번호 오탐 방지)
+  for (const v of Object.values(rec)) {
+    const s = String(v == null ? '' : v);
+    if (/\d{3}-\d{2}-\d{5}/.test(s)) { const m = s.match(dash); if (m) return m[1] + m[2] + m[3]; }
+  }
+  return null;
+}
+
 // 목록 응답에서 상호가 포함된 레코드 찾기(필드명이 API마다 달라 전체 값 스캔). stripCorp는 런타임(app.js) 전역.
 function matchByName(name, list) {
   const key = stripCorp(name).replace(/\s/g, '');
@@ -541,14 +560,27 @@ function assembleLiveReport(name, corp, res) {
   const mkAddr = mk ? (mk.ADDR ?? mk.SITE_ADDR ?? mk.LOCP_ADDR ?? mk.locplc ?? mk.소재지 ??
     Object.values(mk).find(looksAddr) ?? null) : null;
 
+  // 금융위 법인 미확보 시 보강: 식약처/공장 레코드 → 외부 집계 사이트(비공식) 순
+  const agg = R.bizAgg && R.bizAgg.ok && R.bizAgg.data ? R.bizAgg.data : null;
+  const aggSrc = agg ? `외부 집계(${agg.host})` : '외부 집계';
+  const recBzno = corp?.bzno ? null : (findBzno(mk) || findBzno(fctHit));
+  const bznoVal = corp?.bzno || recBzno || (agg && agg.bzno) || null;
+  const bznoSrc = corp?.bzno ? '금융위 기업기본정보' : (recBzno ? '식약처/공장등록' : ((agg && agg.bzno) ? aggSrc : '금융위 기업기본정보'));
+  const bznoNote = corp?.bzno ? null : (recBzno ? '식약처/공장 레코드 추출' : ((agg && agg.bzno) ? '외부 집계 사이트 참고(비공식·국세청 원본 확인 권장)' : '법인 미검색으로 미확보'));
+  const repVal = corp?.rep || mkRep || (agg && agg.rep) || null;
+  const repSrc = corp?.rep ? '금융위 기업기본정보' : (mkRep ? '식약처 화장품제조업 API' : ((agg && agg.rep) ? aggSrc : '식약처 화장품제조업 API'));
+  const repNote = corp?.rep ? null : (mkRep ? '식약처 제조업 허가상 대표자 (금융위 법인 미확보 보강)' : ((agg && agg.rep) ? '외부 집계 사이트 참고(비공식)' : why('maker', '대표자 정보 없음')));
+  const estbVal = fmtDate(corp?.estbDt) || (agg && agg.opneDe) || null;
+  const bSttVal = bStt || (agg && agg.status) || null;
+
   const basic = [
     f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
-    f('사업자등록번호', corp?.bzno || null, 'A', '금융위 기업기본정보', today),
-    f('사업자 상태', bStt, bStt ? 'A' : 'D', '국세청 사업자상태', bStt ? today : null, bStt ? (bTax || null) : why('nts', '국세청 상태 조회 실패 — 사업자번호/승인 확인')),
-    f('대표자', corp?.rep || mkRep || null, (corp?.rep || mkRep) ? 'A' : 'D',
-      corp?.rep ? '금융위 기업기본정보' : '식약처 화장품제조업 API', (corp?.rep || mkRep) ? today : null,
-      corp?.rep ? null : (mkRep ? '식약처 제조업 허가상 대표자 (금융위 법인 미확보 보강)' : why('maker', '대표자 정보 없음'))),
-    f('설립일', fmtDate(corp?.estbDt), 'A', '금융위 기업기본정보', fmtDate(corp?.estbDt)),
+    f('사업자등록번호', bznoVal, bznoVal ? (corp?.bzno ? 'A' : 'B') : 'D', bznoSrc, bznoVal ? today : null, bznoNote),
+    f('사업자 상태', bSttVal, bSttVal ? (bStt ? 'A' : 'C') : 'D', bStt ? '국세청 사업자상태' : (agg && agg.status ? aggSrc : '국세청 사업자상태'), bSttVal ? today : null,
+      bStt ? (bTax || null) : (agg && agg.status ? '외부 집계 사이트 참고(비공식·국세청 원본 확인 권장)' : why('nts', '국세청 상태 조회 실패 — 사업자번호/승인 확인'))),
+    f('대표자', repVal, repVal ? (corp?.rep ? 'A' : 'B') : 'D', repSrc, repVal ? today : null, repNote),
+    f('설립일', estbVal, estbVal ? (corp?.estbDt ? 'A' : 'C') : 'D', corp?.estbDt ? '금융위 기업기본정보' : (agg && agg.opneDe ? aggSrc + ' 개업일' : '금융위 기업기본정보'), estbVal || null,
+      corp?.estbDt ? null : (agg && agg.opneDe ? '외부 집계 사이트상 개업일(비공식)' : null)),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
     f('제조업 등록', mk ? `등록${mkNo ? ` (허가 ${mkNo})` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null,
       mk ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인') : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
@@ -601,6 +633,20 @@ function assembleLiveReport(name, corp, res) {
     return t.includes(newsKey);
   }) : [];
   const news = relevantNews.length ? relevantNews.slice(0, 5) : null;
+
+  // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
+  const oemRaw = R.oemTrace && R.oemTrace.ok ? R.oemTrace.data : null;
+  const oemItems = (oemRaw && oemRaw.items) || [];
+  const oemKey = stripCorp(name).replace(/\s/g, '');
+  const MFG = /(제조원|제조사|OEM|ODM|생산|납품)/i;
+  const oem_trace = oemKey.length >= 2 ? oemItems.filter((it) => {
+    const t = (String(it.title || '') + ' ' + String(it.description || '')).replace(/<\/?b>/g, '');
+    return t.replace(/\s/g, '').includes(oemKey) && MFG.test(t);
+  }).slice(0, 6).map((it) => ({
+    title: String(it.title || '').replace(/<\/?b>/g, ''),
+    link: it.link || '',
+    desc: String(it.description || '').replace(/<\/?b>/g, '').slice(0, 120),
+  })) : [];
 
   // 식약처 화장품 회수·판매중지 — 목록에서 업체명 일치 건. 응답 필드명 확정 전이라 값 스캔으로 견고하게 추출.
   const recallListAll = R.recall && R.recall.ok ? listOf(R.recall.data, ['response.body.items.item', 'body.items', 'items']) : [];
@@ -710,6 +756,8 @@ function assembleLiveReport(name, corp, res) {
       ? { key: 'recall', name: '식약처 회수·판매중지', ok: true, warn: recalls.length > 0, detail: recalls.length ? `⚠ 회수·판매중지 이력 ${recalls.length}건` : `이력 없음 (전체 ${recallListAll.length}건 조회)` }
       : stat('recall', 'recall', '식약처 회수·판매중지', null, '회수정보 조회 실패'),
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
+    R.oemTrace ? { key: 'oem', name: '제조원 역추적 (웹)', ok: oem_trace.length > 0, warn: false, detail: oem_trace.length ? `${oem_trace.length}건 납품/제조 추정 페이지` : '제조원 표기 웹문서 없음' } : null,
+    agg ? { name: `외부 집계 보강 (${agg.host})`, ok: true, warn: true, detail: `비공식 참고 — ${[agg.bzno ? '사업자번호' : null, agg.rep ? '대표자' : null, agg.opneDe ? '개업일' : null, agg.status ? '상태' : null].filter(Boolean).join('·') || '정보'} 추출` } : null,
   ].filter(Boolean);
 
   const risk_flags = [];
@@ -742,12 +790,13 @@ function assembleLiveReport(name, corp, res) {
       version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
       max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
       no_corp: !hasCorp, // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회 안내용
+      biz_agg: agg ? { host: agg.host, url: agg.url } : null, // 외부 집계 보강 출처(비공식)
       // 길찾기(카카오·티맵) 연동용 — 기준점(한국콜마)→방문지
       ref_point: { name: REF_POINT.name, addr: REF_POINT.addr, lat: REF_POINT.lat, lng: REF_POINT.lng },
       visit_addr: (kkTravel && kkTravel.destAddr) || fctAddr || corp?.addr || npsAddr || null,
       visit_coord: (kkTravel && kkTravel.dest && isFinite(kkTravel.dest.lat) && isFinite(kkTravel.dest.lng)) ? { lat: kkTravel.dest.lat, lng: kkTravel.dest.lng } : null,
     },
-    basic, capacity, finance, finance_history, finance_health, cross_diag, recalls, crosscheck, risk_flags, diff_from_prev: [],
+    basic, capacity, finance, finance_history, finance_health, cross_diag, recalls, oem_trace, crosscheck, risk_flags, diff_from_prev: [],
     news, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
   };
 }

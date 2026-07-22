@@ -323,6 +323,40 @@ async function findHomepage(nm, corp) {
   return { proposed, candidates: scored };
 }
 
+// 사업자정보 집계 사이트(비공식)에서 사업자번호·대표자·개업일·상태 보강 — 금융위 법인 미확보 시.
+// 이들 사이트는 국세청 공개 데이터를 재수집한 2차 출처라 '참고(추정)'로만 표기.
+const AGG_HOSTS = /(^|\.)(moneypin\.biz|bizno\.net|nicebizinfo\.|marketbz\.|cretop\.|sbiz24\.|findbiz\.|jaoms\.|ftc\.go\.kr)/i;
+async function aggLookup(nm) {
+  if (!getProxy() || !nm) return null;
+  const nk = stripCorp(nm).replace(/\s/g, '');
+  let web;
+  try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 사업자등록번호`, display: '15' }); } catch { return null; }
+  const items = (web && web.items) || [];
+  let cand = null;
+  for (const it of items) {
+    let host = ''; try { host = new URL(it.link).hostname; } catch { continue; }
+    if (!AGG_HOSTS.test(host)) continue;
+    const t = (String(it.title || '') + ' ' + String(it.description || '')).replace(/<\/?b>/g, '').replace(/\s/g, '');
+    if (nk.length >= 2 && !t.includes(nk)) continue; // 상호 불일치 페이지 배제
+    cand = it; break;
+  }
+  if (!cand) return null;
+  let page;
+  try { page = await proxyOnlyGet('fetchPage', { url: cand.link }); } catch { return null; }
+  const text = htmlToText((page && page.text) || '');
+  if (!text || (nk.length >= 2 && !text.replace(/\s/g, '').includes(nk))) return null; // 그 업체 페이지 아님
+  const g = (re) => { const m = text.match(re); return m ? String(m[1]).trim() : null; };
+  const bznoM = text.match(/(\d{3})-(\d{2})-(\d{5})/);
+  const bzno = bznoM ? bznoM[1] + bznoM[2] + bznoM[3] : null;
+  const rep = g(/(?:대표자명?|대표이사|대표\s*자?)\s*[:：]?\s*([가-힣]{2,4})(?![가-힣])/);
+  const opneRaw = g(/(?:개업일자?|설립일자?|등록일자?)\s*[:：]?\s*(\d{4}[-.]\s?\d{1,2}[-.]\s?\d{1,2})/);
+  const opneDe = opneRaw ? opneRaw.replace(/\s/g, '') : null;
+  const bizType = g(/(?:업종|종목|주업종)\s*[:：]?\s*([^\n·|,]{2,24})/);
+  const status = /폐업일자|폐업\s/.test(text) ? '폐업(추정)' : (/계속사업자|정상영업|영업중/.test(text) ? '계속사업자(추정)' : null);
+  let host = ''; try { host = new URL(cand.link).hostname.replace(/^www\./, ''); } catch {}
+  return (bzno || rep || opneDe) ? { host, url: cand.link, bzno, rep, opneDe, bizType, status } : null;
+}
+
 // 카카오 이동거리 — 한국콜마(기준점)→방문지.
 //  1순위: 카카오모빌리티 길찾기(실측). 이용신청 안 돼 있으면 실패 → 2순위.
 //  2순위: 카카오맵 Local API로 양 지점 정확 좌표 → 하버사인×도로계수로 추정(모빌리티 불필요).
@@ -493,6 +527,10 @@ async function finishLive(name, corp) {
     recall: proxyGet('recall', { rows: '500' }),
     nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
+    // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
+    oemTrace: proxyOnlyGet('naverWeb', { query: `${nm} 제조원`, display: '10' }),
+    // 금융위 법인 미확보 시에만 사업자정보 집계 사이트(비공식)로 사업자번호·대표·개업일·상태 보강
+    bizAgg: corp.crno ? Promise.resolve(null) : aggLookup(nm),
   };
   const keys = Object.keys(calls);
   const settled = await Promise.allSettled(keys.map((k) => calls[k]));
@@ -749,6 +787,22 @@ function renderRecalls(recalls) {
   return box;
 }
 
+// 🏷 제조원 역추적 — 이 업체를 제조원/제조사로 표기한 웹문서(납품 브랜드·제품 추정)
+function renderOemTrace(list) {
+  if (!list || !list.length) return null;
+  const box = el('div', 'oembox');
+  box.appendChild(el('h4', null, `🏷 제조원 역추적 <span>이 업체를 '제조원'으로 표기한 웹문서 ${list.length}건 — 납품·거래 추정(참고)</span>`));
+  const ul = el('ul');
+  list.forEach((o) => {
+    const li = el('li');
+    const t = o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.title || o.link)}</a>` : esc(o.title || '');
+    li.innerHTML = `<div class="ot-t">${t}</div>${o.desc ? `<div class="ot-d">${esc(o.desc)}</div>` : ''}`;
+    ul.appendChild(li);
+  });
+  box.appendChild(ul);
+  return box;
+}
+
 // 🔀 교차검증 자동진단 — 인력/주소를 여러 출처로 대조한 결과 패널
 function renderCrossDiag(cd) {
   if (!cd || !cd.items || !cd.items.length) return null;
@@ -947,6 +1001,9 @@ function render(report, opts = {}) {
 
   const cd = renderCrossDiag(report.cross_diag);
   if (cd) root.appendChild(cd);
+
+  const ot = renderOemTrace(report.oem_trace);
+  if (ot) root.appendChild(ot);
 
   const blocks = el('div', 'blocks');
   blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic)));
