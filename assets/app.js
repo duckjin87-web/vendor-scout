@@ -323,38 +323,42 @@ async function findHomepage(nm, corp) {
   return { proposed, candidates: scored };
 }
 
-// 사업자정보 집계 사이트(비공식)에서 사업자번호·대표자·개업일·상태 보강 — 금융위 법인 미확보 시.
-// 이들 사이트는 국세청 공개 데이터를 재수집한 2차 출처라 '참고(추정)'로만 표기.
-const AGG_HOSTS = /(^|\.)(moneypin\.biz|bizno\.net|nicebizinfo\.|marketbz\.|cretop\.|sbiz24\.|findbiz\.|jaoms\.|ftc\.go\.kr)/i;
+// 레코드/문자열에서 사업자등록번호 추출 — 대시형 우선, 없으면 10자리.
+function findBznoIn(rec) {
+  if (!rec) return null;
+  for (const [k, v] of Object.entries(rec)) {
+    if (!/사업자|BIZR|BZNO|BSNM|CORP_?NO|business|regist.*no/i.test(k)) continue;
+    const m = String(v == null ? '' : v).match(/(\d{3})-?(\d{2})-?(\d{5})/);
+    if (m) return m[1] + m[2] + m[3];
+  }
+  for (const v of Object.values(rec)) {
+    const s = String(v == null ? '' : v);
+    if (/\d{3}-\d{2}-\d{5}/.test(s)) { const m = s.match(/(\d{3})-(\d{2})-(\d{5})/); if (m) return m[1] + m[2] + m[3]; }
+  }
+  return null;
+}
+
+// 사업자정보 집계 사이트(비공식) 검색결과 '제목·요약'에서 대표자·사업자번호 추출 — 페이지 fetch 없이(JS렌더 회피).
+// 예: marketbz 제목 "주식회사 하이브팩토리-최**...8928702413" → 대표자 최**, 사업자번호 8928702413.
+const AGG_HOSTS = /(^|\.)(moneypin\.biz|bizno\.net|nicebizinfo\.|marketbz\.|cretop\.|sbiz24\.|findbiz\.|jaoms\.|ktdb\.|wgbiz\.)/i;
 async function aggLookup(nm) {
   if (!getProxy() || !nm) return null;
   const nk = stripCorp(nm).replace(/\s/g, '');
   let web;
-  try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 사업자등록번호`, display: '15' }); } catch { return null; }
+  try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 대표자 사업자등록번호`, display: '20' }); } catch { return null; }
   const items = (web && web.items) || [];
-  let cand = null;
+  let bzno = null, rep = null, host = null, url = null;
   for (const it of items) {
-    let host = ''; try { host = new URL(it.link).hostname; } catch { continue; }
-    if (!AGG_HOSTS.test(host)) continue;
-    const t = (String(it.title || '') + ' ' + String(it.description || '')).replace(/<\/?b>/g, '').replace(/\s/g, '');
-    if (nk.length >= 2 && !t.includes(nk)) continue; // 상호 불일치 페이지 배제
-    cand = it; break;
+    let h = ''; try { h = new URL(it.link).hostname; } catch { continue; }
+    if (!AGG_HOSTS.test(h)) continue;
+    const t = (String(it.title || '') + ' ' + String(it.description || '')).replace(/<\/?b>/g, '');
+    if (nk.length >= 2 && !t.replace(/\s/g, '').includes(nk)) continue; // 상호 불일치 배제
+    if (!bzno) { const m = t.match(/(\d{3})-(\d{2})-(\d{5})/) || t.match(/(?<!\d)(\d{10})(?!\d)/); if (m) bzno = m[0].replace(/\D/g, ''); }
+    if (!rep) { const m = t.match(/대표자?\s*[:\-]?\s*([가-힣]{2,4}\*{0,2})/) || t.match(/[-·]\s*([가-힣]{1,3}\*{1,2})/); if (m) rep = m[1]; }
+    if (!host) { host = h.replace(/^www\./, ''); url = it.link; }
+    if (bzno && rep) break;
   }
-  if (!cand) return null;
-  let page;
-  try { page = await proxyOnlyGet('fetchPage', { url: cand.link }); } catch { return null; }
-  const text = htmlToText((page && page.text) || '');
-  if (!text || (nk.length >= 2 && !text.replace(/\s/g, '').includes(nk))) return null; // 그 업체 페이지 아님
-  const g = (re) => { const m = text.match(re); return m ? String(m[1]).trim() : null; };
-  const bznoM = text.match(/(\d{3})-(\d{2})-(\d{5})/);
-  const bzno = bznoM ? bznoM[1] + bznoM[2] + bznoM[3] : null;
-  const rep = g(/(?:대표자명?|대표이사|대표\s*자?)\s*[:：]?\s*([가-힣]{2,4})(?![가-힣])/);
-  const opneRaw = g(/(?:개업일자?|설립일자?|등록일자?)\s*[:：]?\s*(\d{4}[-.]\s?\d{1,2}[-.]\s?\d{1,2})/);
-  const opneDe = opneRaw ? opneRaw.replace(/\s/g, '') : null;
-  const bizType = g(/(?:업종|종목|주업종)\s*[:：]?\s*([^\n·|,]{2,24})/);
-  const status = /폐업일자|폐업\s/.test(text) ? '폐업(추정)' : (/계속사업자|정상영업|영업중/.test(text) ? '계속사업자(추정)' : null);
-  let host = ''; try { host = new URL(cand.link).hostname.replace(/^www\./, ''); } catch {}
-  return (bzno || rep || opneDe) ? { host, url: cand.link, bzno, rep, opneDe, bizType, status } : null;
+  return (bzno || rep) ? { host: host || '집계사이트', url, bzno, rep, opneDe: null, status: null } : null;
 }
 
 // 카카오 이동거리 — 한국콜마(기준점)→방문지.
@@ -370,12 +374,24 @@ async function kakaoGeocode(addr) {
   const lng = Number(doc.x), lat = Number(doc.y);
   return (isFinite(lng) && isFinite(lat)) ? { lng, lat } : null;
 }
+// 지저분한 주소(괄호·"834층" 같은 상세)를 점진적으로 단순화하며 좌표변환 시도
+async function kakaoGeocodeFlex(addr) {
+  const base = String(addr || '');
+  const noParen = base.replace(/\([^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
+  const noDetail = noParen.replace(/[\s,·]*\d*\s*(층|호|호실)\D*$/, '').trim();
+  for (const a of [...new Set([base, noParen, noDetail])]) {
+    if (!a) continue;
+    const r = await kakaoGeocode(a).catch(() => null);
+    if (r) return r;
+  }
+  return null;
+}
 async function kakaoTravel(destAddr) {
   if (!getProxy()) throw new Error('프록시 미설정');
   if (!destAddr) throw new Error('방문 주소 없음');
   if (!_kolmarCoord) _kolmarCoord = await kakaoGeocode(KOLMAR_ADDR); // 실패(401 등) 시 여기서 throw
   if (!_kolmarCoord) throw new Error('기준점(한국콜마) 좌표 변환 실패');
-  const dest = await kakaoGeocode(destAddr);
+  const dest = await kakaoGeocodeFlex(destAddr);
   if (!dest) throw new Error(`방문지 좌표 변환 실패: ${destAddr}`);
 
   // 1순위: 모빌리티 실측
@@ -540,6 +556,25 @@ async function finishLive(name, corp) {
       ? { ok: true, data: settled[i].value }
       : { ok: false, err: String(settled[i].reason && settled[i].reason.message || settled[i].reason) };
   });
+
+  // ── 2차 보완 — 1차에서 확보한 사업자번호로 막혔던 소스 재조회(서로 보완해 채우기) ──
+  if (!corp.bzno) {
+    const mkR = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
+    const fcR = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
+    const aggBzno = res.bizAgg && res.bizAgg.ok && res.bizAgg.data ? res.bizAgg.data.bzno : null;
+    const bz2 = findBznoIn(mkR[0]) || findBznoIn(fcR[0]) || aggBzno;
+    if (bz2 && String(bz2).replace(/\D/g, '').length === 10) {
+      const b = String(bz2).replace(/\D/g, '');
+      // 국세청 사업자상태 — 1차에서 사업자번호 없어 실패했으면 추출 번호로 재조회
+      if (!res.nts || !res.nts.ok) {
+        try { res.nts = { ok: true, data: await proxyOnlyGet('ntsStatus', { b_no: b }) }; } catch (e) { /* 유지 */ }
+      }
+      // 국민연금 — 상호검색 결과가 약하면(합산 미확보) 사업자번호로 정확 재조회
+      if (!res.nps || !res.nps.ok || !(res.nps.data && res.nps.data.total)) {
+        try { const npsBz = await npsLookup(nm, b); if (npsBz && npsBz.count) res.nps = { ok: true, data: npsBz }; } catch { /* 유지 */ }
+      }
+    }
+  }
 
   // 카카오 실측 이동거리 — 공장(산단공) > 식약처 제조소 > 본점 순으로 방문지 선택.
   const fList = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
