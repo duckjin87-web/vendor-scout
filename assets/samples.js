@@ -559,6 +559,11 @@ function assembleLiveReport(name, corp, res) {
     ((Object.entries(mk).find(([k, v]) => /대표|PRSNL|RPRSNTV|PRSDNT|REPRE/i.test(k) && v) || [])[1]) ?? null) : null;
   const mkAddr = mk ? (mk.ADDR ?? mk.SITE_ADDR ?? mk.LOCP_ADDR ?? mk.locplc ?? mk.소재지 ??
     Object.values(mk).find(looksAddr) ?? null) : null;
+  // 식약처 제조업 등록(허가)일 — 법인 설립일 대용(등록일은 설립과 다를 수 있음). 날짜형 값 스캔.
+  const dateish = (v) => /^\s*(\d{4})[-.\/]?(\d{2})[-.\/]?(\d{2})\s*$/.test(String(v || '').trim());
+  const mkRegDt = mk ? (mk.PRMS_DT ?? mk.PRMISN_DE ?? mk.LCNS_DE ?? mk.PERMIT_DT ?? mk.허가일자 ?? mk.등록일자 ??
+    ((Object.entries(mk).find(([k, v]) => /(PRMS|PRMISN|LCNS|PERMIT|REG|허가|등록).*(DT|DE|DATE|YMD|일)/i.test(k) && dateish(v)) || [])[1])
+    ?? (Object.values(mk).find(dateish)) ?? null) : null;
 
   // 금융위 법인 미확보 시 보강: 식약처/공장 레코드 → 외부 집계 사이트(비공식) 순
   const agg = R.bizAgg && R.bizAgg.ok && R.bizAgg.data ? R.bizAgg.data : null;
@@ -570,7 +575,10 @@ function assembleLiveReport(name, corp, res) {
   const repVal = corp?.rep || mkRep || (agg && agg.rep) || null;
   const repSrc = corp?.rep ? '금융위 기업기본정보' : (mkRep ? '식약처 화장품제조업 API' : ((agg && agg.rep) ? aggSrc : '식약처 화장품제조업 API'));
   const repNote = corp?.rep ? null : (mkRep ? '식약처 제조업 허가상 대표자 (금융위 법인 미확보 보강)' : ((agg && agg.rep) ? '외부 집계 사이트 참고(비공식)' : why('maker', '대표자 정보 없음')));
-  const estbVal = fmtDate(corp?.estbDt) || (agg && agg.opneDe) || null;
+  const mkRegDate = mkRegDt ? fmtDate(mkRegDt) : null;
+  const estbVal = fmtDate(corp?.estbDt) || (agg && agg.opneDe) || mkRegDate || null;
+  const estbSrc = corp?.estbDt ? '금융위 기업기본정보' : ((agg && agg.opneDe) ? aggSrc + ' 개업일' : (mkRegDate ? '식약처 화장품제조업 API' : '금융위 기업기본정보'));
+  const estbNote = corp?.estbDt ? null : ((agg && agg.opneDe) ? '외부 집계 사이트상 개업일(비공식)' : (mkRegDate ? '★ 식약처 제조업 등록(허가)일 — 법인 설립일과 다를 수 있음' : null));
   const bSttVal = bStt || (agg && agg.status) || null;
 
   const basic = [
@@ -579,8 +587,7 @@ function assembleLiveReport(name, corp, res) {
     f('사업자 상태', bSttVal, bSttVal ? (bStt ? 'A' : 'C') : 'D', bStt ? '국세청 사업자상태' : (agg && agg.status ? aggSrc : '국세청 사업자상태'), bSttVal ? today : null,
       bStt ? (bTax || null) : (agg && agg.status ? '외부 집계 사이트 참고(비공식·국세청 원본 확인 권장)' : why('nts', '국세청 상태 조회 실패 — 사업자번호/승인 확인'))),
     f('대표자', repVal, repVal ? (corp?.rep ? 'A' : 'B') : 'D', repSrc, repVal ? today : null, repNote),
-    f('설립일', estbVal, estbVal ? (corp?.estbDt ? 'A' : 'C') : 'D', corp?.estbDt ? '금융위 기업기본정보' : (agg && agg.opneDe ? aggSrc + ' 개업일' : '금융위 기업기본정보'), estbVal || null,
-      corp?.estbDt ? null : (agg && agg.opneDe ? '외부 집계 사이트상 개업일(비공식)' : null)),
+    f('설립일 / 등록일', estbVal, estbVal ? (corp?.estbDt ? 'A' : 'C') : 'D', estbSrc, estbVal || null, estbNote),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
     f('제조업 등록', mk ? `등록${mkNo ? ` (허가 ${mkNo})` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null,
       mk ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인') : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
@@ -589,6 +596,9 @@ function assembleLiveReport(name, corp, res) {
       (fctAddr || mkAddr) ? today : null,
       fctAddr ? fctNote : (mkAddr ? '식약처 제조업 허가상 제조소 소재지 (산단공 공장등록 없음)' : fctNote)),
   ];
+  // 외부 집계에서 업종·연락처를 얻었으면 참고 필드로 추가(법인 미확보 소규모 업체 보강)
+  if (agg && agg.bizType) basic.push(f('업종', agg.bizType, 'C', aggSrc, today, '외부 집계 사이트 참고(비공식)'));
+  if (agg && agg.tel) basic.push(f('대표 연락처', agg.tel, 'C', aggSrc, today, '외부 집계 사이트 참고(비공식) — 방문 전 확인'));
 
   // 식약처 기능성 보고품목 (rpt)
   const rl = R.rpt && R.rpt.ok ? listOf(R.rpt.data, ['body.items', 'response.body.items.item']) : [];

@@ -364,7 +364,25 @@ async function aggLookup(nm) {
     if (!host && (bm || rm)) { host = h.replace(/^www\./, ''); url = it.link; } // 실제 값 나온 사이트로 귀속
     if (bzno && rep && corpName) break;
   }
-  return (bzno || rep || corpName) ? { host: host || '웹검색', url, bzno, rep, corpName, opneDe: null, status: null } : null;
+  // 찾은 집계 상세페이지를 fetch해 개업일·업종·전화·영업상태 추가 추출(SSR 사이트면 성공, JS렌더면 제목값만)
+  let opneDe = null, bizType = null, status = null, tel = null;
+  if (url) {
+    try {
+      const page = await proxyOnlyGet('fetchPage', { url });
+      const text = htmlToText((page && page.text) || '');
+      if (text && (nk.length < 2 || text.replace(/\s/g, '').includes(nk))) {
+        const g = (re) => { const m = text.match(re); return m ? m[1].trim() : null; };
+        const od = g(/(?:개업일자?|설립일자?|등록일자?|사업자?\s*등록일)\s*[:：]?\s*(\d{4}[-.]\s?\d{1,2}[-.]\s?\d{1,2})/);
+        opneDe = od ? od.replace(/\s/g, '') : null;
+        bizType = g(/(?:업종|종목|주업종|사업종류)\s*[:：]?\s*([^\n·|,]{2,30})/);
+        tel = g(/(?:전화|연락처|대표전화|TEL)\s*[:：]?\s*(0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4})/i) || g(/(0\d{1,2}-\d{3,4}-\d{4})/);
+        status = /폐업일자|폐업\s|폐업$/.test(text) ? '폐업(추정)' : (/계속사업자|정상영업|영업중/.test(text) ? '계속사업자(추정)' : null);
+        if (!bzno) { const m = text.match(/(\d{3})-(\d{2})-(\d{5})/); if (m) bzno = m[0].replace(/\D/g, ''); }
+        if (!rep) { const m = text.match(/(?:대표자명?|대표이사)\s*[:：]?\s*([가-힣]{2,4}\*{0,2})/); if (m) rep = m[1]; }
+      }
+    } catch { /* 페이지 fetch 실패(JS렌더 등) — 제목 추출값만 사용 */ }
+  }
+  return (bzno || rep || corpName || opneDe) ? { host: host || '웹검색', url, bzno, rep, corpName, opneDe, bizType, status, tel } : null;
 }
 
 // 카카오 이동거리 — 한국콜마(기준점)→방문지.
