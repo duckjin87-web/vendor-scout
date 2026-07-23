@@ -145,11 +145,11 @@ async function handleNtsStatus(url, env) {
   const q = new URLSearchParams({ serviceKey: env.DATA_GO_KR_API_KEY });
   const target = `https://api.odcloud.kr/api/nts-businessman/v1/status?${q}`;
   const bodyBytes = new TextEncoder().encode(JSON.stringify({ b_no: [bno] }));
-  let lastStatus = 0, lastBody = '';
-  // 최대 2회, 각 7초 — Edge 함수 실행 한도(504) 초과 방지
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let lastStatus = 0, lastBody = '', lastErr = '';
+  // 최대 3회, 각 6초(총예산 ~18초, Edge 한도 내). 500(EOF)·네트워크오류·타임아웃 모두 재시도.
+  for (let attempt = 0; attempt < 3; attempt++) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 7000);
+    const timer = setTimeout(() => ctrl.abort(), 6000);
     let up;
     try {
       up = await fetch(target, {
@@ -159,16 +159,18 @@ async function handleNtsStatus(url, env) {
       });
     } catch (e) {
       clearTimeout(timer);
-      lastStatus = 0; lastBody = String(e && e.message || e);
-      continue; // 네트워크 오류 → 재시도
+      lastStatus = 0; lastErr = (e && e.name === 'AbortError') ? '타임아웃(6초)' : String(e && e.message || e);
+      if (attempt < 2) { await sleep(500); continue; } // 네트워크오류·타임아웃 → 재시도
+      break;
     }
     clearTimeout(timer);
     const body = await up.text().catch(() => '');
     if (up.ok) return new Response(body, { status: 200, headers: JSON_HDR });
     lastStatus = up.status; lastBody = body;
-    if (up.status !== 500) break; // 500(EOF)만 재시도, 그 외는 즉시 반환
+    if ((up.status >= 500 || up.status === 429) && attempt < 2) { await sleep(500); continue; } // 5xx·429 재시도
+    break; // 4xx 등은 즉시 종료
   }
-  return jsonRes({ error: lastStatus ? `국세청 상류 HTTP ${lastStatus}` : '국세청 상태조회 실패', detail: (lastBody || '').slice(0, 300) }, 502);
+  return jsonRes({ error: lastStatus ? `국세청 상류 HTTP ${lastStatus}` : `국세청 호출 실패(${lastErr || '알수없음'})`, detail: (lastBody || lastErr || '').slice(0, 300) }, 502);
 }
 
 // 카카오 — 주소검색(좌표) / 길찾기(실측 거리·시간). 둘 다 REST 키 헤더 인증.
