@@ -1215,20 +1215,24 @@ function renderRecent() {
     c.addEventListener('click', () => { $('#q').value = c.dataset.q; lookup(c.dataset.q); }));
 }
 
-function lookup(name) {
-  const key = (name || '').trim();
+function lookup(name, bno) {
+  const nm = (name || '').trim();
+  const bz = (bno || '').replace(/\D/g, '');                 // 사업자번호 10자리(선택)
+  const bzDisp = bz.length === 10 ? bz.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3') : '';
+  const key = nm || bzDisp;                                  // 표시·최근검색용 라벨
   if (!key) return;
   pushRecent(key); renderRecent();
   const db = window.VENDOR_SAMPLES || {};
-  let report = db[key];
-  if (!report) {
+  // 샘플/정적 데이터는 업체명 기준으로만 매칭(사업자번호만 있으면 실시간 조회로)
+  let report = nm ? db[nm] : null;
+  if (!report && nm) {
     // 부분 일치 시도
-    const hit = Object.keys(db).find((k) => k.includes(key) || key.includes(k));
+    const hit = Object.keys(db).find((k) => k.includes(nm) || nm.includes(k));
     report = hit ? db[hit] : null;
   }
   // 식약처 실데이터(빌드타임): Actions가 시크릿으로 구운 정적 JSON에 있으면 실데이터 렌더
-  if (!report) {
-    const hit = staticHit(key);
+  if (!report && nm) {
+    const hit = staticHit(nm);
     if (hit) {
       const root = $('#report');
       root.classList.remove('hidden');
@@ -1245,8 +1249,10 @@ function lookup(name) {
   if (isConnected() && !report) {
     const root = $('#report');
     root.classList.remove('hidden');
-    root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}」</div>`;
-    liveLookup(key)
+    root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}${nm && bz ? ` · 사업자 ${bzDisp}` : ''}」</div>`;
+    // 업체명 + 사업자번호 병기 → liveLookup이 사업자번호 일치 법인만 선별(교집합)
+    const liveQuery = [nm, bz].filter(Boolean).join(' ');
+    liveLookup(liveQuery)
       .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates, res.source); else render(res.report); })
       .catch((e) => {
         root.innerHTML =
@@ -1254,12 +1260,12 @@ function lookup(name) {
           `<span style="font-size:12.5px">프록시 주소·키·API 승인을 확인하세요. 데모 데이터로 대체하려면 아래를 누르세요.</span><br><br>` +
           `<button class="act" id="fallbackBtn">데모 리포트 보기</button></div>`;
         const fb = $('#fallbackBtn');
-        if (fb) fb.addEventListener('click', () => render(window.generateReport(key)));
+        if (fb) fb.addEventListener('click', () => render(window.generateReport(nm || key)));
       });
     return;
   }
   // 범용성: 미등록 업체명은 이름 기반으로 데모 리포트 자동 생성
-  if (!report && window.generateReport) report = window.generateReport(key);
+  if (!report && window.generateReport) report = window.generateReport(nm || key);
   if (!report) {
     const root = $('#report');
     root.classList.remove('hidden');
@@ -1292,7 +1298,9 @@ document.addEventListener('DOMContentLoaded', () => {
       setProxy(next.trim());
       setProxyUI();
       const q = $('#q').value.trim();
-      if (q) lookup(q);
+      const bnoEl2 = $('#bno');
+      const bz2 = bnoEl2 ? bnoEl2.value.trim() : '';
+      if (q || bz2) lookup(q, bz2);
     });
     setProxyUI();
   }
@@ -1300,13 +1308,15 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#searchForm').addEventListener('submit', (e) => {
     e.preventDefault();
     const q = $('#q').value.trim();
-    if (!q) { // 빈 검색 = 초기화(저장 리포트 삭제 후 초기 화면)
+    const bnoEl = $('#bno');
+    const bz = bnoEl ? bnoEl.value.trim() : '';
+    if (!q && !bz) { // 빈 검색 = 초기화(저장 리포트 삭제 후 초기 화면)
       _sls(LAST_KEY, '');
       currentReport = null;
       const root = $('#report'); root.classList.add('hidden'); root.innerHTML = '';
       return;
     }
-    lookup(q);
+    lookup(q, bz);
   });
   renderRecent(); // 최근 검색 칩 초기 표시
 

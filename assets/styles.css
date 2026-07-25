@@ -73,6 +73,10 @@ a:hover { text-decoration: underline; }
   flex: 1; min-width: 200px; border: 0; background: transparent; color: var(--text);
   font-size: 15px; padding: 10px 12px; outline: none;
 }
+/* 사업자번호는 보조 입력 — 업체명보다 좁게, 좌측 구분선 */
+.searchbar input#bno {
+  flex: 0 1 220px; min-width: 150px; border-left: 1px solid var(--border);
+}
 .searchbar button {
   border: 0; background: var(--accent); color: #fff; font-weight: 600; font-size: 14px;
   padding: 11px 20px; border-radius: 10px; cursor: pointer; transition: filter .15s;
