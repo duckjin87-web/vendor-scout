@@ -526,9 +526,10 @@ function assembleLiveReport(name, corp, res) {
     return emptyMsg;
   };
 
-  // 식약처 제조업 등록 (maker) — 상호 일치 건 선택
+  // 식약처 제조업 등록 (maker) — 상호가 실제로 일치하는 건만 채택.
+  // ★ mkList[0] 폴백 금지: maker API가 상호 필터링을 안 해 첫 레코드가 '남의 회사'일 수 있음(할루시네이션 방지)
   const mkList = R.maker && R.maker.ok ? listOf(R.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const mk = matchByName(name, mkList) || mkList[0];
+  const mk = matchByName(name, mkList);
   const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? mk.PRMISN_NO ?? mk.prmisnNo ?? null) : null;
 
   // 국세청 사업자상태 (odcloud: {data:[{b_stt, tax_type, ...}]})

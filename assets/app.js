@@ -70,7 +70,7 @@ function buildProxyUrl(params) {
 // 서비스별 파라미터 매핑(논리키 → 실제 data.go 파라미터명). 실제 엔드포인트 URL은
 // 프록시(api/proxy.js·worker.js)에 단일 정의 — 화이트리스트로 오픈프록시 방지.
 const PARAM_MAP = {
-  corp:      { name: 'corpNm' },
+  corp:      { name: 'corpNm', bzno: 'bzno' }, // 상호 또는 사업자등록번호로 조회
   finance:   { crno: 'crno' },
   rpt:       { name: 'entp_name' },
   npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo' }, // 국민연금 V2 — camelCase
@@ -495,6 +495,25 @@ async function finishLiveMfds(name, cand) {
 // 1단계: 기준정보(동명업체 후보) 조회 → {candidates} 또는 {report}
 //  금융위 법인 후보 우선 → 없으면 식약처 등록업체 기준 후보 추천 → 그래도 없으면 상호명 조회
 async function liveLookup(name) {
+  // ── 사업자등록번호 입력/병기 지원 ── "143-81-19635" 또는 "코스맥스 143-81-19635"처럼
+  //    번호가 섞이면 금융위 corp를 bzno로 직접 조회(동명 계열사 중 정확한 법인 특정 → 신뢰성↑)
+  const bnoM = String(name).match(/(\d{3})-?(\d{2})-?(\d{5})/) || String(name).match(/(?<!\d)(\d{10})(?!\d)/);
+  const bno = bnoM ? bnoM[0].replace(/\D/g, '') : null;
+  const nameOnly = bno ? String(name).replace(bnoM[0], '').replace(/[\s,]+/g, ' ').trim() : String(name);
+  if (bno) {
+    let byBno = [];
+    try { byBno = window.mapCorpCandidates(await proxyGet('corp', { bzno: bno })); } catch { byBno = []; }
+    if (byBno.length === 1) return { report: await finishLive(nameOnly || byBno[0].corpNm, { ...byBno[0], bzno: byBno[0].bzno || bno }) };
+    if (byBno.length >= 2) {
+      // 이름 병기 시 상호로 좁혀 자동 선택, 아니면 후보 제시
+      const hit = nameOnly ? (matchByNameApp(nameOnly, byBno) || null) : null;
+      if (hit) return { report: await finishLive(nameOnly, { ...hit, bzno: hit.bzno || bno }) };
+      return { candidates: byBno, name: nameOnly || bno, source: 'fsc' };
+    }
+    // 금융위에 법인 0건 → 사업자번호로 국세청·국민연금·집계까지 최대 조회(개인/소규모 대응)
+    return { report: await finishLive(nameOnly || bno, { corpNm: nameOnly || bno, bzno: bno }) };
+  }
+
   const tryCorp = async (q) => { try { return window.mapCorpCandidates(await proxyGet('corp', { name: q })); } catch { return []; } };
   let cands = await tryCorp(name);
   // 금융위가 순수 상호로 0건이면 법인 형태 변형으로 재시도(개인→법인 전환·표기차 대응)
@@ -520,6 +539,15 @@ async function liveLookup(name) {
 // 법인 접두/접미어 제거 — 식약처/국민연금은 순수 상호로 조회해야 매칭됨
 function stripCorp(s) {
   return String(s || '').replace(/\(주\)|\(유\)|\(재\)|\(사\)|㈜|주식회사|유한회사/g, '').trim();
+}
+// 목록에서 상호가 실제 일치하는 레코드만 반환(불일치 시 null — 남의 회사 데이터 오염 방지). samples.js와 동일 로직.
+function matchByNameApp(name, list) {
+  const key = stripCorp(name).replace(/\s/g, '');
+  if (key.length < 2 || !Array.isArray(list)) return null;
+  return list.find((it) => Object.values(it).some((v) => {
+    const gn = stripCorp(String(v == null ? '' : v)).replace(/\s/g, '');
+    return gn.length >= 3 && gn.includes(key);
+  })) || null;
 }
 
 // NPS(B552015) 응답 파서 — resultType=json이면 서버가 500 크래시 → XML로 받아 파싱.
@@ -590,8 +618,9 @@ async function finishLive(name, corp) {
     const mkR = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
     const fcR = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
     const aggBzno = res.bizAgg && res.bizAgg.ok && res.bizAgg.data ? res.bizAgg.data.bzno : null;
-    // 레코드 전체를 훑어 사업자번호 후보 수집(첫 건만 보면 놓침) — 식약처 → 공장 → 집계 순
-    const bzFrom = (list) => { for (const r of list) { const b = findBznoIn(r); if (b) return b; } return null; };
+    // ★ 상호 일치 레코드에서만 사업자번호 추출 — maker/factory API가 상호 필터링을 안 하므로
+    //    전체를 훑으면 '남의 회사' 사업자번호를 잡아 국세청 재조회가 오염됨(할루시네이션 방지).
+    const bzFrom = (list) => { const r = matchByNameApp(name, list); return r ? findBznoIn(r) : null; };
     // 집계(법인) 번호를 앞에 — 국세청 등록 확률이 높음. 식약처 제조업 번호는 그 다음.
     const cands = [aggBzno, bzFrom(mkR), bzFrom(fcR)]
       .map((b) => b ? String(b).replace(/\D/g, '') : null).filter((b) => b && b.length === 10);
@@ -618,10 +647,12 @@ async function finishLive(name, corp) {
 
   // 카카오 실측 이동거리 — 공장(산단공) > 식약처 제조소 > 본점 순으로 방문지 선택.
   const fList = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const fAddr = fList[0] ? (fList[0].rnAdres ?? fList[0].lnmAdres ?? fList[0].lotNoAddr ?? fList[0].roadNmAddr ?? fList[0].adres ?? fList[0].ADRES ?? fList[0].fctryAddr ?? null) : null;
+  const fHit = matchByNameApp(name, fList) || (fList.length === 1 ? fList[0] : null); // 상호 일치 건만(단건이면 그대로)
+  const fAddr = fHit ? (fHit.rnAdres ?? fHit.lnmAdres ?? fHit.lotNoAddr ?? fHit.roadNmAddr ?? fHit.adres ?? fHit.ADRES ?? fHit.fctryAddr ?? null) : null;
   const mList = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
-  const mAddr = mList[0] ? (mList[0].ADDR ?? mList[0].SITE_ADDR ?? mList[0].LOCP_ADDR ?? mList[0].locplc ?? Object.values(mList[0]).find(looksAddr) ?? null) : null;
+  const mkHit = matchByNameApp(name, mList); // 상호 일치 건만(남의 회사 주소 오염 방지)
+  const mAddr = mkHit ? (mkHit.ADDR ?? mkHit.SITE_ADDR ?? mkHit.LOCP_ADDR ?? mkHit.locplc ?? Object.values(mkHit).find(looksAddr) ?? null) : null;
   const visitAddr = fAddr || mAddr || corp.addr || null;
   let travel = null, kakaoErr = null;
   try { travel = await kakaoTravel(visitAddr); }
