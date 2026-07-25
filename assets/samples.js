@@ -559,11 +559,15 @@ function assembleLiveReport(name, corp, res) {
     ((Object.entries(mk).find(([k, v]) => /대표|PRSNL|RPRSNTV|PRSDNT|REPRE/i.test(k) && v) || [])[1]) ?? null) : null;
   const mkAddr = mk ? (mk.ADDR ?? mk.SITE_ADDR ?? mk.LOCP_ADDR ?? mk.locplc ?? mk.소재지 ??
     Object.values(mk).find(looksAddr) ?? null) : null;
-  // 식약처 제조업 등록(허가)일 — 법인 설립일 대용(등록일은 설립과 다를 수 있음). 날짜형 값 스캔.
+  // 식약처 제조업 등록(허가)일 — 법인 설립일 대용(등록일은 설립과 다를 수 있음).
+  // 안전장치: 등록/허가 힌트 키를 최우선, 없으면 레코드 내 '가장 이른' 날짜(등록일에 근접, 갱신일/유효기간 오채택 방지).
   const dateish = (v) => /^\s*(\d{4})[-.\/]?(\d{2})[-.\/]?(\d{2})\s*$/.test(String(v || '').trim());
-  const mkRegDt = mk ? (mk.PRMS_DT ?? mk.PRMISN_DE ?? mk.LCNS_DE ?? mk.PERMIT_DT ?? mk.허가일자 ?? mk.등록일자 ??
-    ((Object.entries(mk).find(([k, v]) => /(PRMS|PRMISN|LCNS|PERMIT|REG|허가|등록).*(DT|DE|DATE|YMD|일)/i.test(k) && dateish(v)) || [])[1])
-    ?? (Object.values(mk).find(dateish)) ?? null) : null;
+  const y4 = (v) => { const m = String(v).match(/(\d{4})/); return m ? +m[1] : 9999; };
+  const mkKeyDt = mk ? (mk.PRMS_DT ?? mk.PRMISN_DE ?? mk.LCNS_DE ?? mk.PERMIT_DT ?? mk.허가일자 ?? mk.등록일자 ??
+    ((Object.entries(mk).find(([k, v]) => /(PRMS|PRMISN|LCNS|PERMIT|REG|허가|등록).*(DT|DE|DATE|YMD|일)/i.test(k) && dateish(v)) || [])[1]) ?? null) : null;
+  const mkEarliest = mk ? (Object.values(mk).filter(dateish).sort((a, b) => y4(a) - y4(b) || String(a).localeCompare(String(b)))[0] || null) : null;
+  const mkRegDt = (mkKeyDt && y4(mkKeyDt) >= 1980 && y4(mkKeyDt) <= 2026) ? mkKeyDt
+    : ((mkEarliest && y4(mkEarliest) >= 1980 && y4(mkEarliest) <= 2026) ? mkEarliest : null);
 
   // 금융위 법인 미확보 시 보강: 식약처/공장 레코드 → 외부 집계 사이트(비공식) 순
   const agg = R.bizAgg && R.bizAgg.ok && R.bizAgg.data ? R.bizAgg.data : null;
@@ -596,8 +600,8 @@ function assembleLiveReport(name, corp, res) {
       (fctAddr || mkAddr) ? today : null,
       fctAddr ? fctNote : (mkAddr ? '식약처 제조업 허가상 제조소 소재지 (산단공 공장등록 없음)' : fctNote)),
   ];
-  // 외부 집계에서 업종·연락처를 얻었으면 참고 필드로 추가(법인 미확보 소규모 업체 보강)
-  if (agg && agg.bizType) basic.push(f('업종', agg.bizType, 'C', aggSrc, today, '외부 집계 사이트 참고(비공식)'));
+  // 업종은 식약처 등록 사실 기준으로 정확히(집계 페이지 자유텍스트 오추출 방지). 연락처는 집계 참고.
+  if (mk) basic.push(f('업종', '화장품 제조업', 'A', '식약처 화장품제조업 API', today, '식약처 화장품제조업 등록 기준'));
   if (agg && agg.tel) basic.push(f('대표 연락처', agg.tel, 'C', aggSrc, today, '외부 집계 사이트 참고(비공식) — 방문 전 확인'));
 
   // 식약처 기능성 보고품목 (rpt)
@@ -770,7 +774,10 @@ function assembleLiveReport(name, corp, res) {
       ? { key: 'recall', name: '식약처 회수·판매중지', ok: true, warn: recalls.length > 0, detail: recalls.length ? `⚠ 회수·판매중지 이력 ${recalls.length}건` : `이력 없음 (전체 ${recallListAll.length}건 조회)` }
       : stat('recall', 'recall', '식약처 회수·판매중지', null, '회수정보 조회 실패'),
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
-    R.oemTrace ? { key: 'oem', name: '제조원 역추적 (웹)', ok: oem_trace.length > 0, warn: false, detail: oem_trace.length ? `${oem_trace.length}건 납품/제조 추정 페이지` : '제조원 표기 웹문서 없음' } : null,
+    R.oemTrace ? { key: 'oem', name: '웹 언급 추적', ok: oem_trace.length > 0, warn: false,
+      detail: oem_trace.length
+        ? (() => { const c = {}; oem_trace.forEach((o) => { c[o.tag] = (c[o.tag] || 0) + 1; }); return Object.entries(c).map(([k, v]) => `${k} ${v}`).join(' · '); })()
+        : '업체 언급 웹문서 없음' } : null,
     agg ? { name: `외부 집계 보강 (${agg.host})`, ok: true, warn: true, detail: `비공식 참고 — ${[agg.bzno ? '사업자번호' : null, agg.rep ? '대표자' : null, agg.opneDe ? '개업일' : null, agg.status ? '상태' : null].filter(Boolean).join('·') || '정보'} 추출` } : null,
   ].filter(Boolean);
 
