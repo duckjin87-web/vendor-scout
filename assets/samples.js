@@ -542,7 +542,9 @@ function assembleLiveReport(name, corp, res) {
 
   // 산단공 공장등록(생산)정보 — 회사명 검색 결과에서 상호 일치 건
   const fctList = R.factory && R.factory.ok ? listOf(R.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const fctHit = matchByName(name, fctList) || fctList[0] || null;
+  // ★ fctList[0] 폴백 금지: 산단공 공장 API도 상호 필터링이 불완전 → 첫 레코드가 '남의 공장'일 수 있음.
+  //   단건이면 그대로(회사명 검색이 1건만 준 경우), 여러 건이면 상호 일치 건만 채택.
+  const fctHit = matchByName(name, fctList) || (fctList.length === 1 ? fctList[0] : null);
   // 주소 필드명이 API마다 달라 명시 후보 → 실패 시 값 스캔(한글 주소 패턴)
   const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
   const fctAddr = fctHit ? (
@@ -609,7 +611,16 @@ function assembleLiveReport(name, corp, res) {
   if (agg && agg.tel) basic.push(f('대표 연락처', agg.tel, 'C', aggSrc, today, '외부 집계 사이트 참고(비공식) — 방문 전 확인'));
 
   // 식약처 기능성 보고품목 (rpt)
-  const rl = R.rpt && R.rpt.ok ? listOf(R.rpt.data, ['body.items', 'response.body.items.item']) : [];
+  // ★ 상호 일치 필터 필수: rpt API가 업체명 필터를 안 걸고 첫 페이지(기본 30건)를 그대로 주는 경우가 있어
+  //   raw 목록을 그냥 세면 '남의 회사' 보고품목을 이 업체 것으로 오표기(할루시네이션). 업체명 포함 레코드만 카운트.
+  const rlAll = R.rpt && R.rpt.ok ? listOf(R.rpt.data, ['body.items', 'response.body.items.item']) : [];
+  const rptKey = stripCorp(name).replace(/\s/g, '');
+  const rl = rptKey.length >= 2
+    ? rlAll.filter((i) => Object.values(i).some((v) => {
+        const gv = stripCorp(String(v == null ? '' : v)).replace(/\s/g, '');
+        return gv.length >= rptKey.length && gv.includes(rptKey);
+      }))
+    : rlAll;
   const fresh = rl.filter((i) => isFresh5(i.REPORT_DAY || i.report_day || i.PRDLST_REPORT_DE));
   const forms = [...new Set(fresh.map((i) => i.DOSAGE_FORM || i.dosage_form).filter(Boolean))];
   const allForms = [...new Set(rl.map((i) => i.DOSAGE_FORM || i.dosage_form || i.PRDLST_TYPE).filter(Boolean))];
@@ -760,7 +771,8 @@ function assembleLiveReport(name, corp, res) {
       detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}`
         : (!R.nts ? '미호출(사업자번호 없음)' : (!R.nts.ok ? `⚠ 연결 실패: ${R.nts.err}` : '조회 성공 · 해당 사업자 정보 없음')) },
     stat('finance', 'finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '미수록 — 금융위 API는 상장·공시대상 위주(비상장은 DART/신용조회 확인)'),
-    stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null, '0건 — 기능성 미취급 또는 상호 불일치'),
+    stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null,
+      rlAll.length ? `상호 일치 0건 (API가 업체명 미필터로 전체 ${rlAll.length}건 반환 — 이 업체 품목 아님)` : '0건 — 기능성 미취급 또는 미신고'),
     stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `사업장 ${npsData.count}곳${npsSites > 1 ? `(${npsSites}곳 합산)` : ''}${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
     stat('maker', 'maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
     { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, warn: !fctAddr && !!(R.factory && R.factory.ok),

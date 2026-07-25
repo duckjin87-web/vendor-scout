@@ -72,10 +72,10 @@ function buildProxyUrl(params) {
 const PARAM_MAP = {
   corp:      { name: 'corpNm', bzno: 'bzno' }, // 상호 또는 사업자등록번호로 조회
   finance:   { crno: 'crno' },
-  rpt:       { name: 'entp_name' },
+  rpt:       { name: 'entp_name', rows: 'numOfRows' },
   npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo' }, // 국민연금 V2 — camelCase
   npsDetail: { seq: 'seq', ym: 'dataCrtYm' },
-  maker:     { name: 'bssh_nm' },
+  maker:     { name: 'bssh_nm', rows: 'numOfRows' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
   factory:   { name: 'cmpnyNm', rows: 'numOfRows' }, // 산단공 공장등록 — 회사명 검색
   recall:    { rows: 'numOfRows' }, // 화장품 회수·판매중지 — 목록형, 프론트에서 업체명 필터
@@ -500,21 +500,33 @@ async function liveLookup(name) {
   const bnoM = String(name).match(/(\d{3})-?(\d{2})-?(\d{5})/) || String(name).match(/(?<!\d)(\d{10})(?!\d)/);
   const bno = bnoM ? bnoM[0].replace(/\D/g, '') : null;
   const nameOnly = bno ? String(name).replace(bnoM[0], '').replace(/[\s,]+/g, ' ').trim() : String(name);
+  const tryCorp = async (q, extra) => { try { return window.mapCorpCandidates(await proxyGet('corp', { ...(q ? { name: q } : {}), ...(extra || {}) })); } catch { return []; } };
   if (bno) {
-    let byBno = [];
-    try { byBno = window.mapCorpCandidates(await proxyGet('corp', { bzno: bno })); } catch { byBno = []; }
+    // (1) 금융위 corp를 bzno 파라미터로 직접 조회(지원 시 정확) …
+    let byBno = await tryCorp(null, { bzno: bno });
+    // (2) …미지원/0건이면 상호로 후보를 받아 bzno가 일치하는 법인을 선별(병기 조회 = 신뢰성↑).
+    //     동명 계열사(코스맥스(주) vs 코스맥스엔비티) 중 요청한 사업자번호의 법인만 특정.
+    if (!byBno.length && nameOnly) {
+      const byName = await tryCorp(nameOnly);
+      const exact = byName.filter((c) => String(c.bzno || '').replace(/\D/g, '') === bno);
+      if (exact.length) byBno = exact;
+      else if (byName.length) {
+        // bzno가 후보에 없으면(금융위 미수록) 상호 후보를 그대로 제시 — 사용자가 선택
+        return byName.length === 1
+          ? { report: await finishLive(nameOnly, { ...byName[0], bzno: byName[0].bzno || bno }) }
+          : { candidates: byName, name: `${nameOnly} (사업자 ${bno})`, source: 'fsc' };
+      }
+    }
     if (byBno.length === 1) return { report: await finishLive(nameOnly || byBno[0].corpNm, { ...byBno[0], bzno: byBno[0].bzno || bno }) };
     if (byBno.length >= 2) {
-      // 이름 병기 시 상호로 좁혀 자동 선택, 아니면 후보 제시
-      const hit = nameOnly ? (matchByNameApp(nameOnly, byBno) || null) : null;
+      const hit = nameOnly ? matchByNameApp(nameOnly, byBno) : null;
       if (hit) return { report: await finishLive(nameOnly, { ...hit, bzno: hit.bzno || bno }) };
       return { candidates: byBno, name: nameOnly || bno, source: 'fsc' };
     }
-    // 금융위에 법인 0건 → 사업자번호로 국세청·국민연금·집계까지 최대 조회(개인/소규모 대응)
+    // 금융위 법인 0건 → 사업자번호로 국세청·국민연금·식약처·집계까지 최대 조회(개인/소규모 대응)
     return { report: await finishLive(nameOnly || bno, { corpNm: nameOnly || bno, bzno: bno }) };
   }
 
-  const tryCorp = async (q) => { try { return window.mapCorpCandidates(await proxyGet('corp', { name: q })); } catch { return []; } };
   let cands = await tryCorp(name);
   // 금융위가 순수 상호로 0건이면 법인 형태 변형으로 재시도(개인→법인 전환·표기차 대응)
   if (!cands.length) {
@@ -591,9 +603,10 @@ async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
-    rpt: proxyGet('rpt', { name: nm }),
+    // rows 크게: 공공 API가 업체명 필터를 서버측에서 안 걸 때, 큰 페이지를 받아 프론트에서 상호 일치 건을 찾기 위함
+    rpt: proxyGet('rpt', { name: nm, rows: '100' }),
     nps: npsLookup(nm, corp.bzno),
-    maker: proxyGet('maker', { name: nm }),
+    maker: proxyGet('maker', { name: nm, rows: '1000' }),
     gmp: proxyGet('gmp', { rows: '500' }),
     factory: proxyGet('factory', { name: nm, rows: '30' }),
     recall: proxyGet('recall', { rows: '500' }),

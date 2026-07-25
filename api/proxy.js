@@ -146,10 +146,13 @@ async function handleNtsStatus(url, env) {
   const target = `https://api.odcloud.kr/api/nts-businessman/v1/status?${q}`;
   const bodyBytes = new TextEncoder().encode(JSON.stringify({ b_no: [bno] }));
   let lastStatus = 0, lastBody = '', lastErr = '';
-  // 최대 3회, 각 6초(총예산 ~18초, Edge 한도 내). 500(EOF)·네트워크오류·타임아웃 모두 재시도.
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // 최대 4회, 각 5초 + 지수 백오프(0.6→1.2→2.4s). 500(EOF)·503·네트워크오류·타임아웃 모두 재시도.
+  // 지수 백오프로 회복 중인 상류(odcloud 간헐 503)를 더 잘 포착. 총예산 Edge 한도(~25초) 내.
+  const ATTEMPTS = 4, DEADLINE = Date.now() + 23000;
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    if (DEADLINE - Date.now() < 2000) break;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const timer = setTimeout(() => ctrl.abort(), Math.min(5000, DEADLINE - Date.now()));
     let up;
     try {
       up = await fetch(target, {
@@ -159,15 +162,15 @@ async function handleNtsStatus(url, env) {
       });
     } catch (e) {
       clearTimeout(timer);
-      lastStatus = 0; lastErr = (e && e.name === 'AbortError') ? '타임아웃(6초)' : String(e && e.message || e);
-      if (attempt < 2) { await sleep(500); continue; } // 네트워크오류·타임아웃 → 재시도
+      lastStatus = 0; lastErr = (e && e.name === 'AbortError') ? '타임아웃(5초)' : String(e && e.message || e);
+      if (attempt < ATTEMPTS - 1 && DEADLINE - Date.now() > 2000) { await sleep(600 * (attempt + 1)); continue; }
       break;
     }
     clearTimeout(timer);
     const body = await up.text().catch(() => '');
     if (up.ok) return new Response(body, { status: 200, headers: JSON_HDR });
     lastStatus = up.status; lastBody = body;
-    if ((up.status >= 500 || up.status === 429) && attempt < 2) { await sleep(500); continue; } // 5xx·429 재시도
+    if ((up.status >= 500 || up.status === 429) && attempt < ATTEMPTS - 1 && DEADLINE - Date.now() > 2000) { await sleep(600 * (attempt + 1)); continue; }
     break; // 4xx 등은 즉시 종료
   }
   return jsonRes({ error: lastStatus ? `국세청 상류 HTTP ${lastStatus}` : `국세청 호출 실패(${lastErr || '알수없음'})`, detail: (lastBody || lastErr || '').slice(0, 300) }, 502);
