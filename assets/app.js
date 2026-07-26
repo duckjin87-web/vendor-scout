@@ -606,7 +606,7 @@ async function finishLive(name, corp) {
     // rows 크게: 공공 API가 업체명 필터를 서버측에서 안 걸 때, 큰 페이지를 받아 프론트에서 상호 일치 건을 찾기 위함
     rpt: proxyGet('rpt', { name: nm, rows: '100' }),
     nps: npsLookup(nm, corp.bzno),
-    maker: proxyGet('maker', { name: nm, rows: '1000' }),
+    maker: proxyGet('maker', { name: nm, rows: '3000' }),
     gmp: proxyGet('gmp', { rows: '500' }),
     factory: proxyGet('factory', { name: nm, rows: '30' }),
     recall: proxyGet('recall', { rows: '500' }),
@@ -614,8 +614,8 @@ async function finishLive(name, corp) {
     naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
     // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
     oemTrace: proxyOnlyGet('naverWeb', { query: `${nm} 제조원`, display: '10' }),
-    // 금융위 법인 미확보 시에만 사업자정보 집계 사이트(비공식)로 사업자번호·대표·개업일·상태 보강
-    bizAgg: corp.crno ? Promise.resolve(null) : aggLookup(nm),
+    // 외부 집계(marketbz 등) 비공식 보강 — 사용자 요청으로 비활성화(공식 data.go.kr API 자료만 신뢰).
+    bizAgg: Promise.resolve(null),
   };
   const keys = Object.keys(calls);
   const settled = await Promise.allSettled(keys.map((k) => calls[k]));

@@ -518,11 +518,21 @@ function listOf(data, paths) {
 function assembleLiveReport(name, corp, res) {
   const today = '2026-07-07';
   const R = res || {};
-  // 왜 비었는지 진단 문구: 미호출 / 조회실패(에러) / 빈결과
+  // 장황한 상류 오류를 짧은 사유로 정규화 — "조회불가"/"자료 미제출" 등 간략 표기(사용자 요청)
+  const briefErr = (msg) => {
+    const m = String(msg || '');
+    if (/미제출|없음|0건|미검색|미등록|미수록/.test(m) && !/HTTP|50\d|타임아웃|서버|실패|오류/.test(m)) return '자료 미제출/미등록';
+    if (/50\d|서버 오류|API 서버|점검|과부하|일시적/.test(m)) return '조회불가 (제공기관 서버 오류)';
+    if (/타임아웃|지연|deadline|abort/i.test(m)) return '조회불가 (응답 지연)';
+    if (/사업자번호 없음|법인등록번호 없음/.test(m)) return '자료 미제출/미등록';
+    if (/프록시|키|승인|미설정/.test(m)) return '조회불가 (연결 설정 확인)';
+    return '조회불가';
+  };
+  // 왜 비었는지 진단 문구: 미호출 / 조회실패(에러) / 빈결과 — 모두 짧은 사유로
   const why = (part, emptyMsg) => {
     const r = R[part];
-    if (!r) return '미연동 — 해당 API 미호출';
-    if (!r.ok) return `조회 실패: ${r.err}`;
+    if (!r) return '자료 미제출/미등록';
+    if (!r.ok) return briefErr(r.err);
     return emptyMsg;
   };
 
@@ -769,7 +779,7 @@ function assembleLiveReport(name, corp, res) {
     // 연결 실패 / 조회성공·데이터없음 을 명확히 구분
     { key: 'nts', name: '국세청 사업자상태', ok: !!bStt,
       detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}`
-        : (!R.nts ? '미호출(사업자번호 없음)' : (!R.nts.ok ? `⚠ 연결 실패: ${R.nts.err}` : '조회 성공 · 해당 사업자 정보 없음')) },
+        : (!R.nts ? '자료 미제출/미등록' : (!R.nts.ok ? briefErr(R.nts.err) : '조회 성공 · 해당 사업자 정보 없음')) },
     stat('finance', 'finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '미수록 — 금융위 API는 상장·공시대상 위주(비상장은 DART/신용조회 확인)'),
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null,
       rlAll.length ? `상호 일치 0건 (API가 업체명 미필터로 전체 ${rlAll.length}건 반환 — 이 업체 품목 아님)` : '0건 — 기능성 미취급 또는 미신고'),
@@ -777,7 +787,7 @@ function assembleLiveReport(name, corp, res) {
     stat('maker', 'maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
     { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, warn: !fctAddr && !!(R.factory && R.factory.ok),
       detail: fctAddr ? `공장 확인${fctEmpl ? ` · 종업원 ${fctEmpl}명` : ''}${fctProduct ? ' · ' + fctProduct : ''}`
-        : (!R.factory ? '미호출' : (!R.factory.ok ? `⚠ 연결 실패: ${R.factory.err}` : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '조회 성공 · 공장등록 0건(미등록/임대 가능)'))) },
+        : (!R.factory ? '자료 미제출/미등록' : (!R.factory.ok ? briefErr(R.factory.err) : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '공장등록 0건(미등록/임대 가능)'))) },
     // GMP: API가 응답했으면 체크(✓), 미해당은 빨간색으로 표시
     (R.gmp && R.gmp.ok)
       ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: true, warn: !hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `미해당 — 적합업체 ${gmpList.length}곳 중 미등재(CGMP 미인증)` }
