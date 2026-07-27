@@ -784,7 +784,10 @@ function assembleLiveReport(name, corp, res) {
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null,
       rlAll.length ? `상호 일치 0건 (API가 업체명 미필터로 전체 ${rlAll.length}건 반환 — 이 업체 품목 아님)` : '0건 — 기능성 미취급 또는 미신고'),
     stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `사업장 ${npsData.count}곳${npsSites > 1 ? `(${npsSites}곳 합산)` : ''}${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
-    stat('maker', 'maker', '식약처 화장품제조업', mk ? '제조업 등록 확인' : null, '등록 조회 0건 — 책임판매업만 등록 가능성'),
+    { key: 'maker', name: '식약처 화장품제조업', ok: !!mk, warn: !mk && !!(R.maker && R.maker.ok),
+      detail: mk ? `제조업 등록 확인${mkRep ? ` · 대표 ${mkRep}` : ''}${mkAddr ? ` · ${mkAddr}` : ''}`
+        : (!R.maker ? '자료 미제출/미등록' : (!R.maker.ok ? briefErr(R.maker.err)
+          : (mkList.length ? `상호 일치 0건 (전체 ${mkList.length}건 중 미포함 — 제조업 미등록이거나 업소명 표기 상이)` : '등록 0건 — 책임판매업만 등록 가능성'))) },
     { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, warn: !fctAddr && !!(R.factory && R.factory.ok),
       detail: fctAddr ? `공장 확인${fctEmpl ? ` · 종업원 ${fctEmpl}명` : ''}${fctProduct ? ' · ' + fctProduct : ''}`
         : (!R.factory ? '자료 미제출/미등록' : (!R.factory.ok ? briefErr(R.factory.err) : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '공장등록 0건(미등록/임대 가능)'))) },

@@ -459,10 +459,43 @@ function pickByKey(rec, re) {
   }
   return null;
 }
+// 식약처 화장품제조업(CsmtcsMfcrtrInfoService01) — 약 200만건, 서버측 상호(업소명) 필터가 필수.
+// 문제: 정확한 요청 파라미터명이 명세 비공개라 불확실. 잘못된 키는 API가 무시하고 일반(무필터)
+//        목록을 주고, '올바른 키'만 상호로 필터됨. → 후보 키들을 병렬로 시도해 결과를 합치면,
+//        올바른 키가 준 '이 업체 레코드'가 포함되고 matchByName이 그것만 정확히 집어냄(할루시네이션 없음).
+// 주의: numOfRows 최대 500(초과 시 전체 호출 거부). 각 후보 500건.
+const MAKER_NAME_PARAMS = ['bssh_nm', 'Bssh_Nm', 'BSSH_NM', 'entpName', 'entp_name', 'prmisnEntpNm'];
+async function makerLookup(nm) {
+  const settled = await Promise.allSettled(
+    MAKER_NAME_PARAMS.map((p) => proxyOnlyGet('maker', { [p]: nm, numOfRows: '500' })),
+  );
+  const merged = [];
+  const seen = new Set();
+  let anyOk = false, lastErr = '';
+  for (const s of settled) {
+    if (s.status !== 'fulfilled') { lastErr = String(s.reason && s.reason.message || s.reason); continue; }
+    anyOk = true;
+    const list = listOf(s.value, ['response.body.items.item', 'body.items', 'items']);
+    for (const r of list) {
+      const sig = JSON.stringify(r);
+      if (seen.has(sig)) continue;      // 후보키 간 중복 제거
+      seen.add(sig);
+      merged.push(r);
+      if (merged.length >= 4000) break; // 안전 상한
+    }
+    if (merged.length >= 4000) break;
+  }
+  if (!anyOk) throw new Error(lastErr || '식약처 제조업 조회 실패');
+  return { items: merged };
+}
+
 // 식약처 화장품제조업 등록업체 기준 후보 — 상호명으로 조회해 등록 업체명(중복제거) 목록화
 async function mfdsCandidates(name) {
   let list = [];
-  try { list = itemsOf(await proxyGet('maker', { name })); } catch { return []; }
+  try { list = listOf(await makerLookup(name), ['items']); } catch { return []; }
+  // 상호 실제 포함 레코드만(무필터 응답 노이즈 제거) — 후보가 남의 회사로 오염되지 않도록
+  const nk = stripCorp(name).replace(/\s/g, '');
+  if (nk.length >= 2) list = list.filter((r) => Object.values(r).some((v) => stripCorp(String(v == null ? '' : v)).replace(/\s/g, '').includes(nk)));
   const seen = new Set(); const out = [];
   for (const r of list) {
     const nm = pickByKey(r, /BSSH_NM|CMPNY_NM|ENTRPS_?NM|MANF|업체|회사|제조사/i) || pickByKey(r, /_NM$/i);
@@ -603,10 +636,9 @@ async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
   const calls = {
     finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
-    // rows 크게: 공공 API가 업체명 필터를 서버측에서 안 걸 때, 큰 페이지를 받아 프론트에서 상호 일치 건을 찾기 위함
     rpt: proxyGet('rpt', { name: nm, rows: '100' }),
     nps: npsLookup(nm, corp.bzno),
-    maker: proxyGet('maker', { name: nm, rows: '3000' }),
+    maker: makerLookup(nm),
     gmp: proxyGet('gmp', { rows: '500' }),
     factory: proxyGet('factory', { name: nm, rows: '30' }),
     recall: proxyGet('recall', { rows: '500' }),
