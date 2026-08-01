@@ -189,6 +189,69 @@ function handleKakao(url, env, kind) {
   });
 }
 
+// 홈페이지 심층분석 — 회사 홈페이지를 웹검색·조사해 '실제 생산 CAPA·인증'을 구조화 추출.
+// LLM(Anthropic)을 프록시(서버)에서 호출 → API 키는 서버 환경변수에만(브라우저 비노출).
+// 공식 data.go.kr 자료와 별개의 '홈페이지 게재 정보(참고)'. 근거 없으면 null(추측 금지).
+const SITE_SCHEMA = `{"company_name":null,"business_type":null,"product_categories":null,"production_items":null,"quality_certifications":null,"production_sites":null,"equipment":null,"rnd_centers":null,"export_markets":null,"hq_address":null,"phone":null,"notable":null}`;
+async function handleSiteExtract(url, env) {
+  if (!env.ANTHROPIC_API_KEY) return jsonRes({ error: 'ANTHROPIC_API_KEY 미설정 — Vercel 환경변수에 추가하세요(홈페이지 심층분석용)' }, 501);
+  const name = (url.searchParams.get('name') || '').slice(0, 80);
+  const site = (url.searchParams.get('url') || '').slice(0, 300);
+  if (!name && !site) return jsonRes({ error: 'name 또는 url 필요' }, 400);
+  const target = site ? `회사 홈페이지: ${site} (회사명: ${name || '미상'})` : `회사명: ${name}`;
+  const prompt =
+`너는 화장품 OEM/ODM 제조사 정보 추출기다. 다음 대상을 웹 검색으로 조사해라. ${target}
+회사소개·사업(생산)·설비·R&D·품질경영·인증 페이지를 우선 확인한다. 화장품 제조 역량 파악이 목적이다.
+- business_type: ["ODM","OEM","OBM"] 중 해당하는 것들의 배열.
+- product_categories: 취급 제형 카테고리(스킨케어, 색조, 마스크팩, 선케어 등) 배열.
+- production_items: 대표 생산품·출시/수상 사례 등 구체 품목 배열.
+- quality_certifications: CGMP, ISO22716, ISO9001, 비건, 할랄, 특허 등 인증 배열(가장 중요).
+- production_sites: 생산 사업장/공장 위치·규모 배열.
+- equipment: 생산설비·라인 종류/수량 배열.
+- rnd_centers: R&D 연구소/기업부설연구소 배열.
+- export_markets: 수출국 배열.
+- hq_address, phone: 문자열.
+- notable: 특이사항(대형 브랜드 납품 등) 배열.
+아래 JSON 스키마 필드만 채운다. 근거 없는 필드는 반드시 null(배열도 없으면 null). 추측 금지, 확인된 사실만.
+JSON만 출력. 설명·마크다운·코드펜스 금지.
+${SITE_SCHEMA}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 55000);
+  let up;
+  try {
+    up = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 2048,
+        messages: [{ role: 'user', content: prompt }],
+        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+      }),
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    return jsonRes({ error: '심층분석 호출 실패', detail: (e && e.name === 'AbortError') ? '시간 초과(55초)' : String(e && e.message || e) }, 502);
+  }
+  clearTimeout(timer);
+  const body = await up.text().catch(() => '');
+  if (!up.ok) return jsonRes({ error: `심층분석 상류 HTTP ${up.status}`, detail: cleanUpstreamDetail(body, up.status) }, 502);
+  let text = '';
+  try {
+    const j = JSON.parse(body);
+    text = (j.content || []).filter((b) => b && b.type === 'text').map((b) => b.text).join('\n');
+  } catch { return jsonRes({ error: '심층분석 응답 파싱 실패' }, 502); }
+  const mm = text.replace(/```json|```/g, '').match(/\{[\s\S]*\}/);
+  if (!mm) return jsonRes({ error: '심층분석 결과에 JSON 없음', detail: text.slice(0, 200) }, 502);
+  let obj;
+  try { obj = JSON.parse(mm[0]); } catch { return jsonRes({ error: '심층분석 JSON 파싱 실패' }, 502); }
+  return jsonRes({ ok: true, data: obj });
+}
+
 export default async function handler(req) {
   try {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
@@ -203,6 +266,7 @@ export default async function handler(req) {
     if (service === 'naverLocal')      return handleNaver(url, env, 'local');
     if (service === 'fetchPage')       return handleFetchPage(url);
     if (service === 'ntsStatus')       return handleNtsStatus(url, env);
+    if (service === 'siteExtract')     return handleSiteExtract(url, env);
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
     if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
     if (DATAGO[service])               return handleDataGo(url, service, env);

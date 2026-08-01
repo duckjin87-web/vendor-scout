@@ -446,3 +446,84 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .field { grid-template-columns: 1fr 1fr; }
   .field .src { grid-column: 1 / -1; text-align: left; }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   v66 리프레시 — 핵심 요약 밴드 · 홈페이지 심층분석 · 감각 개선
+   ═══════════════════════════════════════════════════════════ */
+
+/* ★ 핵심 요약 타일 — 방문 판단 핵심을 최상단에 크게 */
+.coreband {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 12px;
+  margin-bottom: 18px;
+}
+.ct {
+  position: relative; border-radius: 15px; padding: 15px 16px 13px;
+  background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.ct::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--faint); }
+.ct-good::before { background: var(--gA); }
+.ct-info::before { background: var(--accent); }
+.ct-warn::before { background: var(--gC); }
+.ct-bad::before  { background: var(--risk); }
+.ct-muted::before{ background: var(--gD); }
+.ct-big { font-size: 25px; font-weight: 800; letter-spacing: -.5px; line-height: 1.1; }
+.ct-good  .ct-big { color: var(--gA); }
+.ct-info  .ct-big { color: var(--accent); }
+.ct-warn  .ct-big { color: var(--gC); }
+.ct-bad   .ct-big { color: var(--risk); }
+.ct-muted .ct-big { color: var(--faint); }
+.ct-lab { font-size: 12.5px; font-weight: 700; margin-top: 5px; }
+.ct-sub { font-size: 10.5px; color: var(--faint); margin-top: 1px; }
+
+/* 🔬 홈페이지 심층분석 */
+.sdbox {
+  grid-column: 1 / -1; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 14px; padding: 15px 17px; box-shadow: var(--shadow);
+}
+.sdbox h4 { margin: 0 0 4px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.sdbox h4 span { font-size: 11px; font-weight: 500; color: var(--faint); }
+.sd-run {
+  margin-top: 10px; border: 0; cursor: pointer; border-radius: 10px;
+  background: linear-gradient(135deg, #7c3aed, var(--accent)); color: #fff;
+  font-size: 13px; font-weight: 700; padding: 10px 18px; transition: filter .15s, transform .05s;
+}
+.sd-run:hover { filter: brightness(1.08); }
+.sd-run:active { transform: translateY(1px); }
+.sd-load, .sd-none { font-size: 12.5px; color: var(--muted); margin-top: 10px; line-height: 1.55; }
+.sd-none code { background: var(--accent-soft); color: var(--accent); padding: 1px 6px; border-radius: 5px; font-size: 11.5px; }
+.sd-load { color: var(--accent); }
+.sd-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.sd-row {
+  border: 1px solid var(--border); border-radius: 11px; padding: 10px 12px; background: var(--panel-2);
+}
+.sd-row.hot { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); background: var(--accent-soft); }
+.sd-row > i { font-style: normal; font-size: 11px; font-weight: 700; color: var(--muted); display: block; margin-bottom: 6px; letter-spacing: .01em; }
+.sd-v { font-size: 13px; }
+.sd-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.sd-chip { font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--text); }
+.sd-chip.hot { background: var(--gA-bg); color: var(--gA); border-color: transparent; font-weight: 600; }
+.sd-list { margin: 0; padding: 0; list-style: none; }
+.sd-list li { font-size: 12.5px; line-height: 1.5; padding-left: 12px; position: relative; }
+.sd-list li::before { content: "·"; position: absolute; left: 2px; color: var(--accent); font-weight: 700; }
+.sd-text { color: var(--text); }
+.sd-empty { color: var(--faint); }
+
+/* 검색바 — 감각 개선(그라데이션 테두리 느낌 + 포커스 글로우) */
+.searchbar { transition: box-shadow .18s, border-color .18s; }
+.searchbar:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow);
+}
+.searchbar button {
+  background: linear-gradient(135deg, var(--accent), #6d9bff);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* 종합등급 배지 — 살짝 입체감 */
+.grade-badge { box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); }
+
+@media (max-width: 640px) {
+  .coreband { grid-template-columns: repeat(2, 1fr); }
+  .ct-big { font-size: 22px; }
+}

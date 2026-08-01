@@ -1035,11 +1035,101 @@ function renderHomepageInto(box, hp) {
   box.innerHTML = html;
 }
 
+// ── 🔬 홈페이지 심층분석 (LLM 웹조사) — 실제 생산 CAPA·인증 구조화 추출 ──
+// 프록시(서버) 경유로 Anthropic 호출(키는 서버 환경변수). 공식 API와 별개의 '홈페이지 게재 참고정보'.
+async function siteDeepExtract(name, url) {
+  const res = await proxyOnlyGet('siteExtract', { name: name || '', url: url || '' });
+  return res && res.data ? res.data : null;
+}
+const SITE_DEEP_FIELDS = [
+  { key: 'business_type', label: '사업 유형', kind: 'chips', hot: true },
+  { key: 'quality_certifications', label: '품질·인증', kind: 'chips', hot: true },
+  { key: 'product_categories', label: '제형 카테고리', kind: 'chips' },
+  { key: 'export_markets', label: '수출국', kind: 'chips' },
+  { key: 'production_items', label: '대표 생산품·사례', kind: 'list' },
+  { key: 'equipment', label: '생산 설비', kind: 'list' },
+  { key: 'production_sites', label: '생산 사업장', kind: 'list' },
+  { key: 'rnd_centers', label: 'R&D 연구소', kind: 'list' },
+  { key: 'notable', label: '특이사항', kind: 'list' },
+  { key: 'hq_address', label: '본사 주소', kind: 'text' },
+  { key: 'phone', label: '대표번호', kind: 'text' },
+];
+function siteDeepCell(val, kind, hot) {
+  const empty = val == null || (Array.isArray(val) && !val.length) || val === '';
+  if (empty) return '<span class="sd-empty">—</span>';
+  if (kind === 'chips') {
+    const arr = Array.isArray(val) ? val : [val];
+    return `<div class="sd-chips">${arr.map((x) => `<span class="sd-chip${hot ? ' hot' : ''}">${esc(String(x))}</span>`).join('')}</div>`;
+  }
+  if (kind === 'list') {
+    const arr = Array.isArray(val) ? val : [val];
+    return `<ul class="sd-list">${arr.map((x) => `<li>${esc(String(typeof x === 'object' ? JSON.stringify(x) : x))}</li>`).join('')}</ul>`;
+  }
+  return `<span class="sd-text">${esc(String(val))}</span>`;
+}
+function renderSiteDeepInto(box, state) {
+  if (state.loading) {
+    box.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>웹 조사 중… (최대 1분)</span></h4><div class="sd-load">생산 CAPA·인증 정보를 조사하고 있습니다…</div>';
+    return;
+  }
+  if (state.err) {
+    const needKey = /ANTHROPIC_API_KEY|미설정|501/.test(state.err);
+    box.innerHTML = `<h4>🔬 홈페이지 심층분석</h4><div class="sd-none">${needKey
+      ? '미연결 — Vercel 환경변수에 <code>ANTHROPIC_API_KEY</code>를 추가하면 홈페이지 기반 생산·인증 심층분석이 활성화됩니다.'
+      : `분석 실패: ${esc(state.err)}`}</div>`;
+    return;
+  }
+  const d = state.data;
+  if (!d) { box.innerHTML = '<h4>🔬 홈페이지 심층분석</h4><div class="sd-none">추출 결과 없음</div>'; return; }
+  const rows = SITE_DEEP_FIELDS
+    .map((f) => ({ f, has: !(d[f.key] == null || (Array.isArray(d[f.key]) && !d[f.key].length) || d[f.key] === '') }))
+    .filter((r) => r.has);
+  let html = `<h4>🔬 홈페이지 심층분석 <span>홈페이지·웹 조사 기반 · 참고용(방문 시 원본 확인)</span></h4>`;
+  if (!rows.length) {
+    html += '<div class="sd-none">홈페이지에서 생산·인증 정보를 확인하지 못했습니다(자바스크립트 렌더링 사이트이거나 미게재).</div>';
+  } else {
+    html += '<div class="sd-grid">' + rows.map(({ f }) =>
+      `<div class="sd-row${f.hot ? ' hot' : ''}"><i>${esc(f.label)}</i><div class="sd-v">${siteDeepCell(d[f.key], f.kind, f.hot)}</div></div>`).join('') + '</div>';
+  }
+  box.innerHTML = html;
+}
+
 // 방문지 주소 선택 — 제조소(식약처) > 본점(금융위) > 사업장(연금) 순
 function visitAddress(report) {
   const fields = [...(report.basic || []), ...(report.capacity || [])];
   const val = (k) => { const f = fields.find((x) => x.key === k); return f && f.value ? f.value : null; };
   return val('공장/제조소 소재지') || val('본점주소') || val('사업장 주소 (연금기준)') || null;
+}
+
+// ★ 핵심 요약 밴드 — 방문 판단에 가장 중요한 사실을 큰 타일로 최상단 노출
+function renderCoreBand(report) {
+  const B = report.basic || [], C = report.capacity || [];
+  const bv = (k) => { const f = B.find((x) => x.key === k); return f && f.value ? f.value : null; };
+  const cv = (k) => { const f = C.find((x) => x.key === k); return f && f.value ? f.value : null; };
+  const maker = bv('제조업 등록');
+  const cgmp = cv('CGMP 적합업소');
+  const emp = cv('재직자수 (국민연금 가입자)');
+  const bstt = bv('사업자 상태');
+  const dist = cv('방문 이동거리');
+  const recall = Array.isArray(report.recalls) && report.recalls.length ? report.recalls.length : 0;
+  const tiles = [];
+  // 제조업 등록 — 이 서비스의 핵심 지표
+  tiles.push({ big: maker ? '등록' : '미확인', lab: '화장품 제조업', tone: maker ? 'good' : 'muted',
+    sub: maker ? '식약처 허가' : '상호 일치 없음' });
+  // CGMP
+  tiles.push({ big: cgmp ? '적합' : '미등재', lab: 'CGMP 인증', tone: cgmp ? 'good' : 'muted', sub: '식약처 GMP' });
+  // 재직자수
+  if (emp) tiles.push({ big: String(emp).replace(/\s.*$/, ''), lab: '재직자수', tone: 'info', sub: '국민연금 기준' });
+  // 사업자 상태
+  if (bstt) tiles.push({ big: /계속/.test(bstt) ? '정상' : String(bstt).slice(0, 6), lab: '사업자 상태', tone: /계속/.test(bstt) ? 'good' : 'warn', sub: '국세청' });
+  // 회수·판매중지 — 있으면 위험
+  tiles.push({ big: recall ? `${recall}건` : '없음', lab: '회수·판매중지', tone: recall ? 'bad' : 'good', sub: '식약처 이력' });
+  // 이동거리
+  if (dist) tiles.push({ big: String(dist).replace(/^약\s*/, '').replace(/\s*·.*$/, ''), lab: '방문 거리', tone: 'info', sub: String(dist).match(/·\s*(.+)$/) ? RegExp.$1 : '기준점 대비' });
+  const wrap = el('div', 'coreband');
+  wrap.innerHTML = tiles.map((t) =>
+    `<div class="ct ct-${t.tone}"><div class="ct-big">${esc(t.big)}</div><div class="ct-lab">${esc(t.lab)}</div><div class="ct-sub">${esc(t.sub)}</div></div>`).join('');
+  return wrap;
 }
 
 function render(report, opts = {}) {
@@ -1108,6 +1198,10 @@ function render(report, opts = {}) {
   sm.appendChild(stats);
   root.appendChild(sm);
 
+  // ★ 핵심 요약 — 검증에서 가장 중요한 사실을 최상단 타일로(핵심부터 파악)
+  const coreBand = renderCoreBand(report);
+  if (coreBand) root.appendChild(coreBand);
+
   // 데이터 출처 배너
   if (m.live) {
     root.appendChild(el('div', 'livenote',
@@ -1172,6 +1266,14 @@ function render(report, opts = {}) {
   if (m.live) {
     const hpBox = el('div', 'hpbox');
     blocks.appendChild(hpBox);
+    const runDeep = () => {
+      report._siteDeep = { loading: true };
+      renderSiteDeepInto(sdBox, report._siteDeep);
+      const hpUrl = report._homepage && report._homepage.proposed ? report._homepage.proposed.url : '';
+      siteDeepExtract(report.meta.vendor_name, hpUrl)
+        .then((data) => { report._siteDeep = { data }; renderSiteDeepInto(sdBox, report._siteDeep); saveLastReport(report); })
+        .catch((e) => { report._siteDeep = { err: e && e.message ? e.message : String(e) }; renderSiteDeepInto(sdBox, report._siteDeep); });
+    };
     if (report._homepage !== undefined) {
       renderHomepageInto(hpBox, report._homepage);
     } else {
@@ -1180,6 +1282,17 @@ function render(report, opts = {}) {
       findHomepage(report.meta.vendor_name, { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호'), factoryHomepage: report.meta.factory_homepage })
         .then((hp) => { report._homepage = hp || null; renderHomepageInto(hpBox, report._homepage); saveLastReport(report); })
         .catch(() => { report._homepage = null; renderHomepageInto(hpBox, null); saveLastReport(report); });
+    }
+    // 🔬 홈페이지 심층분석 — 버튼 실행(비용/시간 소요). 결과 캐시.
+    const sdBox = el('div', 'sdbox');
+    blocks.appendChild(sdBox);
+    if (report._siteDeep && (report._siteDeep.data || report._siteDeep.err)) {
+      renderSiteDeepInto(sdBox, report._siteDeep);
+    } else {
+      sdBox.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>실제 생산 CAPA·인증을 웹 조사로 추출(참고용)</span></h4>';
+      const btn = el('button', 'sd-run', '🔬 심층분석 실행');
+      btn.addEventListener('click', runDeep);
+      sdBox.appendChild(btn);
     }
   }
 
