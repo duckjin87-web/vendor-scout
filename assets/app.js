@@ -272,6 +272,94 @@ async function extractSiteInfo(baseUrl, mainHtml) {
   return (certs.length || capa.length || oem.length) ? { certs, capa, oemOdm: oem, pages } : null;
 }
 
+// ── 홈페이지 심층분석: 키워드 휴리스틱(무료·API키 불필요) ──
+// 홈페이지 본문 + 관련 서브페이지를 fetchPage로 모아 규칙 기반으로 생산 CAPA·인증 구조화.
+async function gatherSiteText(baseUrl) {
+  let html = '';
+  try { const p = await proxyOnlyGet('fetchPage', { url: baseUrl }); html = (p && p.text) || ''; } catch { html = ''; }
+  if (!html) return null;
+  const texts = [htmlToText(html)]; const pages = [baseUrl];
+  const REL = /(인증|certif|품질|quality|생산|시설|facilit|공장|factory|설비|장비|equip|회사\s*소개|about|company|연구|R&?D|사업|business|수출|export|product|제품)/i;
+  const seen = new Set([baseUrl.replace(/\/+$/, '')]); const targets = [];
+  for (const l of extractLinks(html, baseUrl)) {
+    const key = l.href.replace(/\/+$/, ''); if (seen.has(key)) continue;
+    if (REL.test(l.anchor) || REL.test(l.href)) { targets.push(l.href); seen.add(key); }
+    if (targets.length >= 4) break;
+  }
+  const subs = await Promise.all(targets.map((u) =>
+    proxyOnlyGet('fetchPage', { url: u }).then((p) => ({ u, t: htmlToText((p && p.text) || '') })).catch(() => null)));
+  subs.forEach((s) => { if (s && s.t) { texts.push(s.t); pages.push(s.u); } });
+  return { text: texts.join('\n').slice(0, 500000), pages };
+}
+// 문장 단위로 키워드 포함 짧은 구절 발췌
+function pickSentences(text, re, { min = 4, max = 130, cap = 5 } = {}) {
+  const parts = String(text).split(/\n+|[.。!?]\s|\s{3,}/).map((s) => s.replace(/\s{2,}/g, ' ').trim()).filter(Boolean);
+  const out = [];
+  for (const p of parts) {
+    if (p.length < min || p.length > max) continue;
+    if (re.test(p) && !out.includes(p)) out.push(p);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+const PROD_CATS = [
+  ['기초/스킨케어', /기초화장품|스킨케어|skin\s*care|토너|에센스|세럼|앰플|크림|로션|essence|serum/i],
+  ['색조/메이크업', /색조|메이크업|make\s*up|파운데이션|쿠션|립스틱|틴트|아이섀도|마스카라/i],
+  ['마스크팩', /마스크팩|시트마스크|마스크\s*시트|sheet\s*mask|팩\b/i],
+  ['선케어', /선케어|선크림|자외선\s*차단|sun\s*(care|screen|block)|SPF/i],
+  ['클렌징', /클렌징|cleansing|폼클렌|클렌저|세안/i],
+  ['헤어', /헤어|샴푸|hair|린스|트리트먼트|두피/i],
+  ['바디', /바디\s*(케어|로션|워시)|body\s*(care|wash|lotion)/i],
+  ['기능성화장품', /기능성화장품|미백|주름개선|안티에이징|anti[-\s]*aging/i],
+  ['더모/코스메슈티컬', /더모코스메틱|코스메슈티컬|cosmeceutical|dermo/i],
+  ['향수/방향', /향수|퍼퓸|fragrance|perfume|디퓨저/i],
+];
+const EXPORT_MKTS = ['미국', '중국', '일본', '베트남', '태국', '인도네시아', '말레이시아', '필리핀', '싱가포르', '대만', '홍콩', '러시아', '유럽', '독일', '프랑스', '영국', '캐나다', '호주', '인도', '중동', 'UAE', '사우디', '브라질', '멕시코'];
+const EQUIP_RE = /(충전\s*(기|라인)|튜브\s*충전|파우치\s*충전|제조\s*(기|탱크)|유화\s*(기|탱크)|호모\s*믹서|homogen|디스퍼|반응기|믹싱\s*탱크|포장\s*라인|카톤|라벨러|클린\s*룸|clean\s*room|자동화\s*라인|생산\s*라인\s*\d)/i;
+async function siteDeepHeuristic(name, hpUrl) {
+  let baseUrl = hpUrl;
+  if (!baseUrl) { // 홈페이지 미확보 시 검색으로 확보
+    const hp = await findHomepage(name, {}).catch(() => null);
+    baseUrl = hp && hp.proposed ? hp.proposed.url : null;
+  }
+  if (!baseUrl) return { data: null, source: 'heuristic', reason: '홈페이지 미확보' };
+  const g = await gatherSiteText(baseUrl);
+  if (!g || !g.text) return { data: null, source: 'heuristic', reason: '페이지 본문 취득 실패(자바스크립트 렌더링 사이트 가능)' };
+  const T = g.text;
+  const arrOrNull = (a) => (a && a.length ? a : null);
+  const business_type = arrOrNull(['OEM', 'ODM', 'OGM', 'OBM'].filter((k) => new RegExp(`\\b${k}\\b`, 'i').test(T)));
+  const quality_certifications = arrOrNull(CERT_PATTERNS.filter((c) => c.re.test(T)).map((c) => c.label));
+  const product_categories = arrOrNull(PROD_CATS.filter(([, re]) => re.test(T)).map(([l]) => l));
+  const export_markets = arrOrNull(EXPORT_MKTS.filter((c) => new RegExp(`수출[^\\n]{0,40}${c}|${c}[^\\n]{0,10}수출|${c}\\s*(진출|법인|현지)`, 'i').test(T) || (/(수출|해외|글로벌|export)/i.test(T) && new RegExp(`\\b${c}\\b`).test(T))));
+  const equipment = arrOrNull(pickSentences(T, EQUIP_RE, { cap: 6 }));
+  const production_items = arrOrNull(pickSentences(T, /(출시|납품|수상|대표\s*제품|주요\s*제품|베스트셀러|히트\s*상품|개발\s*완료|런칭)/i, { cap: 4 }));
+  const production_sites = arrOrNull(pickSentences(T, /(제\s*\d\s*공장|본사\s*공장|생산\s*(공장|사업장|시설)|제조소).{0,60}(시|군|구|도)\b|(경기|서울|인천|부산|대구|충|전|경|강원|제주)[^\n]{0,40}(공장|생산)/, { cap: 3 }));
+  const rnd = /(기업부설연구소|부설\s*연구소|R\s*&?\s*D\s*(센터|연구소)|연구개발\s*(센터|본부)|기술연구원)/i.test(T);
+  const rnd_centers = rnd ? ['기업부설연구소·R&D 조직 언급(홈페이지 게재)'] : null;
+  const capa = extractCapaSnippets(T);
+  const notable = arrOrNull([...(capa || []), ...pickSentences(T, /(글로벌\s*브랜드|유명\s*브랜드|대기업\s*납품|OEM\s*파트너|특허\s*\d|수출\s*\d)/i, { cap: 2 })].slice(0, 5));
+  const addrM = T.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^\n,]{4,50}(?:로|길)\s?\d[^\n,]{0,20})/);
+  const phoneM = T.match(/(0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4})/);
+  const data = {
+    company_name: name || null, business_type, product_categories, production_items,
+    quality_certifications, production_sites, equipment, rnd_centers, export_markets,
+    hq_address: addrM ? addrM[1].trim() : null, phone: phoneM ? phoneM[1] : null, notable,
+  };
+  const any = Object.entries(data).some(([k, v]) => k !== 'company_name' && v != null && (!Array.isArray(v) || v.length));
+  return { data: any ? data : null, source: 'heuristic', pages: g.pages, base: baseUrl };
+}
+// LLM 비값 위에 휴리스틱으로 공백 채우기(둘 다 있으면 병합)
+function mergeDeep(primary, secondary) {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  const out = { ...secondary };
+  for (const [k, v] of Object.entries(primary)) {
+    const empty = v == null || (Array.isArray(v) && !v.length) || v === '';
+    if (!empty) out[k] = v;
+  }
+  return out;
+}
+
 async function findHomepage(nm, corp) {
   if (!getProxy()) return null;
   // 공장등록부에 홈페이지가 있으면 그게 공식 확정 — 웹검색보다 신뢰
@@ -1035,11 +1123,21 @@ function renderHomepageInto(box, hp) {
   box.innerHTML = html;
 }
 
-// ── 🔬 홈페이지 심층분석 (LLM 웹조사) — 실제 생산 CAPA·인증 구조화 추출 ──
-// 프록시(서버) 경유로 Anthropic 호출(키는 서버 환경변수). 공식 API와 별개의 '홈페이지 게재 참고정보'.
+// ── 🔬 홈페이지 심층분석 — 실제 생산 CAPA·인증 구조화 추출 ──
+// 기본: 무료 키워드 휴리스틱(API키 불필요). 옵션: ANTHROPIC_API_KEY가 있으면 LLM 웹조사로 보강.
 async function siteDeepExtract(name, url) {
   const res = await proxyOnlyGet('siteExtract', { name: name || '', url: url || '' });
   return res && res.data ? res.data : null;
+}
+// 오케스트레이터: 휴리스틱(항상) + LLM(키 있을 때) 병합. LLM 값 우선, 공백은 휴리스틱으로 채움.
+async function siteDeepAnalyze(name, hpUrl) {
+  const heur = await siteDeepHeuristic(name, hpUrl).catch(() => null);
+  let llm = null, llmErr = null;
+  try { llm = await siteDeepExtract(name, hpUrl); } catch (e) { llmErr = e && e.message ? e.message : String(e); }
+  const data = mergeDeep(llm, heur && heur.data ? heur.data : null);
+  const source = llm ? (heur && heur.data ? 'ai+kw' : 'ai') : 'kw';
+  if (!data) return { source, err: (heur && heur.reason) || llmErr || '추출 결과 없음', keyless: !llm };
+  return { data, source, pages: heur && heur.pages, base: heur && heur.base };
 }
 const SITE_DEEP_FIELDS = [
   { key: 'business_type', label: '사업 유형', kind: 'chips', hot: true },
@@ -1067,29 +1165,32 @@ function siteDeepCell(val, kind, hot) {
   }
   return `<span class="sd-text">${esc(String(val))}</span>`;
 }
+function domainOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return String(u || ''); } }
+const SD_SRC_TAG = { kw: '키워드 기반(무료)', ai: 'AI 웹조사', 'ai+kw': 'AI+키워드' };
 function renderSiteDeepInto(box, state) {
   if (state.loading) {
-    box.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>웹 조사 중… (최대 1분)</span></h4><div class="sd-load">생산 CAPA·인증 정보를 조사하고 있습니다…</div>';
+    box.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>홈페이지 조사 중…</span></h4><div class="sd-load">홈페이지 본문에서 생산 CAPA·인증 정보를 추출하고 있습니다…</div>';
     return;
   }
-  if (state.err) {
-    const needKey = /ANTHROPIC_API_KEY|미설정|501/.test(state.err);
-    box.innerHTML = `<h4>🔬 홈페이지 심층분석</h4><div class="sd-none">${needKey
-      ? '미연결 — Vercel 환경변수에 <code>ANTHROPIC_API_KEY</code>를 추가하면 홈페이지 기반 생산·인증 심층분석이 활성화됩니다.'
-      : `분석 실패: ${esc(state.err)}`}</div>`;
+  const srcTag = state.source ? `<b class="sd-tag">${esc(SD_SRC_TAG[state.source] || state.source)}</b>` : '';
+  if (state.err && !state.data) {
+    box.innerHTML = `<h4>🔬 홈페이지 심층분석 ${srcTag}</h4><div class="sd-none">${esc(state.err)}` +
+      `<br><span class="sd-hint">홈페이지 본문을 못 읽었습니다(자바스크립트 렌더링 사이트이거나 미게재). ` +
+      `더 정확한 AI 웹조사를 켜려면 Vercel 환경변수에 <code>ANTHROPIC_API_KEY</code>를 추가하세요(선택).</span></div>`;
     return;
   }
   const d = state.data;
-  if (!d) { box.innerHTML = '<h4>🔬 홈페이지 심층분석</h4><div class="sd-none">추출 결과 없음</div>'; return; }
+  if (!d) { box.innerHTML = `<h4>🔬 홈페이지 심층분석 ${srcTag}</h4><div class="sd-none">추출 결과 없음</div>`; return; }
   const rows = SITE_DEEP_FIELDS
     .map((f) => ({ f, has: !(d[f.key] == null || (Array.isArray(d[f.key]) && !d[f.key].length) || d[f.key] === '') }))
     .filter((r) => r.has);
-  let html = `<h4>🔬 홈페이지 심층분석 <span>홈페이지·웹 조사 기반 · 참고용(방문 시 원본 확인)</span></h4>`;
+  let html = `<h4>🔬 홈페이지 심층분석 ${srcTag}<span>홈페이지 게재 정보 · 참고용(방문 시 원본 확인)</span></h4>`;
   if (!rows.length) {
-    html += '<div class="sd-none">홈페이지에서 생산·인증 정보를 확인하지 못했습니다(자바스크립트 렌더링 사이트이거나 미게재).</div>';
+    html += '<div class="sd-none">홈페이지에서 생산·인증 정보를 확인하지 못했습니다(미게재이거나 자바스크립트 렌더링 사이트).</div>';
   } else {
     html += '<div class="sd-grid">' + rows.map(({ f }) =>
       `<div class="sd-row${f.hot ? ' hot' : ''}"><i>${esc(f.label)}</i><div class="sd-v">${siteDeepCell(d[f.key], f.kind, f.hot)}</div></div>`).join('') + '</div>';
+    if (state.base) html += `<div class="sd-foot">출처: <a href="${esc(state.base)}" target="_blank" rel="noopener">${esc(domainOf(state.base))}</a>${state.source === 'kw' ? ' · 키워드 자동추출' : ''}</div>`;
   }
   box.innerHTML = html;
 }
@@ -1270,8 +1371,8 @@ function render(report, opts = {}) {
       report._siteDeep = { loading: true };
       renderSiteDeepInto(sdBox, report._siteDeep);
       const hpUrl = report._homepage && report._homepage.proposed ? report._homepage.proposed.url : '';
-      siteDeepExtract(report.meta.vendor_name, hpUrl)
-        .then((data) => { report._siteDeep = { data }; renderSiteDeepInto(sdBox, report._siteDeep); saveLastReport(report); })
+      siteDeepAnalyze(report.meta.vendor_name, hpUrl)
+        .then((state) => { report._siteDeep = state; renderSiteDeepInto(sdBox, report._siteDeep); saveLastReport(report); })
         .catch((e) => { report._siteDeep = { err: e && e.message ? e.message : String(e) }; renderSiteDeepInto(sdBox, report._siteDeep); });
     };
     if (report._homepage !== undefined) {
@@ -1289,7 +1390,7 @@ function render(report, opts = {}) {
     if (report._siteDeep && (report._siteDeep.data || report._siteDeep.err)) {
       renderSiteDeepInto(sdBox, report._siteDeep);
     } else {
-      sdBox.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>실제 생산 CAPA·인증을 웹 조사로 추출(참고용)</span></h4>';
+      sdBox.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>홈페이지에서 생산 CAPA·인증을 자동추출 (API키 불필요)</span></h4>';
       const btn = el('button', 'sd-run', '🔬 심층분석 실행');
       btn.addEventListener('click', runDeep);
       sdBox.appendChild(btn);

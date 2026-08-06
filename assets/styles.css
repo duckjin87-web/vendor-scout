@@ -527,3 +527,6 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .coreband { grid-template-columns: repeat(2, 1fr); }
   .ct-big { font-size: 22px; }
 }
+.sdbox .sd-tag { font-size: 10.5px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 8px; }
+.sd-hint { display: block; margin-top: 6px; font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+.sd-foot { margin-top: 10px; font-size: 11px; color: var(--faint); }
