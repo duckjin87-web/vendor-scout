@@ -530,3 +530,30 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .sdbox .sd-tag { font-size: 10.5px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 8px; }
 .sd-hint { display: block; margin-top: 6px; font-size: 11.5px; color: var(--faint); line-height: 1.5; }
 .sd-foot { margin-top: 10px; font-size: 11px; color: var(--faint); }
+
+/* 📰 뉴스·웹 인사이트 타임라인 */
+.insightbox { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 15px 17px; box-shadow: var(--shadow); margin-bottom: 18px; }
+.insightbox h4 { margin: 0 0 10px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.insightbox h4 span { font-size: 11px; font-weight: 500; color: var(--faint); }
+.ib-take { font-size: 12.5px; line-height: 1.55; border-radius: 11px; padding: 11px 13px; margin-bottom: 12px; border: 1px solid var(--border); }
+.ib-take b { font-weight: 800; margin-right: 4px; }
+.ib-good  { background: var(--gA-bg); border-color: transparent; color: var(--gA); }
+.ib-neutral { background: var(--panel-2); color: var(--muted); }
+.ib-watch { background: var(--risk-bg); border-color: transparent; color: var(--risk); }
+.ib-cnt { display: inline-block; margin-left: 6px; font-weight: 700; opacity: .85; }
+.ib-tl { list-style: none; margin: 0; padding: 0; }
+.ib-tl li { display: grid; grid-template-columns: 78px 82px 1fr; gap: 10px; align-items: start; padding: 9px 0; border-top: 1px solid var(--border); }
+.ib-tl li:first-child { border-top: 0; }
+.ib-date { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.ib-tag { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; height: fit-content; text-align: center; white-space: nowrap; }
+.ib-tag-up { background: var(--gA-bg); color: var(--gA); }
+.ib-tag-down { background: var(--risk-bg); color: var(--risk); }
+.ib-body a { font-size: 13px; font-weight: 600; color: var(--text); }
+.ib-body a:hover { color: var(--accent); }
+.ib-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
+.ib-foot { margin-top: 11px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+@media (max-width: 640px) {
+  .ib-tl li { grid-template-columns: 64px 1fr; }
+  .ib-tag { grid-column: 2; justify-self: start; margin-bottom: 2px; }
+  .ib-body { grid-column: 1 / -1; }
+}

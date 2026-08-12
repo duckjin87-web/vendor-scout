@@ -71,7 +71,7 @@ function buildProxyUrl(params) {
 // 프록시(api/proxy.js·worker.js)에 단일 정의 — 화이트리스트로 오픈프록시 방지.
 const PARAM_MAP = {
   corp:      { name: 'corpNm', bzno: 'bzno' }, // 상호 또는 사업자등록번호로 조회
-  finance:   { crno: 'crno' },
+  finance:   { crno: 'crno', rows: 'numOfRows' },
   rpt:       { name: 'entp_name', rows: 'numOfRows' },
   npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo' }, // 국민연금 V2 — camelCase
   npsDetail: { seq: 'seq', ym: 'dataCrtYm' },
@@ -723,7 +723,7 @@ async function npsLookup(nm, bzno) {
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
   const calls = {
-    finance: corp.crno ? proxyGet('finance', { crno: corp.crno }) : Promise.reject(new Error('법인등록번호 없음')),
+    finance: corp.crno ? proxyGet('finance', { crno: corp.crno, rows: '100' }) : Promise.reject(new Error('법인등록번호 없음')),
     rpt: proxyGet('rpt', { name: nm, rows: '100' }),
     nps: npsLookup(nm, corp.bzno),
     maker: makerLookup(nm),
@@ -731,7 +731,7 @@ async function finishLive(name, corp) {
     factory: proxyGet('factory', { name: nm, rows: '30' }),
     recall: proxyGet('recall', { rows: '500' }),
     nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
-    naverNews: proxyOnlyGet('naverNews', { query: `${nm} 화장품`, display: '5' }),
+    naverNews: proxyOnlyGet('naverNews', { query: nm, display: '30', sort: 'date' }),
     // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
     oemTrace: proxyOnlyGet('naverWeb', { query: `${nm} 제조원`, display: '10' }),
     // 외부 집계(marketbz 등) 비공식 보강 — 사용자 요청으로 비활성화(공식 data.go.kr API 자료만 신뢰).
@@ -1088,6 +1088,32 @@ function renderNews(news) {
   return b;
 }
 
+// 📰 뉴스·웹 인사이트 — 시점 있는 신호(성장·거래·리스크) 타임라인 + 종합 판단(재량)
+function renderInsights(ins) {
+  if (!ins || !ins.timeline || !ins.timeline.length) return null;
+  const b = el('div', 'insightbox');
+  const a = ins.assessment;
+  let html = `<h4>📰 뉴스·웹 인사이트 <span>업체명 기사에서 자동 취합 · 시점 표기 · 원문 확인 권장</span></h4>`;
+  if (a) {
+    html += `<div class="ib-take ib-${esc(a.level)}"><b>종합 판단</b> ${esc(a.note)} ` +
+      `<span class="ib-cnt">성장 ${a.ups} · 주의 ${a.downs}</span></div>`;
+  }
+  html += '<ul class="ib-tl">';
+  ins.timeline.forEach((t) => {
+    const d = t.date ? String(t.date) : '';
+    html += `<li class="ib-${esc(t.tone)}">` +
+      `<span class="ib-date">${esc(d || '—')}</span>` +
+      `<span class="ib-tag ib-tag-${esc(t.tone)}">${esc(t.tag)}</span>` +
+      `<div class="ib-body"><a href="${esc(t.link || '#')}" target="_blank" rel="noopener">${esc(t.title)}</a>` +
+      (t.desc ? `<div class="ib-desc">${esc(t.desc)}${t.desc.length >= 140 ? '…' : ''}</div>` : '') +
+      `</div></li>`;
+  });
+  html += '</ul>';
+  html += '<div class="ib-foot">신호 키워드(투자·증설·수출·신제품·수상 / 리콜·제재·소송·재무위험) 자동 분류 — 사실관계는 기사 원문·공식 API로 교차 확인하세요.</div>';
+  b.innerHTML = html;
+  return b;
+}
+
 // 홈페이지 추적 결과를 박스에 렌더 (검색중 → 결과 교체)
 function renderHomepageInto(box, hp) {
   const chip = (m) => `<span class="hp-m">✓ ${esc(m)}</span>`;
@@ -1356,6 +1382,8 @@ function render(report, opts = {}) {
 
   const ot = renderOemTrace(report.oem_trace);
   if (ot) root.appendChild(ot);
+
+  if (!excl.has('news')) { const ib = renderInsights(report.insights); if (ib) root.appendChild(ib); }
 
   const blocks = el('div', 'blocks');
   blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic)));

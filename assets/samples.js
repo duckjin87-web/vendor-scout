@@ -673,6 +673,56 @@ function assembleLiveReport(name, corp, res) {
   }) : [];
   const news = relevantNews.length ? relevantNews.slice(0, 5) : null;
 
+  // 📰 뉴스·웹 인사이트 — 업체명 포함 기사에서 '시점 있는 신호'를 분류·타임라인화(성장/거래/리스크).
+  //   재무·API의 정형값 밖에서 최근 동향을 포착(투자·증설·수출·신제품·수상 / 리콜·제재·소송 등).
+  const SIGNALS = [
+    { tag: '투자·자본', tone: 'up', re: /투자\s*유치|유상증자|상장|IPO|인수|합병|M&A|지분\s*인수|벤처\s*인증|시리즈\s*[A-D]/i },
+    { tag: '증설·시설', tone: 'up', re: /증설|신설|준공|착공|공장\s*확장|생산\s*라인\s*증설|스마트\s*공장|이전\s*확장/i },
+    { tag: '수출·계약', tone: 'up', re: /수출|수주|공급\s*계약|납품\s*계약|MOU|업무\s*협약|해외\s*진출|현지\s*법인|바이어/i },
+    { tag: '신제품·개발', tone: 'up', re: /신제품|출시|런칭|리뉴얼|공동\s*개발|기술\s*이전|독점\s*판매/i },
+    { tag: '인증·수상', tone: 'up', re: /인증\s*(획득|취득)|CGMP|ISO|비건\s*인증|특허\s*(등록|출원)|수상|대상\s*수상|선정|어워드|우수기업/i },
+    { tag: '실적호조', tone: 'up', re: /최대\s*실적|매출\s*(증가|성장|돌파|신기록)|흑자\s*전환|영업이익\s*(증가|개선)/i },
+    { tag: '리콜·회수', tone: 'down', re: /리콜|회수|판매\s*중지|제조\s*정지|영업\s*정지/i },
+    { tag: '제재·위반', tone: 'down', re: /적발|제재|과징금|벌금|행정\s*처분|위반|허위|과대\s*광고|고발/i },
+    { tag: '분쟁·소송', tone: 'down', re: /소송|분쟁|고소|피소|배상|논란|불매/i },
+    { tag: '재무위험', tone: 'down', re: /적자|영업\s*손실|자본\s*잠식|부도|법정\s*관리|회생\s*절차|파산|워크아웃|구조조정|감원/i },
+  ];
+  const parsePub = (s) => { const d = new Date(s || ''); return isNaN(d) ? null : d.toISOString().slice(0, 10); };
+  const relForInsight = newsKey.length >= 2 ? newsItems.filter((n) => {
+    const t = (String(n.title || '') + ' ' + String(n.description || '')).replace(/<\/?b>/g, '').replace(/\s/g, '');
+    return t.includes(newsKey);
+  }) : [];
+  const insightItems = [];
+  for (const n of relForInsight) {
+    const txt = (String(n.title || '') + ' ' + String(n.description || '')).replace(/<\/?b>/g, '');
+    const hits = SIGNALS.filter((s) => s.re.test(txt));
+    if (!hits.length) continue; // 신호 없는 일반기사는 타임라인 제외(잡음 억제)
+    const down = hits.find((h) => h.tone === 'down');
+    const pick = down || hits[0]; // 리스크 신호 우선 표기
+    insightItems.push({
+      date: parsePub(n.pubDate), tag: pick.tag, tone: pick.tone,
+      title: String(n.title || '').replace(/<\/?b>/g, ''),
+      link: n.originallink || n.link || '',
+      desc: String(n.description || '').replace(/<\/?b>/g, '').slice(0, 140),
+    });
+  }
+  insightItems.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  const timeline = insightItems.slice(0, 12);
+  // 종합 판단(재량) — 최근 신호의 방향성으로 한 줄 코멘트
+  const ups = timeline.filter((x) => x.tone === 'up').length;
+  const downs = timeline.filter((x) => x.tone === 'down').length;
+  let assessment = null;
+  if (timeline.length) {
+    const lvl = downs >= 2 || (downs && downs >= ups) ? 'watch' : (ups >= 2 ? 'good' : 'neutral');
+    const takes = {
+      good: `최근 언론에서 성장·거래 신호(${ups}건)가 우세합니다 — 투자·증설·수출·수상 등. 활동성이 높은 업체로 판단되며, 아래 기사 원문으로 사실관계를 확인하세요.`,
+      neutral: `주목할 성장/리스크 신호는 제한적입니다(성장 ${ups} · 주의 ${downs}). 기사가 적어 동향 파악보다 API 정형 데이터 위주로 판단하세요.`,
+      watch: `주의 신호(${downs}건)가 포착됩니다 — 리콜·제재·소송·재무위험 등. 거래 전 아래 기사 원문과 국세청·회수이력을 반드시 교차 확인하세요.`,
+    };
+    assessment = { level: lvl, ups, downs, note: takes[lvl] };
+  }
+  const insights = timeline.length ? { timeline, assessment } : null;
+
   // 웹 언급 추적 — 업체를 언급한 웹문서를 유형(제조원·채용·기업보고서)으로 분류(활동·거래 단서)
   const oemRaw = R.oemTrace && R.oemTrace.ok ? R.oemTrace.data : null;
   const oemItems = (oemRaw && oemRaw.items) || [];
@@ -734,22 +784,38 @@ function assembleLiveReport(name, corp, res) {
     f('CGMP 적합업소', hasCgmp ? '적합 (식약처 GMP 등재)' : null, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 — ISO/할랄/비건은 공개 API 없어 방문 시 인증서 확인' : why('gmp', 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)')),
   ];
 
-  // 재무 — 연도 중복 제거(같은 해 복수 제출 대비) 후 최신 3개년
+  // 재무 — 연도별 '가장 완전한' 레코드 채택(같은 해 별도/연결 복수 제출 대비) 후 최신 5개년
   const flAll = R.finance && R.finance.ok ? listOf(R.finance.data, ['response.body.items.item', 'body.items']) : [];
   const byYear = new Map();
-  flAll.forEach((it) => { const y = Number(it.bizYear || it.biz_year); if (y && !byYear.has(y)) byYear.set(y, it); });
+  const finScore = (r) => (r.enpSaleAmt ? 1 : 0) + (r.enpTastAmt ? 1 : 0) + (r.enpCptlAmt ? 1 : 0) + (r.enpBzopPft ? 1 : 0);
+  flAll.forEach((it) => {
+    const y = Number(it.bizYear || it.biz_year); if (!y) return;
+    const prev = byYear.get(y);
+    if (!prev || finScore(it) > finScore(prev)) byYear.set(y, it); // 매출·자산 등 값이 더 채워진 레코드 우선
+  });
   const years = [...byYear.keys()].sort((a, b) => b - a).slice(0, 5).sort((a, b) => a - b);
   let finance, finance_history = [];
   if (years.length) {
     finance_history = years.map((y) => { const it = byYear.get(y); return { year: y, revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft), assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt) }; });
     const L = finance_history[finance_history.length - 1];
     const eok = (v) => (v != null ? `${v}억 원` : null);
+    // ★ 재무는 회계연도 기준 — as_of를 '조회일'이 아니라 '해당 회계연도'로(옛 자료가 최신처럼 보이는 문제 방지).
+    //   재무는 통상 1년 지연 → 최신연도가 (조회연도-2)보다 오래되면 'stale'로 표기하고 등급 강등.
+    const curYear = Number(String(today).slice(0, 4)) || 2026;
+    const lag = curYear - L.year;
+    const stale = lag >= 3;
+    const asOf = `${L.year}-12`;
+    const grade = stale ? 'C' : 'A';
+    const src = `금융위 재무정보 API (${L.year} 회계연도)`;
+    const baseNote = stale
+      ? `★ 금융위에 제출된 가장 최신 회계연도는 ${L.year}년입니다(약 ${lag}년 전) — 이후 미제출(비상장 전환·외감 대상 제외 등)이라 현재 실적과 다를 수 있어 참고만 하세요.`
+      : `★ ${L.year} 회계연도 확정 실적(금융위 제출 최신). 재무는 통상 1년 지연 공시.`;
     finance = [
-      f('매출액', eok(L.revenue), 'A', `금융위 재무정보 API (${L.year}년)`, today),
-      f('영업이익', eok(L.operatingProfit), 'A', `금융위 재무정보 API (${L.year}년)`, today),
-      f('총자산', eok(L.assets), 'A', `금융위 재무정보 API (${L.year}년)`, today),
-      f('총부채', eok(L.debt), 'A', `금융위 재무정보 API (${L.year}년)`, today),
-      f('자본금', eok(L.capital), 'A', `금융위 재무정보 API (${L.year}년)`, today),
+      f('매출액', eok(L.revenue), grade, src, asOf, baseNote, !stale),
+      f('영업이익', eok(L.operatingProfit), grade, src, asOf, null, !stale),
+      f('총자산', eok(L.assets), grade, src, asOf, null, !stale),
+      f('총부채', eok(L.debt), grade, src, asOf, null, !stale),
+      f('자본금', eok(L.capital), grade, src, asOf, null, !stale),
     ];
   } else {
     finance = ['매출액', '영업이익', '총자산', '총부채', '자본금'].map((k) =>
@@ -847,7 +913,7 @@ function assembleLiveReport(name, corp, res) {
       visit_coord: (kkTravel && kkTravel.dest && isFinite(kkTravel.dest.lat) && isFinite(kkTravel.dest.lng)) ? { lat: kkTravel.dest.lat, lng: kkTravel.dest.lng } : null,
     },
     basic, capacity, finance, finance_history, finance_health, cross_diag, recalls, oem_trace, crosscheck, risk_flags, diff_from_prev: [],
-    news, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
+    news, insights, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
   };
 }
 
