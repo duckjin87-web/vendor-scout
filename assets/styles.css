@@ -557,3 +557,29 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .ib-tag { grid-column: 2; justify-self: start; margin-bottom: 2px; }
   .ib-body { grid-column: 1 / -1; }
 }
+
+/* ✅ 방문 전 체크리스트 */
+.vcbox { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 15px 17px; box-shadow: var(--shadow); margin-bottom: 18px; }
+.vcbox h4 { margin: 0 0 10px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.vcbox h4 span { font-size: 11px; font-weight: 500; color: var(--faint); }
+.vc-list { list-style: none; margin: 0; padding: 0; }
+.vc-list li { display: flex; align-items: flex-start; gap: 9px; padding: 9px 2px; border-top: 1px solid var(--border); }
+.vc-list li:first-child { border-top: 0; }
+.vc-list input { flex: 0 0 auto; margin-top: 2px; width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+.vc-list label { flex: 1; display: grid; grid-template-columns: 40px 56px 1fr; gap: 4px 10px; align-items: baseline; cursor: pointer; }
+.vc-pri { font-size: 10.5px; font-weight: 800; text-align: left; }
+.vc-pri-high { color: var(--risk); }
+.vc-pri-mid { color: var(--gC); }
+.vc-pri-low { color: var(--faint); }
+.vc-cat { font-size: 11px; font-weight: 700; color: var(--muted); }
+.vc-txt { font-size: 13px; color: var(--text); font-weight: 500; }
+.vc-why { grid-column: 3; font-size: 11px; color: var(--faint); line-height: 1.45; }
+.vc-list input:checked ~ label .vc-txt { text-decoration: line-through; color: var(--faint); }
+.vc-list li.vc-high .vc-txt { font-weight: 600; }
+.vc-foot { margin-top: 11px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+@media (max-width: 640px) {
+  .vc-list label { grid-template-columns: 40px 1fr; }
+  .vc-cat { grid-column: 2; }
+  .vc-txt, .vc-why { grid-column: 1 / -1; }
+}
+@media print { .vc-list input { -webkit-appearance: auto; appearance: auto; } .vcbox { break-inside: avoid; } }

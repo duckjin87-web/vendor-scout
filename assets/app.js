@@ -1259,6 +1259,81 @@ function renderCoreBand(report) {
   return wrap;
 }
 
+// ✅ 방문 전 체크리스트 — 기본정보(API) + 뉴스 신호 + 교차검증을 종합해 실사 확인 항목 자동 제안
+function buildVisitChecklist(report) {
+  const B = report.basic || [], C = report.capacity || [], F = report.finance || [];
+  const val = (arr, k) => { const f = arr.find((x) => x.key === k); return f && f.value ? f.value : null; };
+  const items = []; // {pri, cat, text, why}
+  const add = (pri, cat, text, why) => items.push({ pri, cat, text, why: why || '' });
+
+  // ── 규제 적격성(핵심) ──
+  const makerOk = !!val(B, '제조업 등록');
+  makerOk
+    ? add('high', '규제', '식약처 화장품제조업 등록증·허가번호 원본 대조', '조회상 제조업 등록 확인됨 — 방문 시 원본/유효 확인')
+    : add('high', '규제', '화장품제조업 등록 여부 직접 확인(등록증 원본)', 'API로 제조업 등록 미확인 — 미등록이면 거래 부적격');
+  if (!val(C, 'CGMP 적합업소')) add('mid', '규제', 'CGMP 운영 수준·제조위생 시설 점검', '식약처 CGMP 적합업소 미등재 — 실제 GMP 관리수준 확인');
+  if ((report.recalls || []).length) add('high', '규제', `과거 회수·판매중지 ${report.recalls.length}건 원인·재발방지책 확인`, '품질·안전 사고 이력 있음');
+
+  // ── 평판·언론 신호(뉴스 인사이트 연동) ──
+  const a = report.insights && report.insights.assessment;
+  if (a && a.level === 'watch') add('high', '평판', '언론상 리스크 신호(리콜·제재·소송·재무위험) 사실관계·해소 여부 확인', `뉴스 주의 신호 ${a.downs}건`);
+  if (a && a.level === 'good') add('low', '평판', '최근 성장 이슈(투자·증설·수출) 진행상황·납기 영향 확인', `뉴스 성장 신호 ${a.ups}건`);
+
+  // ── 실체·정합성(교차검증 연동) ──
+  const cd = report.cross_diag;
+  if (cd && Array.isArray(cd.items)) cd.items.forEach((c) => {
+    if (c.status !== 'warn') return;
+    if (/주소/.test(c.label)) add('mid', '실체', '본점·연금·공장 주소 상이 — 실제 생산 현장 방문지 확정', c.detail);
+    if (/인력/.test(c.label)) add('mid', '실체', '연금 재직자수 vs 공장 종업원수 불일치 — 실제 생산인력 확인', c.detail);
+  });
+  const bstt = val(B, '사업자 상태');
+  if (!bstt || !/계속/.test(bstt)) add('mid', '실체', '국세청 사업자상태(휴·폐업 여부) 사업자등록증으로 확인', bstt ? `현재 표기: ${bstt}` : '사업자상태 미확인');
+
+  // ── 재무(최신성/건전성 연동) ──
+  const fh = report.finance_health;
+  const staleFin = F.some((x) => x.value && x.fresh === false);
+  if (fh && fh.level && fh.level !== '양호') add('high', '재무', '재무 위험 신호 — 최근 재무제표·신용평가서(NICE/KED) 요청', (fh.reasons || []).join(', ') || fh.level);
+  else if (staleFin) add('mid', '재무', '공시 재무가 과거 회계연도 — 최근 결산서·부가세 과세표준증명 요청', '금융위 최신 제출연도가 오래됨');
+  else if (F.length && F.every((x) => x.data_gap)) add('mid', '재무', '공개 재무 없음(비상장) — 최근 재무제표·신용조회 요청', '금융위 재무 API 미수록');
+
+  // ── 생산 역량(정형 데이터 밖 — 실사 필수) ──
+  add('mid', '생산', '월 생산 CAPA·라인 가동률·MOQ·리드타임 확인', '정형 데이터로 확인 불가 — 현장 실사 항목');
+  add('mid', '생산', '핵심 설비(충전·유화·포장) 실물·노후도·자동화 수준 확인', '');
+  const deep = report._siteDeep && report._siteDeep.data;
+  const certs = deep && deep.quality_certifications;
+  add('low', '품질', certs && certs.length ? `홈페이지 게재 인증(${certs.slice(0, 3).join(', ')}) 인증서 원본·유효기간 대조` : '보유 인증(ISO22716·비건·할랄 등) 인증서 원본·유효기간 확인', '게재 ≠ 유효 — 원본 확인');
+  add('low', '품질', '시험성적서(CoA)·안정성 시험자료·품질 클레임 대응 프로세스 확인', '');
+
+  // ── 거래 조건(범용) ──
+  add('low', '거래', '단가·결제조건·독점/경쟁사 납품 여부·최소 계약물량 확인', '');
+
+  const order = { high: 0, mid: 1, low: 2 };
+  items.sort((x, y) => order[x.pri] - order[y.pri]);
+  return items;
+}
+const PRI_LABEL = { high: '필수', mid: '권장', low: '참고' };
+function renderVisitChecklist(report) {
+  const items = buildVisitChecklist(report);
+  if (!items.length) return null;
+  const box = el('div', 'vcbox');
+  const hi = items.filter((i) => i.pri === 'high').length;
+  let html = `<h4>✅ 방문 전 체크리스트 <span>기본정보·뉴스·교차검증 종합 자동제안 · 방문 시 원본 확인용${hi ? ` · 필수 ${hi}건` : ''}</span></h4>`;
+  html += '<ul class="vc-list">';
+  items.forEach((it, idx) => {
+    html += `<li class="vc-${esc(it.pri)}">` +
+      `<input type="checkbox" id="vc${idx}"><label for="vc${idx}">` +
+      `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri])}</span>` +
+      `<span class="vc-cat">${esc(it.cat)}</span>` +
+      `<span class="vc-txt">${esc(it.text)}</span>` +
+      (it.why ? `<span class="vc-why">${esc(it.why)}</span>` : '') +
+      `</label></li>`;
+  });
+  html += '</ul>';
+  html += '<div class="vc-foot">우선순위: <b>필수</b>=거래 적격성 직결 · <b>권장</b>=실체/재무 확인 · <b>참고</b>=거래조건. 인쇄해서 방문 시 체크하세요.</div>';
+  box.innerHTML = html;
+  return box;
+}
+
 function render(report, opts = {}) {
   currentReport = report;
   const root = $('#report');
@@ -1328,6 +1403,9 @@ function render(report, opts = {}) {
   // ★ 핵심 요약 — 검증에서 가장 중요한 사실을 최상단 타일로(핵심부터 파악)
   const coreBand = renderCoreBand(report);
   if (coreBand) root.appendChild(coreBand);
+
+  // ✅ 방문 전 체크리스트 — 기본정보+뉴스+교차검증 종합 실사 제안(실데이터일 때)
+  if (m.live) { const vc = renderVisitChecklist(report); if (vc) root.appendChild(vc); }
 
   // 데이터 출처 배너
   if (m.live) {
