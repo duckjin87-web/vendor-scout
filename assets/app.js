@@ -994,124 +994,119 @@ function financeBlock(report) {
   return b;
 }
 
-function renderRiskFlags(flags) {
-  if (!flags || !flags.length) return null;
-  const box = el('div', 'riskbox');
-  box.appendChild(el('h3', null, `⚠ 리스크 플래그 ${flags.length}건 — 방문 전 반드시 확인`));
-  const ul = el('ul');
-  flags.forEach((fl) => {
-    const li = el('li');
-    li.appendChild(el('span', 't', esc(fl.type)));
-    li.appendChild(el('span', null, esc(fl.detail || '')));
-    ul.appendChild(li);
-  });
-  box.appendChild(ul);
-  return box;
-}
+// ═══ 체크 필요사항 ① 기준정보 기반 ═══
+// 리스크 플래그 + 회수·판매중지 + 교차검증 자동진단을 하나로 통합.
+// 공식 API(국세청·식약처·금융위·국민연금·산단공) 값끼리 대조해 나온 '확인 필요' 항목.
+function renderCheckOfficial(report) {
+  const flags = report.risk_flags || [];
+  const recalls = report.recalls || [];
+  const cd = report.cross_diag;
+  const cdItems = (cd && cd.items) || [];
+  if (!flags.length && !recalls.length && !cdItems.length) return null;
 
-// ⚠ 화장품 회수·판매중지 이력 — 있으면 최우선 리스크 패널로 표시
-function renderRecalls(recalls) {
-  if (!recalls || !recalls.length) return null;
-  const box = el('div', 'recallbox');
-  box.appendChild(el('h3', null, `⚠ 회수·판매중지 이력 ${recalls.length}건 — 식약처 (품질·안전 리스크)`));
-  const ul = el('ul');
+  const rows = []; // {sev, tag, label, detail}
+  // 1) 회수·판매중지 — 품질/안전 최우선
   recalls.slice(0, 8).forEach((r) => {
-    const li = el('li');
-    const head = [r.date ? `<b>${esc(r.date)}</b>` : '', r.product ? esc(r.product) : ''].filter(Boolean).join(' · ');
-    li.innerHTML = `<div class="rc-h">${head || '상세'}</div>` + (r.reason ? `<div class="rc-r">${esc(r.reason)}</div>` : '');
-    ul.appendChild(li);
+    rows.push({ sev: 'bad', tag: '회수·판매중지',
+      label: [r.date, r.product].filter(Boolean).join(' · ') || '이력 확인',
+      detail: r.reason || '식약처 회수·판매중지 이력 — 원인·재발방지책 확인' });
   });
-  box.appendChild(ul);
-  if (recalls.length > 8) box.appendChild(el('div', 'rc-more', `외 ${recalls.length - 8}건`));
-  return box;
-}
-
-// 🔎 웹 언급 추적 — 업체 언급 웹문서를 유형(제조원·채용·기업보고서)으로 분류(활동·거래 단서)
-function renderOemTrace(list) {
-  if (!list || !list.length) return null;
-  const box = el('div', 'oembox');
-  box.appendChild(el('h4', null, `🔎 웹 언급 추적 <span>업체 언급 웹문서 ${list.length}건 — 활동·거래 단서(참고)</span>`));
-  const ul = el('ul');
-  list.forEach((o) => {
-    const li = el('li');
-    const tagCls = o.tag === '채용' ? 'ot-hire' : o.tag === '기업보고서' ? 'ot-report' : o.tag === '제조원/납품' ? 'ot-oem' : 'ot-etc';
-    const tag = o.tag ? `<span class="ot-tag ${tagCls}">${esc(o.tag)}</span>` : '';
-    const t = o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.title || o.link)}</a>` : esc(o.title || '');
-    li.innerHTML = `<div class="ot-t">${tag}${t}</div>${o.desc ? `<div class="ot-d">${esc(o.desc)}</div>` : ''}`;
-    ul.appendChild(li);
+  // 2) 리스크 플래그(국세청 상태·재무 등) — 회수는 위에서 이미 표기했으므로 중복 제외
+  flags.filter((fl) => !/회수|판매중지/.test(fl.type || '')).forEach((fl) => {
+    rows.push({ sev: 'bad', tag: fl.type || '리스크', label: fl.detail || '', detail: '' });
   });
-  box.appendChild(ul);
-  // 기업보고서 언급이 있으면 재무가 어딘가 존재한다는 신호
-  if (list.some((o) => o.tag === '기업보고서')) {
-    box.appendChild(el('div', 'ot-hint', 'ℹ️ 기업신용보고서가 존재 — 비공개 재무자료 있음(신용조회 시 재무 확인 가능)'));
-  }
-  return box;
-}
-
-// 🔀 교차검증 자동진단 — 인력/주소를 여러 출처로 대조한 결과 패널
-function renderCrossDiag(cd) {
-  if (!cd || !cd.items || !cd.items.length) return null;
-  const lv = cd.level === 'high' ? 'bad' : cd.level === 'mid' ? 'mid' : cd.level === 'ok' ? 'good' : 'na';
-  const box = el('div', 'crossdiag ' + lv);
-  const head = cd.level === 'ok' ? '출처 간 정합' : cd.level === 'na' ? '대조 데이터 부족' : `불일치 ${cd.warnCount}건 — 방문 확인 권장`;
-  box.appendChild(el('h3', null, `🔀 교차검증 자동진단 <span class="cd-sum">${esc(head)}</span>`));
-  const ul = el('ul');
-  cd.items.forEach((c) => {
-    const ic = c.status === 'match' ? '✓' : c.status === 'warn' ? '⚠' : '—';
-    const li = el('li', 'cd-' + c.status);
-    li.innerHTML = `<span class="cd-ic">${ic}</span><span class="cd-lb">${esc(c.label)}</span><span class="cd-dt">${esc(c.detail)}</span>`;
-    ul.appendChild(li);
+  // 3) 교차검증 — 불일치(warn)는 확인필요, 일치(match)/대조불가(na)는 정합성 근거로 표시
+  cdItems.forEach((c) => {
+    rows.push({ sev: c.status === 'warn' ? 'warn' : (c.status === 'match' ? 'ok' : 'na'),
+      tag: c.label, label: c.detail || '', detail: '' });
   });
-  box.appendChild(ul);
-  return box;
-}
 
-
-function renderNews(news) {
-  if (!news || !news.length) return null;
-  const b = el('div', 'newsbox');
-  b.innerHTML = `<h4>📰 최신 관련기사 <span>(최근 1년 · ${news.length}건)</span></h4>`;
-  const list = el('ul', 'newslist');
-  news.forEach((n) => {
-    const li = el('li');
-    const title = String(n.title || '').replace(/<\/?b>/g, '');
-    const desc = String(n.description || '').replace(/<\/?b>/g, '');
-    const date = n.pubDate ? new Date(n.pubDate).toLocaleDateString('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
-    const src = n.source || '';
-    li.innerHTML =
-      `<a href="${esc(n.link || '#')}" target="_blank" rel="noopener" class="ntitle">${esc(title)}</a>` +
-      `<div class="ndesc">${esc(desc.slice(0, 120))}${desc.length > 120 ? '…' : ''}</div>` +
-      `<div class="nmeta">${date}${src ? ' · ' + esc(src) : ''}</div>`;
-    list.appendChild(li);
-  });
-  b.appendChild(list);
-  return b;
-}
-
-// 📰 뉴스·웹 인사이트 — 시점 있는 신호(성장·거래·리스크) 타임라인 + 종합 판단(재량)
-function renderInsights(ins) {
-  if (!ins || !ins.timeline || !ins.timeline.length) return null;
-  const b = el('div', 'insightbox');
-  const a = ins.assessment;
-  let html = `<h4>📰 뉴스·웹 인사이트 <span>업체명 기사에서 자동 취합 · 시점 표기 · 원문 확인 권장</span></h4>`;
-  if (a) {
-    html += `<div class="ib-take ib-${esc(a.level)}"><b>종합 판단</b> ${esc(a.note)} ` +
-      `<span class="ib-cnt">성장 ${a.ups} · 주의 ${a.downs}</span></div>`;
-  }
-  html += '<ul class="ib-tl">';
-  ins.timeline.forEach((t) => {
-    const d = t.date ? String(t.date) : '';
-    html += `<li class="ib-${esc(t.tone)}">` +
-      `<span class="ib-date">${esc(d || '—')}</span>` +
-      `<span class="ib-tag ib-tag-${esc(t.tone)}">${esc(t.tag)}</span>` +
-      `<div class="ib-body"><a href="${esc(t.link || '#')}" target="_blank" rel="noopener">${esc(t.title)}</a>` +
-      (t.desc ? `<div class="ib-desc">${esc(t.desc)}${t.desc.length >= 140 ? '…' : ''}</div>` : '') +
-      `</div></li>`;
+  const need = rows.filter((r) => r.sev === 'bad' || r.sev === 'warn').length;
+  const box = el('div', 'chkbox chk-official');
+  let html = `<h3>🏛 체크 필요사항 <b>· 기준정보 기반</b>` +
+    `<span class="chk-sum ${need ? 'on' : ''}">${need ? `확인 필요 ${need}건` : '특이사항 없음'}</span></h3>` +
+    `<div class="chk-note">공식 API(국세청·식약처·금융위·국민연금·산단공) 값을 서로 대조한 결과입니다.</div>`;
+  html += '<ul class="chk-list">';
+  rows.forEach((r) => {
+    const ic = r.sev === 'bad' ? '⚠' : r.sev === 'warn' ? '⚠' : r.sev === 'ok' ? '✓' : '—';
+    html += `<li class="chk-${esc(r.sev)}">` +
+      `<span class="chk-ic">${ic}</span>` +
+      `<span class="chk-tag">${esc(r.tag)}</span>` +
+      `<span class="chk-body">${esc(r.label)}${r.detail ? `<em>${esc(r.detail)}</em>` : ''}</span>` +
+      `</li>`;
   });
   html += '</ul>';
-  html += '<div class="ib-foot">신호 키워드(투자·증설·수출·신제품·수상 / 리콜·제재·소송·재무위험) 자동 분류 — 사실관계는 기사 원문·공식 API로 교차 확인하세요.</div>';
-  b.innerHTML = html;
-  return b;
+  box.innerHTML = html;
+  return box;
+}
+
+// ═══ 체크 필요사항 ② 웹 기반 ═══
+// 뉴스 신호 타임라인 + 웹 언급 추적 + 최신 관련기사를 하나로 통합.
+function renderCheckWeb(report) {
+  const ins = report.insights;
+  const timeline = (ins && ins.timeline) || [];
+  const assess = ins && ins.assessment;
+  const oem = report.oem_trace || [];
+  const news = report.news || [];
+  if (!timeline.length && !oem.length && !news.length) return null;
+
+  const box = el('div', 'chkbox chk-web');
+  const downs = assess ? assess.downs : 0;
+  let html = `<h3>🌐 체크 필요사항 <b>· 웹 기반</b>` +
+    `<span class="chk-sum ${downs ? 'on' : ''}">${downs ? `주의 신호 ${downs}건` : (timeline.length ? `신호 ${timeline.length}건` : `언급 ${oem.length + news.length}건`)}</span></h3>` +
+    `<div class="chk-note">네이버 뉴스·웹문서에서 업체명이 실제 포함된 자료만 취합했습니다. 사실관계는 원문 확인 권장.</div>`;
+
+  // 종합 판단(재량)
+  if (assess) html += `<div class="chk-take ib-${esc(assess.level)}"><b>종합 판단</b> ${esc(assess.note)}</div>`;
+
+  // ── 신호 타임라인(시점 있는 항목) ──
+  if (timeline.length) {
+    html += `<div class="chk-sec">신호 타임라인 <i>발행일 기준</i></div><ul class="ib-tl">`;
+    timeline.forEach((t) => {
+      html += `<li class="ib-${esc(t.tone)}">` +
+        `<span class="ib-date">${esc(t.date || '—')}</span>` +
+        `<span class="ib-tag ib-tag-${esc(t.tone)}">${esc(t.tag)}</span>` +
+        `<div class="ib-body"><a href="${esc(t.link || '#')}" target="_blank" rel="noopener">${esc(t.title)}</a>` +
+        (t.desc ? `<div class="ib-desc">${esc(t.desc)}</div>` : '') + `</div></li>`;
+    });
+    html += '</ul>';
+  }
+
+  // ── 웹 언급 추적(제조원·채용·기업보고서) ──
+  if (oem.length) {
+    html += `<div class="chk-sec">웹 언급 추적 <i>활동·거래 단서</i></div><ul class="ot-list">`;
+    oem.forEach((o) => {
+      const tagCls = o.tag === '채용' ? 'ot-hire' : o.tag === '기업보고서' ? 'ot-report' : o.tag === '제조원/납품' ? 'ot-oem' : 'ot-etc';
+      const t = o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.title || o.link)}</a>` : esc(o.title || '');
+      html += `<li><div class="ot-t"><span class="ot-tag ${tagCls}">${esc(o.tag || '언급')}</span>${t}</div>` +
+        (o.desc ? `<div class="ot-d">${esc(o.desc)}</div>` : '') + `</li>`;
+    });
+    html += '</ul>';
+    if (oem.some((o) => o.tag === '기업보고서')) {
+      html += `<div class="ot-hint">ℹ️ 기업신용보고서가 존재 — 비공개 재무자료 있음(신용조회 시 재무 확인 가능)</div>`;
+    }
+    if (oem.some((o) => o.tag === '채용')) {
+      html += `<div class="ot-hint">ℹ️ 채용공고 확인 — 현재 가동·인력 충원 중일 가능성(생산 활동성 단서)</div>`;
+    }
+  }
+
+  // ── 최신 관련기사(신호로 분류되지 않은 일반 기사) ──
+  const tlLinks = new Set(timeline.map((t) => t.link));
+  const others = news.filter((n) => !tlLinks.has(n.originallink || n.link));
+  if (others.length) {
+    html += `<div class="chk-sec">최신 관련기사</div><ul class="newslist">`;
+    others.slice(0, 5).forEach((n) => {
+      const title = String(n.title || '').replace(/<\/?b>/g, '');
+      const desc = String(n.description || '').replace(/<\/?b>/g, '');
+      const date = n.pubDate ? new Date(n.pubDate).toLocaleDateString('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+      html += `<li><a href="${esc(n.link || '#')}" target="_blank" rel="noopener" class="ntitle">${esc(title)}</a>` +
+        `<div class="ndesc">${esc(desc.slice(0, 120))}${desc.length > 120 ? '…' : ''}</div>` +
+        `<div class="nmeta">${esc(date)}</div></li>`;
+    });
+    html += '</ul>';
+  }
+  box.innerHTML = html;
+  return box;
 }
 
 // 홈페이지 추적 결과를 박스에 렌더 (검색중 → 결과 교체)
@@ -1449,25 +1444,15 @@ function render(report, opts = {}) {
       '실데이터는 우측 상단 <b>🔌 실데이터 연결</b>에 <b>프록시 주소</b>(/api/proxy)를 넣으면 됩니다.'));
   }
 
-  const rf = renderRiskFlags(report.risk_flags);
-  if (rf) root.appendChild(rf);
-
-  const rc = renderRecalls(report.recalls);
-  if (rc) root.appendChild(rc);
-
-  const cd = renderCrossDiag(report.cross_diag);
-  if (cd) root.appendChild(cd);
-
-  const ot = renderOemTrace(report.oem_trace);
-  if (ot) root.appendChild(ot);
-
-  if (!excl.has('news')) { const ib = renderInsights(report.insights); if (ib) root.appendChild(ib); }
+  // 체크 필요사항 — ① 기준정보(공식 API 대조) ② 웹(뉴스·웹문서). 근거 패널 2개로 통합.
+  const chkO = renderCheckOfficial(report);
+  if (chkO) root.appendChild(chkO);
+  if (!excl.has('news')) { const chkW = renderCheckWeb(report); if (chkW) root.appendChild(chkW); }
 
   const blocks = el('div', 'blocks');
   blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic)));
   blocks.appendChild(block('생산역량 · 인원', '🏭', visible(report.capacity)));
   if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
-  if (!excl.has('news')) { const newsB = renderNews(report.news); if (newsB) blocks.appendChild(newsB); }
 
   // 🔎 홈페이지 추적 — 실데이터일 때만, 지연 로드(첫 렌더 이후 비동기). 결과는 report에 캐시.
   if (m.live) {
