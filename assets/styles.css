@@ -613,3 +613,5 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .chk-web .ot-list { list-style: none; margin: 0; padding: 0; }
 .chk-web .ot-list li { padding: 7px 0; border-top: 1px solid var(--border); }
 .chk-web .ot-list li:first-child { border-top: 0; }
+.vc-ins { grid-column: 3; font-size: 11px; color: var(--accent); line-height: 1.45; margin-top: 1px; }
+@media (max-width: 640px) { .vc-ins { grid-column: 1 / -1; } }

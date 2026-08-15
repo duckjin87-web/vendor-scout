@@ -1255,64 +1255,108 @@ function renderCoreBand(report) {
 }
 
 // ✅ 방문 전 체크리스트 — 기본정보(API) + 뉴스 신호 + 교차검증을 종합해 실사 확인 항목 자동 제안
+// 웹 신호(기사 태그) → 방문 시 확인할 질문·인사이트 매핑
+const WEB_SIGNAL_ASK = {
+  '투자·자본': { pri: 'mid', cat: '투자', ask: '투자유치 자금의 사용처(증설·설비·운전자금) 및 우리 물량 대응 여력 확인', ins: '자금 유입은 CAPA 확대 신호 — 단, 지분 변동으로 의사결정 라인이 바뀌었을 수 있음' },
+  '증설·시설': { pri: 'high', cat: '증설', ask: '증설 라인의 실제 가동 여부·추가 CAPA(월 생산량)·가동 시점 확인', ins: '증설 보도는 수주 여력 확대 신호 — 준공만 하고 미가동인 경우가 있어 현장 확인 필수' },
+  '수출·계약': { pri: 'high', cat: '수주', ask: '기존 수출/공급계약이 점유한 생산능력 비중과 우리 발주 가능 슬롯 확인', ins: '대형 계약이 있으면 라인이 이미 차 있어 납기가 밀릴 수 있음' },
+  '신제품·개발': { pri: 'mid', cat: '제품', ask: '보도된 신제품의 제형이 우리 발주 품목과 일치하는지, 양산 실적·수율 확인', ins: '해당 제형 양산 경험은 개발 리스크를 크게 낮춤' },
+  '인증·수상': { pri: 'mid', cat: '인증', ask: '보도된 인증의 인증서 원본·유효기간·적용 범위(공장/품목) 대조', ins: '인증 범위가 특정 라인에만 적용되는 경우가 있어 범위 확인 필요' },
+  '실적호조': { pri: 'low', cat: '실적', ask: '보도된 매출 성장의 지속성과 생산 여력(추가 수주 가능량) 확인', ins: '' },
+  '리콜·회수': { pri: 'high', cat: '리스크', ask: '리콜 원인·재발방지 대책·이후 품질지표(불량률) 개선 자료 요청', ins: '품질 사고 이력 — 동일 제형이면 특히 주의' },
+  '제재·위반': { pri: 'high', cat: '리스크', ask: '행정처분/과징금 사유와 해소(이행완료) 여부, 현재 영업 제한 유무 확인', ins: '제재 이력은 거래 적격성에 직결 — 처분서·이행완료 증빙 요청' },
+  '분쟁·소송': { pri: 'high', cat: '리스크', ask: '소송 진행 상황과 생산·납품에 미치는 영향 확인', ins: '분쟁 상대가 원료사/고객사면 공급망 리스크로 전이될 수 있음' },
+  '재무위험': { pri: 'high', cat: '리스크', ask: '적자·자본잠식 보도 관련 최근 재무제표·신용평가서 요청', ins: '재무 악화는 납기 지연·단가 인상 리스크로 이어짐' },
+};
+// ✅ 방문 전 체크리스트 — 웹 기반 정보(기사·채용공고·기술/인증·판매제품)에서 확인사항·인사이트 도출
 function buildVisitChecklist(report) {
-  const B = report.basic || [], C = report.capacity || [], F = report.finance || [];
-  const val = (arr, k) => { const f = arr.find((x) => x.key === k); return f && f.value ? f.value : null; };
-  const items = []; // {pri, cat, text, why}
-  const add = (pri, cat, text, why) => items.push({ pri, cat, text, why: why || '' });
+  const items = []; // {pri, cat, text, why, ins}
+  const add = (pri, cat, text, why, ins) => items.push({ pri, cat, text, why: why || '', ins: ins || '' });
+  const timeline = (report.insights && report.insights.timeline) || [];
+  const oem = report.oem_trace || [];
+  const news = report.news || [];
+  const deep = (report._siteDeep && report._siteDeep.data) || null;
 
-  // ── 규제 적격성(핵심) ──
-  const makerOk = !!val(B, '제조업 등록');
-  makerOk
-    ? add('high', '규제', '식약처 화장품제조업 등록증·허가번호 원본 대조', '조회상 제조업 등록 확인됨 — 방문 시 원본/유효 확인')
-    : add('high', '규제', '화장품제조업 등록 여부 직접 확인(등록증 원본)', 'API로 제조업 등록 미확인 — 미등록이면 거래 부적격');
-  if (!val(C, 'CGMP 적합업소')) add('mid', '규제', 'CGMP 운영 수준·제조위생 시설 점검', '식약처 CGMP 적합업소 미등재 — 실제 GMP 관리수준 확인');
-  if ((report.recalls || []).length) add('high', '규제', `과거 회수·판매중지 ${report.recalls.length}건 원인·재발방지책 확인`, '품질·안전 사고 이력 있음');
-
-  // ── 평판·언론 신호(뉴스 인사이트 연동) ──
-  const a = report.insights && report.insights.assessment;
-  if (a && a.level === 'watch') add('high', '평판', '언론상 리스크 신호(리콜·제재·소송·재무위험) 사실관계·해소 여부 확인', `뉴스 주의 신호 ${a.downs}건`);
-  if (a && a.level === 'good') add('low', '평판', '최근 성장 이슈(투자·증설·수출) 진행상황·납기 영향 확인', `뉴스 성장 신호 ${a.ups}건`);
-
-  // ── 실체·정합성(교차검증 연동) ──
-  const cd = report.cross_diag;
-  if (cd && Array.isArray(cd.items)) cd.items.forEach((c) => {
-    if (c.status !== 'warn') return;
-    if (/주소/.test(c.label)) add('mid', '실체', '본점·연금·공장 주소 상이 — 실제 생산 현장 방문지 확정', c.detail);
-    if (/인력/.test(c.label)) add('mid', '실체', '연금 재직자수 vs 공장 종업원수 불일치 — 실제 생산인력 확인', c.detail);
+  // ── ① 기사 신호 → 확인 질문 (같은 태그는 최신 1건만, 근거 날짜 표기) ──
+  const seenTag = new Set();
+  timeline.forEach((t) => {
+    const map = WEB_SIGNAL_ASK[t.tag];
+    if (!map || seenTag.has(t.tag)) return;
+    seenTag.add(t.tag);
+    const when = t.date ? `${t.date} 보도` : '기사';
+    add(map.pri, map.cat, map.ask, `${when} · ${String(t.title || '').slice(0, 46)}`, map.ins);
   });
-  const bstt = val(B, '사업자 상태');
-  if (!bstt || !/계속/.test(bstt)) add('mid', '실체', '국세청 사업자상태(휴·폐업 여부) 사업자등록증으로 확인', bstt ? `현재 표기: ${bstt}` : '사업자상태 미확인');
 
-  // ── 재무(최신성/건전성 연동) ──
-  const fh = report.finance_health;
-  const staleFin = F.some((x) => x.value && x.fresh === false);
-  if (fh && fh.level && fh.level !== '양호') add('high', '재무', '재무 위험 신호 — 최근 재무제표·신용평가서(NICE/KED) 요청', (fh.reasons || []).join(', ') || fh.level);
-  else if (staleFin) add('mid', '재무', '공시 재무가 과거 회계연도 — 최근 결산서·부가세 과세표준증명 요청', '금융위 최신 제출연도가 오래됨');
-  else if (F.length && F.every((x) => x.data_gap)) add('mid', '재무', '공개 재무 없음(비상장) — 최근 재무제표·신용조회 요청', '금융위 재무 API 미수록');
+  // ── ② 채용공고 → 가동·인력 인사이트 ──
+  const hires = oem.filter((o) => o.tag === '채용');
+  if (hires.length) {
+    const txt = hires.map((h) => `${h.title} ${h.desc}`).join(' ');
+    const roles = [];
+    if (/생산|제조|포장|충전|라인/.test(txt)) roles.push('생산');
+    if (/품질|QC|QA|시험/.test(txt)) roles.push('품질');
+    if (/연구|개발|R&D|처방|배합/.test(txt)) roles.push('연구개발');
+    if (/영업|해외|무역|수출/.test(txt)) roles.push('영업');
+    const roleTxt = roles.length ? `모집 직군: ${roles.join('·')}` : '직군 불명';
+    add('mid', '채용', `채용공고 ${hires.length}건 — 현재 근무 인원·교대 운영 여부를 현장에서 확인(공고상 인력과 대조)`,
+      `${roleTxt} · 웹 채용공고 ${hires.length}건`,
+      roles.includes('생산') ? '생산직 상시 채용은 가동률이 높거나 이직률이 높다는 두 가지 해석이 가능 — 근속연수를 물어보세요'
+        : '채용 활동은 사업 확장·가동 지속 신호(단, 공고가 오래된 것일 수 있어 게시일 확인)');
+    if (roles.includes('연구개발')) add('low', '채용', '연구개발 인력 채용 — 자체 처방 개발 역량·연구소 규모 확인', '연구직 채용공고 확인', '자체 처방이 가능하면 개발 의존도가 낮아짐');
+  }
 
-  // ── 생산 역량(정형 데이터 밖 — 실사 필수) ──
-  add('mid', '생산', '월 생산 CAPA·라인 가동률·MOQ·리드타임 확인', '정형 데이터로 확인 불가 — 현장 실사 항목');
-  add('mid', '생산', '핵심 설비(충전·유화·포장) 실물·노후도·자동화 수준 확인', '');
-  const deep = report._siteDeep && report._siteDeep.data;
-  const certs = deep && deep.quality_certifications;
-  add('low', '품질', certs && certs.length ? `홈페이지 게재 인증(${certs.slice(0, 3).join(', ')}) 인증서 원본·유효기간 대조` : '보유 인증(ISO22716·비건·할랄 등) 인증서 원본·유효기간 확인', '게재 ≠ 유효 — 원본 확인');
-  add('low', '품질', '시험성적서(CoA)·안정성 시험자료·품질 클레임 대응 프로세스 확인', '');
+  // ── ③ 기술·인증(홈페이지 심층분석) → 원본 대조 ──
+  if (deep) {
+    const certs = deep.quality_certifications;
+    if (certs && certs.length) add('high', '인증', `게재 인증(${certs.slice(0, 3).join(', ')}${certs.length > 3 ? ` 외 ${certs.length - 3}` : ''}) 인증서 원본·유효기간·적용범위 대조`, '홈페이지 게재 기준', '게재 ≠ 현재 유효 — 만료·범위 축소 사례가 많음');
+    const cats = deep.product_categories;
+    if (cats && cats.length) add('high', '제품', `취급 제형(${cats.slice(0, 4).join(', ')})과 우리 발주 품목 일치 여부·양산 실적 확인`, '홈페이지 게재 카테고리', '미취급 제형이면 신규 개발 리드타임·수율 리스크 발생');
+    const eq = deep.equipment;
+    if (eq && eq.length) add('mid', '설비', '게재 설비의 실물·대수·노후도·가동 상태 현장 확인', `게재 설비 ${eq.length}건`, '설비 목록은 과장되기 쉬움 — 실제 가동 대수를 세어보세요');
+    const rnd = deep.rnd_centers;
+    if (rnd && rnd.length) add('low', '기술', 'R&D 조직의 실제 인원·처방 개발 범위(자체/외주) 확인', '홈페이지 R&D 조직 언급', '');
+    const exp = deep.export_markets;
+    if (exp && exp.length) add('mid', '수출', `수출국(${exp.slice(0, 4).join(', ')}) 관련 현지 인증(NMPA·FDA·CPNP 등) 보유 여부 확인`, '홈페이지 게재 수출국', '수출 실적은 규제 대응 역량의 간접 지표');
+    const items0 = deep.production_items;
+    if (items0 && items0.length) add('low', '제품', '게재된 대표 생산품의 실제 납품처·수량·재구매 여부 확인', `게재 생산품 ${items0.length}건`, '레퍼런스는 단발성 샘플인 경우가 있음');
+  } else {
+    add('mid', '제품', '취급 제형·대표 생산품·보유 설비를 홈페이지/자료로 확인 (심층분석 미실행)', '아래 🔬 심층분석 실행 시 자동 채워짐', '');
+  }
 
-  // ── 거래 조건(범용) ──
-  add('low', '거래', '단가·결제조건·독점/경쟁사 납품 여부·최소 계약물량 확인', '');
+  // ── ④ 제조원/납품 언급 → 레퍼런스 검증 ──
+  const oemRef = oem.filter((o) => o.tag === '제조원/납품');
+  if (oemRef.length) add('mid', '레퍼런스', `타 브랜드 제조원으로 표기된 웹문서 ${oemRef.length}건 — 실제 납품 관계·유사 카테고리 경험 확인`, oemRef[0].title ? String(oemRef[0].title).slice(0, 46) : '', '경쟁 브랜드 납품 시 처방 유출·우선순위 이슈를 협의하세요');
+  const rep = oem.filter((o) => o.tag === '기업보고서');
+  if (rep.length) add('low', '재무', '기업신용보고서 존재 — 신용조회(NICE·KED)로 비공개 재무 확인 가능', '웹상 기업보고서 언급', '비상장이라 공시 재무가 없어도 신용조회로 매출·부채 확인 가능');
+
+  // ── ⑤ 웹 흔적 자체가 없을 때 — '정보 없음'도 신호 ──
+  if (!timeline.length && !oem.length && !news.length) {
+    add('high', '실체', '온라인 활동 흔적이 거의 없음 — 사업자등록증·제조업 등록증·공장 실물 등 실체 확인 비중을 높이세요', '기사·웹문서·채용공고 모두 0건',
+      '신생·영세이거나 B2B 전용(홍보 안 함)일 수 있음. 반드시 현장 방문으로 검증');
+    add('mid', '실체', '거래 레퍼런스(납품처 2~3곳) 요청 후 직접 확인', '웹상 레퍼런스 확인 불가', '');
+  } else if (!timeline.length) {
+    add('mid', '실체', '최근 보도된 사업 동향이 없음 — 최근 3년 주요 실적·설비 투자 이력을 직접 질의', '신호성 기사 0건', '언론 노출이 적은 것 자체가 문제는 아니나, 성장/침체 판단 근거가 부족');
+  }
 
   const order = { high: 0, mid: 1, low: 2 };
   items.sort((x, y) => order[x.pri] - order[y.pri]);
   return items;
 }
 const PRI_LABEL = { high: '필수', mid: '권장', low: '참고' };
+// 심층분석 등 비동기 결과 도착 시 체크리스트만 제자리 갱신(전체 재렌더 없이)
+function refreshVisitChecklist(report) {
+  const old = document.getElementById('visitChecklist');
+  if (!old) return;
+  const next = renderVisitChecklist(report);
+  if (!next) return;
+  next.id = 'visitChecklist';
+  old.replaceWith(next);
+}
 function renderVisitChecklist(report) {
   const items = buildVisitChecklist(report);
   if (!items.length) return null;
   const box = el('div', 'vcbox');
   const hi = items.filter((i) => i.pri === 'high').length;
-  let html = `<h4>✅ 방문 전 체크리스트 <span>기본정보·뉴스·교차검증 종합 자동제안 · 방문 시 원본 확인용${hi ? ` · 필수 ${hi}건` : ''}</span></h4>`;
+  let html = `<h4>✅ 방문 전 체크리스트 <span>웹 기반(기사·채용공고·기술/인증·판매제품)에서 자동 도출 · 현장 확인용${hi ? ` · 필수 ${hi}건` : ''}</span></h4>`;
   html += '<ul class="vc-list">';
   items.forEach((it, idx) => {
     html += `<li class="vc-${esc(it.pri)}">` +
@@ -1320,11 +1364,13 @@ function renderVisitChecklist(report) {
       `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri])}</span>` +
       `<span class="vc-cat">${esc(it.cat)}</span>` +
       `<span class="vc-txt">${esc(it.text)}</span>` +
-      (it.why ? `<span class="vc-why">${esc(it.why)}</span>` : '') +
+      (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '') +
+      (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '') +
       `</label></li>`;
   });
   html += '</ul>';
-  html += '<div class="vc-foot">우선순위: <b>필수</b>=거래 적격성 직결 · <b>권장</b>=실체/재무 확인 · <b>참고</b>=거래조건. 인쇄해서 방문 시 체크하세요.</div>';
+  html += '<div class="vc-foot">📎 = 근거(웹 출처) · 💡 = 해석 인사이트 · 우선순위: <b>필수</b>/<b>권장</b>/<b>참고</b>. ' +
+    '공식 API 대조 결과는 아래 <b>🏛 체크 필요사항 · 기준정보 기반</b>을 참고하세요. 인쇄해서 방문 시 체크하세요.</div>';
   box.innerHTML = html;
   return box;
 }
@@ -1399,8 +1445,12 @@ function render(report, opts = {}) {
   const coreBand = renderCoreBand(report);
   if (coreBand) root.appendChild(coreBand);
 
-  // ✅ 방문 전 체크리스트 — 기본정보+뉴스+교차검증 종합 실사 제안(실데이터일 때)
-  if (m.live) { const vc = renderVisitChecklist(report); if (vc) root.appendChild(vc); }
+  // ✅ 방문 전 체크리스트 — 웹 기반(기사·채용·기술/제품) 실사 제안(실데이터일 때)
+  //    심층분석 결과가 나중에 도착하면 갱신해야 하므로 id로 찾아 교체 가능하게 둔다.
+  if (m.live) {
+    const vc = renderVisitChecklist(report);
+    if (vc) { vc.id = 'visitChecklist'; root.appendChild(vc); }
+  }
 
   // 데이터 출처 배너
   if (m.live) {
@@ -1463,7 +1513,12 @@ function render(report, opts = {}) {
       renderSiteDeepInto(sdBox, report._siteDeep);
       const hpUrl = report._homepage && report._homepage.proposed ? report._homepage.proposed.url : '';
       siteDeepAnalyze(report.meta.vendor_name, hpUrl)
-        .then((state) => { report._siteDeep = state; renderSiteDeepInto(sdBox, report._siteDeep); saveLastReport(report); })
+        .then((state) => {
+          report._siteDeep = state;
+          renderSiteDeepInto(sdBox, report._siteDeep);
+          refreshVisitChecklist(report); // 인증·제형·설비 확인항목을 체크리스트에 반영
+          saveLastReport(report);
+        })
         .catch((e) => { report._siteDeep = { err: e && e.message ? e.message : String(e) }; renderSiteDeepInto(sdBox, report._siteDeep); });
     };
     if (report._homepage !== undefined) {
