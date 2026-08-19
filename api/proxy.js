@@ -8,6 +8,9 @@
 const DATAGO = {
   corp:      'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2',
   finance:   'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2',
+  // 같은 서비스의 다른 오퍼레이션 — 요약재무에 없는 연도를 계정과목 단위로 보완
+  financeBs: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getBs_V2',       // 재무상태표
+  financeIs: 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getIncoStat_V2', // 손익계산서
   rpt:       'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq',
   npsSearch: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2/getBassInfoSearchV2',
   npsDetail: 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2/getDetailInfoSearchV2',

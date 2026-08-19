@@ -807,7 +807,9 @@ function assembleLiveReport(name, corp, res) {
     const stale = lag >= 3;
     const asOf = `${L.year}-12`;
     const grade = stale ? 'C' : 'A';
-    const src = `금융위 재무정보 API (${L.year} 회계연도)`;
+    // 요약재무제표에 없어 계정과목(재무상태표·손익계산서)에서 보완한 연도는 출처를 구분 표기
+    const viaAccounts = !!(byYear.get(L.year) || {})._fromAccounts;
+    const src = `금융위 재무정보 API (${L.year} 회계연도${viaAccounts ? ' · 계정과목 보완' : ''})`;
     const baseNote = stale
       ? `★ 금융위(DART 공시 기반) API가 제공하는 가장 최신 회계연도는 ${L.year}년입니다(약 ${lag}년 전). ` +
         `이 API는 상장·외부감사 공시분만 수록해 최근 자료가 없을 수 있습니다 — ` +

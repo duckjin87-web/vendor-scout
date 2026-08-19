@@ -72,6 +72,8 @@ function buildProxyUrl(params) {
 const PARAM_MAP = {
   corp:      { name: 'corpNm', bzno: 'bzno' }, // 상호 또는 사업자등록번호로 조회
   finance:   { crno: 'crno', rows: 'numOfRows', page: 'pageNo', year: 'bizYear' },
+  financeBs: { crno: 'crno', rows: 'numOfRows', page: 'pageNo', year: 'bizYear' },
+  financeIs: { crno: 'crno', rows: 'numOfRows', page: 'pageNo', year: 'bizYear' },
   rpt:       { name: 'entp_name', rows: 'numOfRows' },
   npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo' }, // 국민연금 V2 — camelCase
   npsDetail: { seq: 'seq', ym: 'dataCrtYm' },
@@ -1219,6 +1221,46 @@ async function financeLookup(crno) {
     const got = await Promise.allSettled(probes.map((y) =>
       proxyGet('finance', { crno, year: String(y), rows: '100' })));
     got.forEach((g) => { if (g.status === 'fulfilled') all.push(...listOf(g.value, paths)); });
+  }
+  // ③ 요약재무에 최근 연도가 없으면, 같은 서비스의 재무상태표·손익계산서(계정과목 단위)로 보완.
+  //    요약재무제표는 미수록이어도 계정 단위 자료는 있는 경우가 있어 최신 연도를 살릴 수 있다.
+  maxY = all.reduce((m, r) => Math.max(m, yearOf(r)), 0);
+  if (!maxY || maxY < nowY - 1) {
+    const wants = [];
+    for (let y = nowY - 1; y > Math.max(maxY, nowY - 6); y--) wants.push(y);
+    const got = await Promise.allSettled(wants.flatMap((y) => [
+      proxyGet('financeBs', { crno, year: String(y), rows: '200' }).then((d) => ({ y, kind: 'bs', d })),
+      proxyGet('financeIs', { crno, year: String(y), rows: '200' }).then((d) => ({ y, kind: 'is', d })),
+    ]));
+    const byYear = new Map();
+    got.forEach((g) => {
+      if (g.status !== 'fulfilled') return;
+      const { y, d } = g.value;
+      const rows = listOf(d, paths);
+      if (!rows.length) return;
+      const rec = byYear.get(y) || { bizYear: String(y), _fromAccounts: true };
+      // 계정명·금액 필드명이 확정적이지 않아 키 패턴으로 견고하게 추출
+      for (const r of rows) {
+        let nm = null, amt = null;
+        for (const [k, v] of Object.entries(r)) {
+          if (v == null || v === '') continue;
+          if (nm == null && /(acit|acnt|acct|계정|item).*(nm|name|명)?/i.test(k) && /[가-힣]/.test(String(v))) nm = String(v);
+          if (amt == null && /(crtm|thqr|당기|amt|amount)/i.test(k) && /^-?[\d,.]+$/.test(String(v).trim())) amt = String(v).replace(/,/g, '');
+        }
+        if (!nm || amt == null) continue;
+        const n = nm.replace(/\s/g, '');
+        if (/^매출액$|^수익\(매출액\)$|^영업수익$/.test(n) && rec.enpSaleAmt == null) rec.enpSaleAmt = amt;
+        else if (/^영업이익/.test(n) && rec.enpBzopPft == null) rec.enpBzopPft = amt;
+        else if (/^자산총계$/.test(n) && rec.enpTastAmt == null) rec.enpTastAmt = amt;
+        else if (/^부채총계$/.test(n) && rec.enpTdbtAmt == null) rec.enpTdbtAmt = amt;
+        else if (/^자본금$/.test(n) && rec.enpCptlAmt == null) rec.enpCptlAmt = amt;
+      }
+      byYear.set(y, rec);
+    });
+    // 값이 하나라도 채워진 연도만 채택
+    for (const rec of byYear.values()) {
+      if (rec.enpSaleAmt != null || rec.enpTastAmt != null || rec.enpBzopPft != null) all.push(rec);
+    }
   }
   if (!all.length) throw new Error('재무 레코드 없음');
   return { body: { items: all } };       // assembleLiveReport의 listOf가 읽는 형태로 반환
