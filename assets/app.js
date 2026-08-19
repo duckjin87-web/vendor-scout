@@ -1215,12 +1215,19 @@ async function financeLookup(crno) {
   // ② 최신 연도가 2년 이상 뒤처지면 최근 연도를 직접 지정해 재조회(누락 회수)
   const nowY = new Date().getFullYear();
   let maxY = all.reduce((m, r) => Math.max(m, yearOf(r)), 0);
+  // 왜 최신 연도를 못 얻었는지 화면에서 판단할 수 있도록 시도 결과를 기록(실패를 조용히 삼키지 않음)
+  const diag = { summaryYears: [...new Set(all.map(yearOf).filter(Boolean))].sort((a, b) => b - a), probe: null, acct: null };
   if (maxY && maxY < nowY - 1) {
     const probes = [];
     for (let y = nowY - 1; y > maxY && probes.length < 6; y--) probes.push(y);
     const got = await Promise.allSettled(probes.map((y) =>
       proxyGet('finance', { crno, year: String(y), rows: '100' })));
-    got.forEach((g) => { if (g.status === 'fulfilled') all.push(...listOf(g.value, paths)); });
+    let hit = 0, err = null;
+    got.forEach((g, i) => {
+      if (g.status === 'fulfilled') { const rows = listOf(g.value, paths); hit += rows.length; all.push(...rows); }
+      else if (!err) err = `${probes[i]}년: ${String(g.reason && g.reason.message || g.reason).slice(0, 60)}`;
+    });
+    diag.probe = { years: probes, rows: hit, err };
   }
   // ③ 요약재무에 최근 연도가 없으면, 같은 서비스의 재무상태표·손익계산서(계정과목 단위)로 보완.
   //    요약재무제표는 미수록이어도 계정 단위 자료는 있는 경우가 있어 최신 연도를 살릴 수 있다.
@@ -1233,10 +1240,15 @@ async function financeLookup(crno) {
       proxyGet('financeIs', { crno, year: String(y), rows: '200' }).then((d) => ({ y, kind: 'is', d })),
     ]));
     const byYear = new Map();
+    let acctRows = 0, acctErr = null;
     got.forEach((g) => {
-      if (g.status !== 'fulfilled') return;
+      if (g.status !== 'fulfilled') {
+        if (!acctErr) acctErr = String(g.reason && g.reason.message || g.reason).slice(0, 80);
+        return;
+      }
       const { y, d } = g.value;
       const rows = listOf(d, paths);
+      acctRows += rows.length;
       if (!rows.length) return;
       const rec = byYear.get(y) || { bizYear: String(y), _fromAccounts: true };
       // 계정명·금액 필드명이 확정적이지 않아 키 패턴으로 견고하게 추출
@@ -1258,12 +1270,14 @@ async function financeLookup(crno) {
       byYear.set(y, rec);
     });
     // 값이 하나라도 채워진 연도만 채택
+    let adopted = 0;
     for (const rec of byYear.values()) {
-      if (rec.enpSaleAmt != null || rec.enpTastAmt != null || rec.enpBzopPft != null) all.push(rec);
+      if (rec.enpSaleAmt != null || rec.enpTastAmt != null || rec.enpBzopPft != null) { all.push(rec); adopted++; }
     }
+    diag.acct = { years: wants, rows: acctRows, adopted, err: acctErr };
   }
   if (!all.length) throw new Error('재무 레코드 없음');
-  return { body: { items: all } };       // assembleLiveReport의 listOf가 읽는 형태로 반환
+  return { body: { items: all }, _diag: diag }; // assembleLiveReport의 listOf가 읽는 형태 + 진단
 }
 
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립

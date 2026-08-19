@@ -851,12 +851,23 @@ function assembleLiveReport(name, corp, res) {
     { key: 'nts', name: '국세청 사업자상태', ok: !!bStt,
       detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}`
         : (!R.nts ? '자료 미제출/미등록' : (!R.nts.ok ? briefErr(R.nts.err) : '조회 성공 · 해당 사업자 정보 없음')) },
-    stat('finance', 'finance', '금융위 재무정보',
-      years.length
-        ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` +
-          (Number(String(today).slice(0, 4)) - years[years.length - 1] >= 3 ? ' ⚠ 최신자료 아님' : '')
-        : null,
-      '미수록 — 금융위 API는 상장·공시대상 위주(비상장은 DART/신용조회 확인)'),
+    // 최신 연도를 못 얻었을 때 '왜'인지(재조회 시도 결과) 함께 노출 — 데이터 없음 vs 호출 실패 구분
+    (() => {
+      const fd = R.finance && R.finance.ok && R.finance.data ? R.finance.data._diag : null;
+      let why = '';
+      if (fd && years.length && Number(String(today).slice(0, 4)) - years[years.length - 1] >= 3) {
+        const bits = [];
+        if (fd.probe) bits.push(fd.probe.err ? `연도지정 재조회 실패(${fd.probe.err})` : `연도지정 재조회 ${fd.probe.years[fd.probe.years.length - 1]}~${fd.probe.years[0]} → ${fd.probe.rows}건`);
+        if (fd.acct) bits.push(fd.acct.err ? `계정과목 보완 실패(${fd.acct.err})` : `계정과목(재무상태표·손익계산서) 보완 → ${fd.acct.rows}건`);
+        if (bits.length) why = ' · ' + bits.join(' · ');
+      }
+      return stat('finance', 'finance', '금융위 재무정보',
+        years.length
+          ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` +
+            (Number(String(today).slice(0, 4)) - years[years.length - 1] >= 3 ? ' ⚠ 최신자료 아님' : '') + why
+          : null,
+        '미수록 — 금융위 API는 상장·공시대상 위주(비상장은 DART/신용조회 확인)');
+    })(),
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null,
       rlAll.length ? `상호 일치 0건 (API가 업체명 미필터로 전체 ${rlAll.length}건 반환 — 이 업체 품목 아님)` : '0건 — 기능성 미취급 또는 미신고'),
     stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `사업장 ${npsData.count}곳${npsSites > 1 ? `(${npsSites}곳 합산)` : ''}${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
