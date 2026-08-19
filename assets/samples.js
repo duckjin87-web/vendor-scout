@@ -793,7 +793,8 @@ function assembleLiveReport(name, corp, res) {
     const prev = byYear.get(y);
     if (!prev || finScore(it) > finScore(prev)) byYear.set(y, it); // 매출·자산 등 값이 더 채워진 레코드 우선
   });
-  const years = [...byYear.keys()].sort((a, b) => b - a).slice(0, 5).sort((a, b) => a - b);
+  // 최신 6개년까지 표시(연도 누락이 있는 업체도 흐름이 보이도록)
+  const years = [...byYear.keys()].sort((a, b) => b - a).slice(0, 6).sort((a, b) => a - b);
   let finance, finance_history = [];
   if (years.length) {
     finance_history = years.map((y) => { const it = byYear.get(y); return { year: y, revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft), assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt) }; });
@@ -808,7 +809,9 @@ function assembleLiveReport(name, corp, res) {
     const grade = stale ? 'C' : 'A';
     const src = `금융위 재무정보 API (${L.year} 회계연도)`;
     const baseNote = stale
-      ? `★ 금융위에 제출된 가장 최신 회계연도는 ${L.year}년입니다(약 ${lag}년 전) — 이후 미제출(비상장 전환·외감 대상 제외 등)이라 현재 실적과 다를 수 있어 참고만 하세요.`
+      ? `★ 금융위(DART 공시 기반) API가 제공하는 가장 최신 회계연도는 ${L.year}년입니다(약 ${lag}년 전). ` +
+        `이 API는 상장·외부감사 공시분만 수록해 최근 자료가 없을 수 있습니다 — ` +
+        `NICE·KED 등 신용조회에는 더 최근 재무가 있을 수 있으니 방문 전 최근 결산서를 요청하세요.`
       : `★ ${L.year} 회계연도 확정 실적(금융위 제출 최신). 재무는 통상 1년 지연 공시.`;
     finance = [
       f('매출액', eok(L.revenue), grade, src, asOf, baseNote, !stale),
@@ -846,7 +849,12 @@ function assembleLiveReport(name, corp, res) {
     { key: 'nts', name: '국세청 사업자상태', ok: !!bStt,
       detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}`
         : (!R.nts ? '자료 미제출/미등록' : (!R.nts.ok ? briefErr(R.nts.err) : '조회 성공 · 해당 사업자 정보 없음')) },
-    stat('finance', 'finance', '금융위 재무정보', years.length ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` : null, '미수록 — 금융위 API는 상장·공시대상 위주(비상장은 DART/신용조회 확인)'),
+    stat('finance', 'finance', '금융위 재무정보',
+      years.length
+        ? `${years.length}개년 (${years[0]}~${years[years.length - 1]})` +
+          (Number(String(today).slice(0, 4)) - years[years.length - 1] >= 3 ? ' ⚠ 최신자료 아님' : '')
+        : null,
+      '미수록 — 금융위 API는 상장·공시대상 위주(비상장은 DART/신용조회 확인)'),
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null,
       rlAll.length ? `상호 일치 0건 (API가 업체명 미필터로 전체 ${rlAll.length}건 반환 — 이 업체 품목 아님)` : '0건 — 기능성 미취급 또는 미신고'),
     stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `사업장 ${npsData.count}곳${npsSites > 1 ? `(${npsSites}곳 합산)` : ''}${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),

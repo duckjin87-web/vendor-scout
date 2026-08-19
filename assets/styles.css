@@ -703,3 +703,6 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 7px;
   background: var(--accent-soft); color: var(--accent); border: 1px solid transparent;
 }
+.kw-cat { font-size: 10.5px; font-weight: 800; color: var(--muted); margin: 9px 0 5px; }
+.kw-cat:first-of-type { margin-top: 2px; }
+.kw-cat b { font-weight: 700; color: var(--faint); margin-left: 3px; }

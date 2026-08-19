@@ -71,7 +71,7 @@ function buildProxyUrl(params) {
 // 프록시(api/proxy.js·worker.js)에 단일 정의 — 화이트리스트로 오픈프록시 방지.
 const PARAM_MAP = {
   corp:      { name: 'corpNm', bzno: 'bzno' }, // 상호 또는 사업자등록번호로 조회
-  finance:   { crno: 'crno', rows: 'numOfRows' },
+  finance:   { crno: 'crno', rows: 'numOfRows', page: 'pageNo', year: 'bizYear' },
   rpt:       { name: 'entp_name', rows: 'numOfRows' },
   npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo' }, // 국민연금 V2 — camelCase
   npsDetail: { seq: 'seq', ym: 'dataCrtYm' },
@@ -462,7 +462,9 @@ const KW_STOP = new Set((
   // 채용공고·집계사이트 스니펫에서 흔한 잡음(회사 자체 정보가 아님)
   '기업정보 직원수 채용 년차 근무환경 복리후생 연봉 급여 신입 경력 채용정보 구인 지원자격 우대사항 마감일 모집 ' +
   '자동등록방지 보안절차 자바스크립트 브라우저 로딩 팝업 닫기 이메일 팩스 전화번호 대표번호 상호명 업태 종목 ' +
-  '공장찾기 위세브 기업분석 재무정보 신용등급 매출액순위 ' +
+  '공장찾기 위세브 기업분석 재무정보 신용등급 매출액순위 공고 채용공고 ' +
+  // 자바스크립트 차단·로봇검증 안내문에 흔한 영단어(사이트 내용이 아님)
+  'please prove human enable javascript browser verify checking security connection redirect ' +
   'All Rights Reserved Copyright the and for with our your this that from are was has have not you all can more ' +
   'about home page site menu login search contact info news event list view detail'
 ).split(/\s+/));
@@ -614,6 +616,30 @@ function extractLexicon(text, lex) {
     }
     if (seen.size) out.push({ grp: l.grp, terms: [...seen.values()] });
   }
+  return out;
+}
+
+// ── 키워드 카테고리 분류 ──
+// 빈도 상위 키워드를 성격별로 묶어 보여준다(평면 나열보다 무엇을 하는 회사인지 빨리 파악).
+const KW_CATS = [
+  { cat: '설비·시설', re: /(설비|장비|시설|공장|라인|탱크|가마|믹서|유화|충전|포장|캡핑|실링|라벨|클린룸|정제수|컨베이어|기계|자동화|인프라)/ },
+  { cat: '인증·품질', re: /(인증|CGMP|GMP|ISO|할랄|HALAL|비건|VEGAN|코셔|MoCRA|FDA|NMPA|CPNP|특허|품질|시험|검사|밸리데이션|적합|기준|관리기준|안전)/i },
+  // 짧은 토막(립·팩 등)은 다른 단어에 섞여 오분류되므로(설'립' → 제품) 완전한 형태로만 매칭
+  { cat: '제품·제형', re: /(화장품|스킨케어|스킨|토너|로션|에센스|세럼|앰플|크림|마스크팩|시트마스크|마스크|선크림|선케어|클렌징|샴푸|헤어|바디|색조|메이크업|쿠션|립스틱|립밤|립글로스|립틴트|기능성|제형|원료|성분|브랜드|제품)/ },
+  { cat: '생산·사업', re: /(제조|생산|OEM|ODM|OBM|위탁|납품|수출|공급|개발|연구|연구소|R&D|처방|물류|가동)/i },
+  { cat: '기업정보', re: /(설립|대표|본사|사옥|직원|임직원|중소기업|법인|업종|소재|주소|연혁|비전|경영|서울|부산|인천|대구|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/ },
+];
+function categorizeKeywords(kws) {
+  const buckets = new Map();
+  const etc = [];
+  for (const k of kws || []) {
+    const w = typeof k === 'object' ? k.word : k;
+    const hit = KW_CATS.find((c) => c.re.test(String(w)));
+    if (hit) { if (!buckets.has(hit.cat)) buckets.set(hit.cat, []); buckets.get(hit.cat).push(k); }
+    else etc.push(k);
+  }
+  const out = KW_CATS.filter((c) => buckets.has(c.cat)).map((c) => ({ cat: c.cat, items: buckets.get(c.cat) }));
+  if (etc.length) out.push({ cat: '기타', items: etc });
   return out;
 }
 
@@ -1166,11 +1192,43 @@ async function npsLookup(nm, bzno) {
   };
 }
 
+// ── 금융위 재무 조회 (최신 연도 확보 강화) ──
+// 한 페이지만 받으면 레코드가 많은 법인은 최신 회계연도가 잘려 옛 자료만 남는다.
+// ① 여러 페이지를 모아 받고 ② 그래도 최신이 오래됐으면 최근 연도를 bizYear로 직접 조회해 보완.
+async function financeLookup(crno) {
+  const all = [];
+  const paths = ['response.body.items.item', 'body.items'];
+  const yearOf = (r) => Number(r && (r.bizYear || r.biz_year)) || 0;
+  // ① 페이지 수집(최대 3페이지 × 500건)
+  let firstErr = null;
+  for (let page = 1; page <= 3; page++) {
+    let d;
+    try { d = await proxyGet('finance', { crno, rows: '500', page: String(page) }); }
+    catch (e) { if (page === 1) firstErr = e; break; }
+    const list = listOf(d, paths);
+    all.push(...list);
+    if (list.length < 500) break;         // 마지막 페이지
+  }
+  if (!all.length && firstErr) throw firstErr;
+  // ② 최신 연도가 2년 이상 뒤처지면 최근 연도를 직접 지정해 재조회(누락 회수)
+  const nowY = new Date().getFullYear();
+  let maxY = all.reduce((m, r) => Math.max(m, yearOf(r)), 0);
+  if (maxY && maxY < nowY - 1) {
+    const probes = [];
+    for (let y = nowY - 1; y > maxY && probes.length < 6; y--) probes.push(y);
+    const got = await Promise.allSettled(probes.map((y) =>
+      proxyGet('finance', { crno, year: String(y), rows: '100' })));
+    got.forEach((g) => { if (g.status === 'fulfilled') all.push(...listOf(g.value, paths)); });
+  }
+  if (!all.length) throw new Error('재무 레코드 없음');
+  return { body: { items: all } };       // assembleLiveReport의 listOf가 읽는 형태로 반환
+}
+
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
   const calls = {
-    finance: corp.crno ? proxyGet('finance', { crno: corp.crno, rows: '100' }) : Promise.reject(new Error('법인등록번호 없음')),
+    finance: corp.crno ? financeLookup(corp.crno) : Promise.reject(new Error('법인등록번호 없음')),
     rpt: proxyGet('rpt', { name: nm, rows: '100' }),
     nps: npsLookup(nm, corp.bzno),
     maker: makerLookup(nm),
@@ -1780,13 +1838,19 @@ function renderSiteDeepInto(box, state) {
     html += `<div class="sd-pane${'etc' === first ? ' on' : ''}" data-pane="etc">`;
     if (kw.length) {
       const max = Math.max(...kw.map((k) => (typeof k === 'object' ? k.score : 1) || 1));
-      html += `<div class="sd-kwbox"><i>추출 키워드 <em>빈도 상위 ${kw.length}개</em></i><div class="sd-kws">` +
-        kw.map((k) => {
-          const w = typeof k === 'object' ? k.word : k;
-          const s = typeof k === 'object' ? (k.score || 1) : 1;
-          const lv = s >= max * 0.6 ? ' kw-hi' : (s >= max * 0.3 ? ' kw-mid' : '');
-          return `<span class="sd-kw${lv}">${esc(String(w))}</span>`;
-        }).join('') + '</div></div>';
+      const chip = (k) => {
+        const w = typeof k === 'object' ? k.word : k;
+        const s = typeof k === 'object' ? (k.score || 1) : 1;
+        const lv = s >= max * 0.6 ? ' kw-hi' : (s >= max * 0.3 ? ' kw-mid' : '');
+        return `<span class="sd-kw${lv}" title="빈도 점수 ${s}">${esc(String(w))}</span>`;
+      };
+      const groups = categorizeKeywords(kw);
+      html += `<div class="sd-kwbox"><i>추출 키워드 <em>빈도 상위 ${kw.length}개 · 성격별 분류</em></i>`;
+      groups.forEach((g) => {
+        html += `<div class="kw-cat">${esc(g.cat)} <b>${g.items.length}</b></div>` +
+          `<div class="sd-kws">${g.items.map(chip).join('')}</div>`;
+      });
+      html += '</div>';
     }
     if (etcRows.length) {
       html += '<div class="sd-grid">' + etcRows.map(({ f }) =>
