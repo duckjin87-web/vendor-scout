@@ -774,14 +774,17 @@ function assembleLiveReport(name, corp, res) {
     (() => {
       const nw = npsData ? Number(npsData.newCnt || 0) : 0;
       const ls = npsData ? Number(npsData.lostCnt || 0) : 0;
-      const has = npsData && (nw || ls);
+      // 0(그 달 변동 없음)과 필드 미확보를 구분 — 0을 공백으로 처리하면 '변동 없음'이 사라진다
+      const has = !!(npsData && npsData.churnKnown);
       const net = nw - ls;
       const val = has ? `+${nw} / -${ls} (순 ${net >= 0 ? '+' : ''}${net}명)` : null;
       return f('최근 인력 증감 (연금 취득·상실)', val, has ? 'B' : 'D', '국민연금 사업장 API',
         has ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null,
         has
           ? `해당 월 신규취득 ${nw}명 · 상실 ${ls}명 — ${net > 0 ? '증원(채용 진행) 신호' : net < 0 ? '감소(이탈·감원) 신호 — 사유 확인 권장' : '변동 없음'}. 월 단위로 갱신되는 최신 지표`
-          : why('nps', '취득·상실 자료 없음'));
+          : ((npsData && npsData.numKeys)
+              ? `취득·상실 필드를 응답에서 찾지 못했습니다 (응답 내 수치 항목: ${npsData.numKeys})`
+              : why('nps', '취득·상실 자료 없음')));
     })(),
     (() => {
       const amt = npsData ? Number(npsData.payrollEst || 0) : 0;

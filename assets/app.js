@@ -1184,14 +1184,24 @@ async function npsLookup(nm, bzno) {
   // ★ 그동안 버리던 월 갱신 지표 회수 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 핵심 근거.
   //   신규취득/상실 = 인력 증감(채용·감원), 당월고지금액 = 인건비 규모 추정 재료.
   const numOf = (d, ...keys) => { for (const k of keys) { const v = d && d[k]; if (v != null && v !== '') { const n = Number(String(v).replace(/,/g, '')); if (isFinite(n)) return n; } } return 0; };
+  const hasKey = (d, ...keys) => keys.some((k) => d && d[k] != null && d[k] !== '');
   const pick = byBzno ? details : [details[maxIdx] || details[0]];   // 상호조회는 대표 사업장만(타사 혼입 방지)
-  let newCnt = 0, lostCnt = 0, noticeAmt = 0;
+  const NEW_K = ['nwAcqzrCnt', 'newAcqzrCnt', 'acqzrCnt', 'nwAcqzrCnt1'];
+  const LOST_K = ['lssJnngpCnt', 'lossJnngpCnt', 'lssCnt', 'lssJnngpCnt1'];
+  let newCnt = 0, lostCnt = 0, noticeAmt = 0, churnKnown = false;
   pick.forEach((d) => {
     if (!d) return;
-    newCnt += numOf(d, 'nwAcqzrCnt', 'newAcqzrCnt', 'acqzrCnt');
-    lostCnt += numOf(d, 'lssJnngpCnt', 'lossJnngpCnt', 'lssCnt');
+    // ★ 값이 0인 것(그 달에 입·퇴사 없음)과 필드 자체가 없는 것을 구분해야 한다.
+    //   0을 '자료 없음'으로 처리하면 '변동 없음'이 공백으로 보인다.
+    if (hasKey(d, ...NEW_K) || hasKey(d, ...LOST_K)) churnKnown = true;
+    newCnt += numOf(d, ...NEW_K);
+    lostCnt += numOf(d, ...LOST_K);
     noticeAmt += numOf(d, 'crrmmNtcAmt', 'currentMonthNoticeAmount', 'ntcAmt');
   });
+  // 필드를 못 찾았을 때 실제 응답의 숫자형 키를 남겨 다음 조회에서 이름을 확인할 수 있게 한다
+  const sample = pick.find(Boolean) || null;
+  const numKeys = churnKnown || !sample ? null
+    : Object.keys(sample).filter((k) => /cnt|amt|co$/i.test(k)).slice(0, 12).join(', ');
   // 국민연금 보험료율 9%(근로자+사용자) → 고지금액 ÷ 0.09 ≈ 사업장 기준소득월액 합계.
   // 기준소득월액에 상한·하한이 있어 고소득자는 과소 반영되므로 '하한 추정'으로만 사용.
   const payrollEst = noticeAmt > 0 ? Math.round(noticeAmt / 0.09) : null;
@@ -1207,6 +1217,7 @@ async function npsLookup(nm, bzno) {
     sites: byBzno ? activeSites : 1,
     byBzno,
     newCnt, lostCnt, noticeAmt, payrollEst,          // 월 갱신 지표
+    churnKnown, numKeys,                             // 취득·상실 필드 확보 여부 / 미확보 시 후보 키 목록
   };
 }
 
