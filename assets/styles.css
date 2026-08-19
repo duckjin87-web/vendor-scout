@@ -657,3 +657,43 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .eq-basis { font-size: 10.5px; color: var(--faint); }
 .eq-ev { grid-column: 1 / -1; font-size: 11px; color: var(--muted); line-height: 1.45; }
 .eq-foot { margin-top: 8px; font-size: 10.5px; color: var(--faint); }
+
+/* 🔬 심층분석 탭 (인증 / 설비 / 생산CAPA / 기타) */
+.sd-tabs { display: flex; gap: 6px; margin-top: 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.sd-tab {
+  border: 0; background: transparent; cursor: pointer; color: var(--muted);
+  font-size: 13px; font-weight: 700; padding: 9px 13px; border-radius: 9px 9px 0 0;
+  border-bottom: 2px solid transparent; margin-bottom: -1px; display: flex; align-items: center; gap: 6px;
+}
+.sd-tab:hover { color: var(--text); background: var(--panel-2); }
+.sd-tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+.sd-tab span {
+  font-size: 10.5px; font-weight: 800; min-width: 18px; padding: 1px 6px; border-radius: 999px;
+  background: var(--panel-2); color: var(--faint); border: 1px solid var(--border);
+}
+.sd-tab.on span { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.sd-pane { display: none; padding-top: 12px; }
+.sd-pane.on { display: block; }
+.sd-sec { font-size: 11.5px; font-weight: 800; color: var(--muted); margin: 12px 0 6px; }
+.sd-sec:first-child { margin-top: 0; }
+.sd-sec em { font-style: normal; font-weight: 500; color: var(--faint); font-size: 10.5px; margin-left: 4px; }
+.sd-mini { margin-top: 10px; font-size: 10.5px; color: var(--faint); line-height: 1.5; }
+
+/* 인증 목록 */
+.cert-list { list-style: none; margin: 0; padding: 0; }
+.cert-list li { padding: 6px 0; border-top: 1px solid var(--border); }
+.cert-list li:first-child { border-top: 0; }
+.cert-b { font-size: 12.5px; font-weight: 700; color: var(--gA); background: var(--gA-bg); border-radius: 6px; padding: 2px 9px; display: inline-block; }
+.cert-list em { display: block; font-style: normal; font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+
+/* 생산 CAPA 목록 */
+.capa-list { list-style: none; margin: 0; padding: 0; }
+.capa-list li { padding: 8px 0; border-top: 1px solid var(--border); display: grid; grid-template-columns: 96px 1fr; gap: 3px 10px; align-items: baseline; }
+.capa-list li:first-child { border-top: 0; }
+.capa-kind { font-size: 10.5px; font-weight: 800; color: var(--muted); }
+.capa-val { font-size: 14px; font-weight: 800; color: var(--accent); }
+.capa-ctx { grid-column: 1 / -1; font-size: 11px; color: var(--faint); line-height: 1.45; }
+@media (max-width: 640px) {
+  .capa-list li { grid-template-columns: 1fr; }
+  .sd-tab { padding: 8px 10px; font-size: 12.5px; }
+}

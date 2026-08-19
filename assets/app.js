@@ -206,23 +206,44 @@ function htmlToText(html) {
     .replace(/ *\n[ \n]*/g, '\n').trim();
 }
 // 인증 키워드 사전 — 홈페이지에 게재된 인증 문구 탐지(과대광고 아닌 표기 여부만)
+// grp: 제조품질 / 국가규제 / 친환경·윤리 / 시험·평가 / 기업인증
 const CERT_PATTERNS = [
-  { label: 'ISO 22716 (화장품GMP)', re: /ISO\s*22716/i },
-  { label: 'ISO 9001 (품질)', re: /ISO\s*9001/i },
-  { label: 'ISO 14001 (환경)', re: /ISO\s*14001/i },
-  { label: 'ISO 45001 (안전보건)', re: /ISO\s*45001/i },
-  { label: 'CGMP (우수화장품제조)', re: /\bCGMP\b|우수화장품\s*제조|우수화장품\s*및\s*품질관리/i },
-  { label: '할랄(HALAL)', re: /할랄|HALAL|JAKIM|\bMUI\b/i },
-  { label: '비건(VEGAN)', re: /비건|VEGAN/i },
-  { label: 'EWG', re: /\bEWG\b/i },
-  { label: '미국 FDA', re: /\bFDA\b/i },
-  { label: '중국 NMPA(위생허가)', re: /\bNMPA\b|\bCFDA\b|위생허가/i },
-  { label: 'ECOCERT/COSMOS(유기농)', re: /ECOCERT|COSMOS|유기농\s*인증/i },
-  { label: '크루얼티프리', re: /cruelty[\s-]*free|크루얼티\s*프리|leaping\s*bunny/i },
-  { label: '더마테스트', re: /dermatest|더마테스트/i },
-  { label: '피부저자극테스트', re: /피부\s*저?\s*자극\s*(테스트|시험)/i },
-  { label: '특허', re: /특허\s*(제?\s*[\d\-]+\s*호|출원|등록|보유)/i },
-  { label: '벤처·이노비즈', re: /벤처기업\s*인증|이노비즈|INNO-?BIZ|메인비즈/i },
+  // ── 제조·품질 시스템 ──
+  { label: 'CGMP (우수화장품제조)', grp: '제조품질', re: /\bCGMP\b|우수화장품\s*제조|우수화장품\s*및\s*품질관리/i },
+  { label: 'ISO 22716 (화장품GMP)', grp: '제조품질', re: /ISO\s*22716/i },
+  { label: 'ISO 9001 (품질경영)', grp: '제조품질', re: /ISO\s*9001/i },
+  { label: 'ISO 14001 (환경경영)', grp: '제조품질', re: /ISO\s*14001/i },
+  { label: 'ISO 45001 (안전보건)', grp: '제조품질', re: /ISO\s*45001/i },
+  { label: 'ISO 13485 (의료기기)', grp: '제조품질', re: /ISO\s*13485/i },
+  { label: 'ISO 22000/HACCP (식품안전)', grp: '제조품질', re: /ISO\s*22000|HACCP|해썹/i },
+  { label: 'ISO 27001 (정보보안)', grp: '제조품질', re: /ISO\s*27001/i },
+  { label: '의약외품 제조업 허가', grp: '제조품질', re: /의약외품\s*(제조업)?\s*(허가|신고|등록)/i },
+  // ── 국가·지역 규제 ──
+  { label: 'MoCRA (미국 화장품규제현대화법)', grp: '국가규제', re: /\bMoCRA\b|모크라|화장품\s*규제\s*현대화|Modernization\s*of\s*Cosmetics\s*Regulation/i },
+  { label: '미국 FDA 등록', grp: '국가규제', re: /\bFDA\b\s*(등록|registration|승인|인증)?|FDA\s*시설\s*등록/i },
+  { label: '중국 NMPA(위생허가)', grp: '국가규제', re: /\bNMPA\b|\bCFDA\b|위생허가|중국\s*수출\s*허가/i },
+  { label: 'EU CPNP 등록', grp: '국가규제', re: /\bCPNP\b|유럽\s*화장품\s*등록|EU\s*화장품\s*규정|1223\/2009/i },
+  { label: '일본 후생노동성 허가', grp: '국가규제', re: /후생노동성|厚生労働省|일본\s*제조판매업/i },
+  { label: 'ASEAN/기타 수출 인증', grp: '국가규제', re: /ASEAN\s*화장품|아세안\s*인증|BPOM|FDA\s*필리핀/i },
+  // ── 친환경·윤리·원료 ──
+  { label: '할랄(HALAL)', grp: '친환경·윤리', re: /할랄|HALAL|JAKIM|\bMUI\b|KMF\s*할랄/i },
+  { label: '비건(VEGAN)', grp: '친환경·윤리', re: /비건|VEGAN|EVE\s*VEGAN|비건표준인증원/i },
+  { label: '코셔(KOSHER)', grp: '친환경·윤리', re: /코셔|KOSHER/i },
+  { label: 'ECOCERT/COSMOS(유기농)', grp: '친환경·윤리', re: /ECOCERT|COSMOS|유기농\s*인증|NATRUE/i },
+  { label: '크루얼티프리(무동물실험)', grp: '친환경·윤리', re: /cruelty[\s-]*free|크루얼티\s*프리|leaping\s*bunny|무동물실험/i },
+  { label: 'RSPO(지속가능 팜오일)', grp: '친환경·윤리', re: /\bRSPO\b|지속가능\s*팜/i },
+  { label: 'EWG 그린등급', grp: '친환경·윤리', re: /\bEWG\b/i },
+  { label: '친환경·저탄소 인증', grp: '친환경·윤리', re: /친환경\s*인증|탄소\s*(중립|발자국)\s*인증|녹색기업|환경표지/i },
+  // ── 시험·평가 ──
+  { label: '더마테스트', grp: '시험·평가', re: /dermatest|더마테스트/i },
+  { label: '피부 저자극 테스트', grp: '시험·평가', re: /피부\s*저?\s*자극\s*(테스트|시험)|첩포\s*시험|patch\s*test/i },
+  { label: '인체적용시험(임상)', grp: '시험·평가', re: /인체\s*적용\s*시험|임상\s*시험|효능\s*평가/i },
+  { label: '기능성화장품 심사·보고', grp: '시험·평가', re: /기능성화장품\s*(심사|보고|인정)/i },
+  // ── 기업 인증 ──
+  { label: '특허 보유', grp: '기업인증', re: /특허\s*(제?\s*[\d\-]+\s*호|출원|등록|보유)/i },
+  { label: '벤처기업·이노비즈·메인비즈', grp: '기업인증', re: /벤처기업\s*인증|이노비즈|INNO-?BIZ|메인비즈|MAIN-?BIZ/i },
+  { label: '기업부설연구소 인정', grp: '기업인증', re: /기업부설연구소\s*(인정|설립|등록)/i },
+  { label: '수출유망중소기업·글로벌강소', grp: '기업인증', re: /수출유망중소기업|글로벌\s*강소기업|월드클래스/i },
 ];
 // 동일 도메인 링크 추출 (서브페이지 탐색용)
 function extractLinks(html, baseUrl) {
@@ -524,6 +545,82 @@ const EQUIP_TYPES = [
   { label: '보관·물류(창고)', text: /(자동\s*창고|물류\s*센터|원료\s*창고|보관\s*시설|팔레트)/i,
     asset: /(창고|warehouse|물류|logis|보관|storage)/i },
 ];
+// ── 화장품 충전·포장 설비 사전 (설비 탭) ──
+// grp: 충전 / 제조 / 포장 / 부대. text=본문 문구, asset=이미지 파일명·alt 단서
+const FILL_EQUIP = [
+  // ── 충전 설비(제형·용기 형태별) ──
+  { label: '튜브 충전기', grp: '충전', text: /튜브\s*(충전|필링|성형)|tube\s*fill/i, asset: /튜브|tube/i },
+  { label: '용기(보틀) 충전기', grp: '충전', text: /(용기|보틀|병)\s*(충전|필링)|bottle\s*fill/i, asset: /보틀|bottle|용기/i },
+  { label: '멀티 충전기', grp: '충전', text: /멀티\s*(충전|필러|라인)|multi\s*fill/i, asset: /멀티|multi/i },
+  { label: '멀티셀 충전기', grp: '충전', text: /멀티\s*셀|multi\s*cell/i, asset: /멀티셀|multicell|multi_cell/i },
+  { label: '단발(단발기) 충전', grp: '충전', text: /단발\s*(기|충전|라인)?/i, asset: /단발|danbal/i },
+  { label: '대용량 충전기', grp: '충전', text: /대용량\s*(충전|필링|라인|생산)/i, asset: /대용량|large|bulk/i },
+  { label: '마스크팩 충전기', grp: '충전', text: /마스크\s*(팩)?\s*(충전|자동|라인|성형)|시트\s*마스크\s*충전/i, asset: /마스크|mask/i },
+  { label: '파우치 충전기', grp: '충전', text: /파우치\s*(충전|필링|성형)|pouch\s*fill|스파우트/i, asset: /파우치|pouch|스파우트|spout/i },
+  { label: '앰플·바이알 충전기', grp: '충전', text: /(앰플|앰퓰|바이알)\s*(충전|필링)?/i, asset: /앰플|ampoule|ampul|vial/i },
+  { label: '스틱 충전기', grp: '충전', text: /스틱\s*(충전|필링|포장)|stick\s*fill/i, asset: /스틱|stick/i },
+  { label: '스파우트·젤리스틱', grp: '충전', text: /젤리\s*스틱|스틱\s*파우치/i, asset: /jelly|젤리/i },
+  { label: '에어리스·펌프 충전', grp: '충전', text: /에어리스|airless|펌프\s*(용기|충전)/i, asset: /airless|에어리스|pump/i },
+  { label: '스프레이·에어졸 충전', grp: '충전', text: /(스프레이|에어졸|에어로졸)\s*(충전|라인)?/i, asset: /스프레이|spray|aerosol/i },
+  { label: '쿠션·콤팩트 충전', grp: '충전', text: /(쿠션|콤팩트|팩트)\s*(충전|성형|라인)?/i, asset: /쿠션|cushion|compact/i },
+  { label: '립스틱·성형 충전', grp: '충전', text: /(립스틱|립밤)\s*(성형|충전|몰딩)?/i, asset: /립스틱|lipstick|lipbalm/i },
+  { label: '자동·로터리 충전 라인', grp: '충전', text: /(자동|로터리|인라인|직선식)\s*충전\s*(기|라인)?/i, asset: /rotary|auto.?fill|로터리/i },
+  { label: '반자동 충전기', grp: '충전', text: /반자동\s*(충전|필링)/i, asset: /반자동|semi.?auto/i },
+  // ── 제조(벌크) 설비 ──
+  { label: '제조·유화 가마(탱크)', grp: '제조', text: /(가마|제조\s*탱크|유화\s*(기|탱크|가마)|진공\s*유화|emulsif)/i, asset: /가마|gama|kama|유화|emul|탱크|tank/i },
+  { label: '호모믹서·디스퍼', grp: '제조', text: /(호모\s*믹서|homo\s*mixer|디스퍼|disper|아지\s*믹서|교반기)/i, asset: /호모|homo|디스퍼|disper|아지|agi/i },
+  { label: '숙성·저장 탱크', grp: '제조', text: /(숙성\s*탱크|저장\s*탱크|보관\s*탱크|holding\s*tank)/i, asset: /숙성|storage.?tank/i },
+  { label: '칭량·원료 계량', grp: '제조', text: /(칭량|원료\s*계량|평량)\s*(실|시스템)?/i, asset: /칭량|weighing/i },
+  // ── 포장 설비 ──
+  { label: '실링·캡핑기', grp: '포장', text: /(실링|씰링|캡핑|캡\s*체결)\s*(기|라인)?|sealing|capping/i, asset: /실링|sealing|캡핑|capping/i },
+  { label: '라벨러·인쇄', grp: '포장', text: /(라벨(러|링)?|레이저\s*인쇄|각인)\s*(기|라인)?|labeler/i, asset: /라벨|label/i },
+  { label: '카톤·박스 포장기', grp: '포장', text: /(카톤|단상자|박스)\s*(포장|삽입)?\s*(기|라인)?|carton/i, asset: /카톤|carton|박스|box/i },
+  { label: '수축포장·쉬링크', grp: '포장', text: /(수축\s*포장|쉬링크|shrink)/i, asset: /shrink|쉬링크/i },
+  // ── 부대 설비 ──
+  { label: '클린룸·공조', grp: '부대', text: /(클린\s*룸|clean\s*room|무진실|공조\s*설비|헤파|HEPA)/i, asset: /클린룸|cleanroom|clean_room|hepa/i },
+  { label: '정제수 제조(RO)', grp: '부대', text: /(정제수|순수|RO\s*시스템|역삼투)/i, asset: /정제수|purified|ro.?system/i },
+  { label: '금속검출·중량선별', grp: '부대', text: /(금속\s*검출|중량\s*선별|checkweigher|metal\s*detect)/i, asset: /금속검출|metal.?detect|checkweigh/i },
+  { label: '시험·품질 설비', grp: '부대', text: /(항온\s*(조|항습)|점도계|경도계|입도\s*분석|시험\s*실|실험실|분석\s*장비)/i, asset: /시험|실험|lab|검사|분석|현미경/i },
+  { label: '자동창고·물류', grp: '부대', text: /(자동\s*창고|물류\s*센터|원료\s*창고|팔레트)/i, asset: /창고|warehouse|물류|logis/i },
+];
+// ── 생산 CAPA 추출 (CAPA 탭) ──
+// 월/일/연/시간당 생산량, 설비별 수량(라인 수·가마 기수), 규모(면적) 등을 수치와 함께 회수
+const CAPA_RULES = [
+  // 기간별 생산능력을 먼저 매칭(뒤의 '설비 용량' 규칙이 같은 수치를 가로채지 않도록 순서 중요)
+  { kind: '월 생산능력', re: /(?:월\s*(?:간|평균|최대)?\s*(?:생산량|생산능력|생산|capa|캐파)?\s*[:\-]?\s*)([\d,.]+\s*(?:만|억)?\s*(?:개|ea|EA|톤|t\b|kg|L\b|리터|pcs|병|본))/gi },
+  { kind: '일 생산능력', re: /(?:(?:1\s*)?일\s*(?:평균|최대)?\s*(?:생산량|생산능력|생산|capa)?\s*[:\-]?\s*)([\d,.]+\s*(?:만|억)?\s*(?:개|ea|EA|톤|t\b|kg|L\b|리터|pcs|병|본))/gi },
+  { kind: '연 생산능력', re: /(?:연\s*(?:간|평균|최대)?\s*(?:생산량|생산능력|생산|capa)?\s*[:\-]?\s*)([\d,.]+\s*(?:만|억)?\s*(?:개|ea|EA|톤|t\b|kg|L\b|리터|pcs|병|본))/gi },
+  { kind: '시간당 생산능력', re: /([\d,.]+\s*(?:개|ea|EA|pcs|병|본)\s*\/\s*(?:시간|hr|h|분|min))/gi },
+  { kind: '시간당 생산능력', re: /(?:시간\s*당|분\s*당|hr당)\s*([\d,.]+\s*(?:만)?\s*(?:개|ea|EA|pcs|병|본))/gi },
+  { kind: '설비 용량', re: /([\d,.]+\s*(?:톤|t\b|ton|L\b|리터|kg)\s*(?:짜리|규모|용량)?\s*(?:가마|탱크|유화기|믹서|제조기)?)/gi },
+  { kind: '설비 보유 수량', re: /((?:가마|탱크|유화기|충전기|충전\s*라인|생산\s*라인|라인)\s*[\d,.]+\s*(?:기|대|식|개|라인|EA|ea))/gi },
+  { kind: '설비 보유 수량', re: /([\d,.]+\s*(?:기|대|식|라인)\s*(?:의\s*)?(?:가마|탱크|유화기|충전기|충전\s*라인|생산\s*라인))/gi },
+  { kind: '공장 규모', re: /([\d,.]+\s*(?:㎡|m2|평)\s*(?:규모|부지|대지|연면적|건평)?)/gi },
+];
+function extractCapa(text) {
+  const out = []; const seen = new Set();
+  const claimed = []; // 이미 더 구체적인 규칙이 가져간 구간 — 중복 분류 방지("일 생산 12톤"이 설비 용량으로도 잡히는 문제)
+  const overlaps = (a, b) => claimed.some(([s, e]) => a < e && b > s);
+  for (const r of CAPA_RULES) {
+    const re = new RegExp(r.re.source, r.re.flags);
+    let m;
+    while ((m = re.exec(text)) && out.length < 24) {
+      const val = (m[1] || m[0]).replace(/\s{2,}/g, ' ').trim();
+      if (!/\d/.test(val)) continue;
+      const start = m.index, end = m.index + m[0].length;
+      if (overlaps(start, end)) continue;
+      const key = `${r.kind}|${val}`;
+      if (seen.has(key)) continue;
+      seen.add(key); claimed.push([start, end]);
+      // 근거 문장(앞뒤 맥락) 확보
+      const ctx = text.slice(Math.max(0, start - 45), Math.min(text.length, end + 45))
+        .replace(/\s+/g, ' ').trim();
+      out.push({ kind: r.kind, value: val, context: ctx });
+    }
+  }
+  return out;
+}
+
 // 이미지 태그에서 (파일명, alt) 쌍을 뽑아 설비 사진 후보로 사용
 function imageAssets(html) {
   const out = []; const re = /<img\b[^>]*>/gi; let m;
@@ -612,11 +709,41 @@ async function siteDeepHeuristic(name, hpUrl) {
   const equipment_inferred = (inf.items.length || inf.vendors.length || inf.capacities.length)
     ? { items: inf.items, vendors: inf.vendors, capacities: inf.capacities, imageCount: inf.imageCount }
     : null;
+
+  // ── 탭 데이터 ── 인증 / 설비 / 생산CAPA / 기타
+  const assets = imageAssets(g.html || '');
+  // ① 인증 — 그룹별로 묶고 근거 문장을 함께
+  const certDetail = CERT_PATTERNS.filter((c) => c.re.test(T)).map((c) => {
+    const ev = pickSentences(T, c.re, { cap: 1 });
+    return { label: c.label, grp: c.grp, evidence: ev[0] ? ev[0].slice(0, 90) : null };
+  });
+  // ② 설비 — 충전/제조/포장/부대. 본문·이미지 단서를 각각 확인해 신뢰도 부여
+  const fillEquip = FILL_EQUIP.map((e) => {
+    const inTextHit = e.text.test(T);
+    const hits = assets.filter((a) => e.asset.test(`${a.file} ${a.alt}`)).slice(0, 2);
+    if (!inTextHit && !hits.length) return null;
+    const ev = [];
+    if (inTextHit) { const s = pickSentences(T, e.text, { cap: 1 }); ev.push(s[0] ? `본문: ${s[0].slice(0, 70)}` : '본문 언급'); }
+    hits.forEach((h) => ev.push(`이미지: ${(h.alt || h.file).slice(0, 45)}`));
+    return {
+      label: e.label, grp: e.grp,
+      confidence: inTextHit && hits.length ? 'high' : (inTextHit ? 'mid' : 'low'),
+      basis: inTextHit && hits.length ? '본문+이미지' : (inTextHit ? '본문' : '이미지'),
+      evidence: ev.slice(0, 3),
+    };
+  }).filter(Boolean);
+  // ③ 생산 CAPA — 수치 표현을 종류별로
+  const capaItems = extractCapa(T);
+  const tabs = {
+    cert: certDetail.length ? certDetail : null,
+    equip: fillEquip.length ? fillEquip : null,
+    capa: capaItems.length ? capaItems : null,
+  };
   const data = {
     company_name: name || null, business_type, product_categories, production_items,
     quality_certifications, production_sites, equipment, rnd_centers, export_markets,
     hq_address: addrM ? addrM[1].trim() : null, phone: phoneM ? phoneM[1] : null, notable,
-    keywords: keywords.length ? keywords : null, equipment_inferred,
+    keywords: keywords.length ? keywords : null, equipment_inferred, tabs,
   };
   const any = Object.entries(data).some(([k, v]) => k !== 'company_name' && v != null && (!Array.isArray(v) || v.length));
   return {
@@ -1510,14 +1637,96 @@ function renderSiteDeepInto(box, state) {
         '인증·주소·사업장 등 <b>사실 항목은 홈페이지 본문에서만</b> 추출합니다.'
       : '⚠ 페이지 본문이 적어 메타·이미지·임베드 데이터에서 보조 추출했습니다.'}</div>`;
   }
-  if (!rows.length) {
+  const tabs = d.tabs || {};
+  const certs = tabs.cert || [];
+  const equip = tabs.equip || [];
+  const capa = tabs.capa || [];
+  const eqi = d.equipment_inferred;
+  // 기타 탭에 들어갈 나머지 필드(인증·설비·CAPA 전용 항목 제외)
+  const ETC_SKIP = new Set(['keywords', 'equipment_inferred', 'quality_certifications', 'equipment']);
+  const etcRows = rows.filter(({ f }) => !ETC_SKIP.has(f.key));
+  const kw = d.keywords || [];
+
+  if (!rows.length && !certs.length && !equip.length && !capa.length) {
     html += '<div class="sd-none">생산·인증 정보를 확인하지 못했습니다.</div>';
   } else {
-    // 키워드는 폭이 넓어 별도 행으로 먼저
-    const kw = d.keywords;
-    if (kw && kw.length) {
-      const max = Math.max(...kw.map((k) => k.score || 1));
-      html += `<div class="sd-kwbox"><i>추출 키워드 <em>빈도 상위 ${kw.length}개 · 사이트 전체 텍스트 기준</em></i><div class="sd-kws">` +
+    const CONF = { high: ['확실', 'ec-high'], mid: ['추정', 'ec-mid'], low: ['약한 추정', 'ec-low'] };
+    // ── 탭 헤더 ──
+    const defs = [
+      { id: 'cert', label: '인증', n: certs.length },
+      { id: 'equip', label: '설비', n: equip.length },
+      { id: 'capa', label: '생산CAPA', n: capa.length },
+      { id: 'etc', label: '기타', n: etcRows.length + (kw.length ? 1 : 0) },
+    ];
+    const first = (defs.find((t) => t.n > 0) || defs[0]).id;
+    html += '<div class="sd-tabs" role="tablist">' + defs.map((t) =>
+      `<button type="button" class="sd-tab${t.id === first ? ' on' : ''}" data-tab="${t.id}">` +
+      `${esc(t.label)}<span>${t.n}</span></button>`).join('') + '</div>';
+
+    // ── ① 인증 ──
+    html += `<div class="sd-pane${'cert' === first ? ' on' : ''}" data-pane="cert">`;
+    if (!certs.length) html += '<div class="sd-none">홈페이지에서 인증 표기를 찾지 못했습니다.</div>';
+    else {
+      const byGrp = {};
+      certs.forEach((c) => { (byGrp[c.grp || '기타'] = byGrp[c.grp || '기타'] || []).push(c); });
+      for (const [grp, list] of Object.entries(byGrp)) {
+        html += `<div class="sd-sec">${esc(grp)}</div><ul class="cert-list">` + list.map((c) =>
+          `<li><span class="cert-b">${esc(c.label)}</span>` +
+          (c.evidence ? `<em>${esc(c.evidence)}</em>` : '') + `</li>`).join('') + '</ul>';
+      }
+      html += '<div class="sd-mini">게재 표기 기준 — 인증서 원본·유효기간·적용범위는 방문 시 확인하세요.</div>';
+    }
+    html += '</div>';
+
+    // ── ② 설비 ──
+    html += `<div class="sd-pane${'equip' === first ? ' on' : ''}" data-pane="equip">`;
+    if (eqi && (eqi.vendors || []).length) {
+      html += `<div class="eq-vend">가마·설비 제조사 단서: ` +
+        eqi.vendors.map((v) => `<b>${esc(v.name)}</b><span>(${esc(v.where)})</span>`).join(' ') + `</div>`;
+    }
+    if (!equip.length) html += '<div class="sd-none">충전·제조 설비 언급을 찾지 못했습니다.</div>';
+    else {
+      const order = ['충전', '제조', '포장', '부대'];
+      const byGrp = {};
+      equip.forEach((e) => { (byGrp[e.grp] = byGrp[e.grp] || []).push(e); });
+      for (const grp of order) {
+        const list = byGrp[grp]; if (!list || !list.length) continue;
+        html += `<div class="sd-sec">${esc(grp)} 설비 <em>${list.length}종</em></div><ul class="eq-list">` +
+          list.map((it) => {
+            const [lbl, cls] = CONF[it.confidence] || CONF.low;
+            return `<li><span class="eq-conf ${cls}">${lbl}</span>` +
+              `<span class="eq-name">${esc(it.label)}</span>` +
+              `<span class="eq-basis">${esc(it.basis)}</span>` +
+              `<div class="eq-ev">${(it.evidence || []).map((e) => esc(e)).join(' · ')}</div></li>`;
+          }).join('') + '</ul>';
+      }
+      html += `<div class="sd-mini">이미지 ${eqi ? (eqi.imageCount || 0) : 0}장 분석 — 사진 속 글자는 읽지 못하며 파일명·alt·본문 문구 기반입니다. 실물·대수는 방문 확인.</div>`;
+    }
+    html += '</div>';
+
+    // ── ③ 생산 CAPA ──
+    html += `<div class="sd-pane${'capa' === first ? ' on' : ''}" data-pane="capa">`;
+    if (!capa.length) html += '<div class="sd-none">생산능력 수치를 찾지 못했습니다 — 월/일 생산량·라인 수는 방문 시 직접 확인하세요.</div>';
+    else {
+      const byKind = {};
+      capa.forEach((c) => { (byKind[c.kind] = byKind[c.kind] || []).push(c); });
+      html += '<ul class="capa-list">';
+      for (const [kind, list] of Object.entries(byKind)) {
+        list.slice(0, 6).forEach((c) => {
+          html += `<li><span class="capa-kind">${esc(kind)}</span>` +
+            `<span class="capa-val">${esc(c.value)}</span>` +
+            `<div class="capa-ctx">…${esc(c.context)}…</div></li>`;
+        });
+      }
+      html += '</ul><div class="sd-mini">홈페이지 게재 수치 — 설계 CAPA와 실가동은 다를 수 있습니다. 가동률·MOQ·리드타임은 방문 확인.</div>';
+    }
+    html += '</div>';
+
+    // ── ④ 기타 ──
+    html += `<div class="sd-pane${'etc' === first ? ' on' : ''}" data-pane="etc">`;
+    if (kw.length) {
+      const max = Math.max(...kw.map((k) => (typeof k === 'object' ? k.score : 1) || 1));
+      html += `<div class="sd-kwbox"><i>추출 키워드 <em>빈도 상위 ${kw.length}개</em></i><div class="sd-kws">` +
         kw.map((k) => {
           const w = typeof k === 'object' ? k.word : k;
           const s = typeof k === 'object' ? (k.score || 1) : 1;
@@ -1525,34 +1734,13 @@ function renderSiteDeepInto(box, state) {
           return `<span class="sd-kw${lv}">${esc(String(w))}</span>`;
         }).join('') + '</div></div>';
     }
-    // 🏭 설비 추정 — 확정 정보가 아니므로 근거와 신뢰도를 함께 노출
-    const eqi = d.equipment_inferred;
-    if (eqi && (eqi.items || []).length + (eqi.vendors || []).length + (eqi.capacities || []).length) {
-      const CONF = { high: ['확실', 'ec-high'], mid: ['추정', 'ec-mid'], low: ['약한 추정', 'ec-low'] };
-      html += `<div class="sd-eqbox"><i>🏭 생산설비 추정 <em>이미지 파일명·alt + 본문 대조 (OCR 아님 · 방문 시 실물 확인)</em></i>`;
-      if ((eqi.vendors || []).length) {
-        html += `<div class="eq-vend">가마·설비 제조사 단서: ` +
-          eqi.vendors.map((v) => `<b>${esc(v.name)}</b><span>(${esc(v.where)})</span>`).join(' ') + `</div>`;
-      }
-      if ((eqi.capacities || []).length) {
-        html += `<div class="eq-cap">용량 표기: ` + eqi.capacities.map((c) => `<b>${esc(c)}</b>`).join(', ') + `</div>`;
-      }
-      if ((eqi.items || []).length) {
-        html += '<ul class="eq-list">' + eqi.items.map((it) => {
-          const [lbl, cls] = CONF[it.confidence] || CONF.low;
-          return `<li><span class="eq-conf ${cls}">${lbl}</span>` +
-            `<span class="eq-name">${esc(it.label)}</span>` +
-            `<span class="eq-basis">${esc(it.basis)}</span>` +
-            `<div class="eq-ev">${(it.evidence || []).map((e) => esc(e)).join(' · ')}</div></li>`;
-        }).join('') + '</ul>';
-      }
-      html += `<div class="eq-foot">이미지 ${eqi.imageCount || 0}장 분석 — 사진 속 글자는 읽지 못하며 파일명·alt·본문 문구 기반 추정입니다.</div></div>`;
-    }
-    const others = rows.filter(({ f }) => f.key !== 'keywords' && f.key !== 'equipment_inferred');
-    if (others.length) {
-      html += '<div class="sd-grid">' + others.map(({ f }) =>
+    if (etcRows.length) {
+      html += '<div class="sd-grid">' + etcRows.map(({ f }) =>
         `<div class="sd-row${f.hot ? ' hot' : ''}"><i>${esc(f.label)}</i><div class="sd-v">${siteDeepCell(d[f.key], f.kind, f.hot)}</div></div>`).join('') + '</div>';
     }
+    if (!kw.length && !etcRows.length) html += '<div class="sd-none">추가 정보 없음</div>';
+    html += '</div>';
+
     if (state.base) html += `<div class="sd-foot">출처: <a href="${esc(state.base)}" target="_blank" rel="noopener">${esc(domainOf(state.base))}</a>` +
       `${state.pages && state.pages.length > 1 ? ` 외 ${state.pages.length - 1}개 페이지` : ''}${state.source === 'kw' ? ' · 키워드 자동추출' : ''}</div>`;
   }
@@ -1855,6 +2043,14 @@ function render(report, opts = {}) {
     // 심층분석 결과를 그린 뒤, 수동 주소 입력 UI에 이벤트를 다시 연결(innerHTML 교체로 리스너가 날아감)
     const paintDeep = (state) => {
       renderSiteDeepInto(sdBox, state);
+      // 탭 전환(인증/설비/생산CAPA/기타) — innerHTML 교체 후 매번 다시 연결
+      sdBox.querySelectorAll('.sd-tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.tab;
+          sdBox.querySelectorAll('.sd-tab').forEach((b) => b.classList.toggle('on', b === btn));
+          sdBox.querySelectorAll('.sd-pane').forEach((p) => p.classList.toggle('on', p.dataset.pane === id));
+        });
+      });
       const go = sdBox.querySelector('.sd-go');
       const inp = sdBox.querySelector('.sd-url');
       if (!go || !inp) return;
