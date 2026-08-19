@@ -615,3 +615,26 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .chk-web .ot-list li:first-child { border-top: 0; }
 .vc-ins { grid-column: 3; font-size: 11px; color: var(--accent); line-height: 1.45; margin-top: 1px; }
 @media (max-width: 640px) { .vc-ins { grid-column: 1 / -1; } }
+
+/* 🔬 심층분석 — 추출 키워드 / 수동 주소 입력 */
+.sd-kwbox { margin-top: 12px; border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px; background: var(--panel-2); }
+.sd-kwbox > i { font-style: normal; font-size: 11px; font-weight: 700; color: var(--muted); display: block; margin-bottom: 8px; }
+.sd-kwbox > i em { font-style: normal; font-weight: 500; color: var(--faint); font-size: 10.5px; margin-left: 5px; }
+.sd-kws { display: flex; flex-wrap: wrap; gap: 5px; }
+.sd-kw { font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+.sd-kw.kw-mid { color: var(--text); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
+.sd-kw.kw-hi { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 700; }
+.sd-warnline { margin-top: 10px; font-size: 11.5px; line-height: 1.5; color: var(--gC); background: var(--gC-bg); border-radius: 9px; padding: 9px 12px; }
+.sd-manual { margin-top: 13px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.sd-manual > label { display: block; font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
+.sd-manual-in { display: flex; gap: 8px; flex-wrap: wrap; }
+.sd-url {
+  flex: 1; min-width: 200px; font-size: 13px; padding: 9px 12px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); outline: none;
+}
+.sd-url:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sd-go {
+  border: 0; cursor: pointer; border-radius: 9px; background: var(--accent); color: #fff;
+  font-size: 12.5px; font-weight: 700; padding: 9px 16px; white-space: nowrap;
+}
+.sd-go:hover { filter: brightness(1.07); }

@@ -111,7 +111,7 @@ function handleNaver(url, env, kind) {
   });
 }
 
-// 임의 페이지 텍스트 취득 — 홈페이지 대조용(대표자·주소 매칭). http(s)만, 200KB 상한.
+// 임의 페이지 텍스트 취득 — 홈페이지 대조·심층분석용. http(s)만, 400KB 상한(SPA 임베드 JSON 수용).
 async function handleFetchPage(url) {
   const target = url.searchParams.get('url');
   if (!target || !/^https?:\/\//i.test(target)) return jsonRes({ error: 'url 파라미터(http/https) 필요' }, 400);
@@ -132,7 +132,7 @@ async function handleFetchPage(url) {
   }
   clearTimeout(timer);
   const buf = await up.arrayBuffer().catch(() => null);
-  const text = buf ? new TextDecoder('utf-8', { fatal: false }).decode(buf).slice(0, 200000) : '';
+  const text = buf ? new TextDecoder('utf-8', { fatal: false }).decode(buf).slice(0, 400000) : '';
   return jsonRes({ status: up.status, url: up.url, text });
 }
 

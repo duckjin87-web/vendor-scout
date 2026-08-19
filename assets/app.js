@@ -273,23 +273,150 @@ async function extractSiteInfo(baseUrl, mainHtml) {
 }
 
 // ── 홈페이지 심층분석: 키워드 휴리스틱(무료·API키 불필요) ──
-// 홈페이지 본문 + 관련 서브페이지를 fetchPage로 모아 규칙 기반으로 생산 CAPA·인증 구조화.
-async function gatherSiteText(baseUrl) {
+// 홈페이지 유형(정적 HTML / 자바스크립트 SPA / 이미지 위주)에 상관없이 최대한 텍스트를 확보한다.
+//  ① 본문 텍스트  ② meta(description·keywords·og)  ③ 임베드 JSON(__NEXT_DATA__·JSON-LD 등 SPA 대응)
+//  ④ 이미지 alt·파일명·title/aria-label(그림으로 된 사이트 대응)  ⑤ noscript  ⑥ 링크 앵커(메뉴)
+function metaTexts(html) {
+  const out = []; const re = /<meta\b[^>]*>/gi; let m;
+  while ((m = re.exec(html)) && out.length < 40) {
+    const tag = m[0];
+    const name = ((tag.match(/(?:name|property)\s*=\s*["']([^"']+)["']/i) || [])[1] || '');
+    const content = ((tag.match(/content\s*=\s*["']([^"']*)["']/i) || [])[1] || '').trim();
+    if (!content || content.length > 400) continue;
+    if (/description|keywords|og:|twitter:|subject|author|classification/i.test(name)) out.push(content);
+  }
+  const t = (html.match(/<title[^>]*>([\s\S]{0,200}?)<\/title>/i) || [])[1];
+  if (t) out.unshift(htmlToText(t));
+  return out;
+}
+// SPA(리액트/뷰/넥스트 등)는 본문이 JS 안에 있어 HTML 텍스트가 비어 보인다 → 임베드 JSON에서 문자열 회수
+function embeddedJsonTexts(html) {
+  const blobs = [];
+  const ld = /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi; let m;
+  while ((m = ld.exec(html)) && blobs.length < 6) blobs.push(m[1]);
+  const nextD = html.match(/<script[^>]*id\s*=\s*["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (nextD) blobs.push(nextD[1]);
+  const stateRe = /window\.__(?:NUXT|INITIAL_STATE|PRELOADED_STATE|APOLLO_STATE|INITIAL_DATA)__\s*=\s*([\s\S]{0,200000}?)(?:;\s*(?:<\/script>|window\.)|<\/script>)/gi;
+  while ((m = stateRe.exec(html)) && blobs.length < 10) blobs.push(m[1]);
+  const out = [];
+  for (const b of blobs) {
+    // JSON 파싱 대신 문자열 리터럴만 회수(형식이 깨져 있어도 안전)
+    const sre = /"((?:[^"\\]|\\.){2,300})"/g; let s;
+    while ((s = sre.exec(b)) && out.length < 600) {
+      let v = s[1];
+      if (/^(https?:|\/|#|[a-f0-9]{16,}$)/i.test(v)) continue;      // URL·해시 제외
+      if (!/[가-힣]|[A-Za-z]{3,}/.test(v)) continue;                 // 의미 없는 토큰 제외
+      // 짧은 영문은 대개 JSON 키 이름이라 제외하되, 대문자 약어(CGMP·ISO·OEM 등)는 인증/사업유형 단서라 보존
+      if (/^[a-z0-9_\-.]+$/.test(v) && v.length < 6) continue;
+      v = v.replace(/\\u([0-9a-f]{4})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+           .replace(/\\n/g, ' ').replace(/\\"/g, '"').replace(/\\\//g, '/').trim();
+      if (v.length >= 2) out.push(v);
+    }
+  }
+  return out;
+}
+// 이미지로 내용을 채운 사이트 — alt·파일명·title/aria-label에서 단서 회수
+function imageAndAttrTexts(html) {
+  const out = [];
+  const imgRe = /<img\b[^>]*>/gi; let m;
+  while ((m = imgRe.exec(html)) && out.length < 300) {
+    const tag = m[0];
+    const alt = ((tag.match(/\balt\s*=\s*["']([^"']+)["']/i) || [])[1] || '').trim();
+    if (alt && alt.length <= 120) out.push(alt);
+    const src = ((tag.match(/\b(?:src|data-src)\s*=\s*["']([^"']+)["']/i) || [])[1] || '');
+    if (src) {
+      let base = src.split(/[?#]/)[0].split('/').pop() || '';
+      try { base = decodeURIComponent(base); } catch { /* 인코딩 아님 */ }
+      const nm = base.replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[_\-+%]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      // 파일명이 의미를 담은 경우만(한글 또는 3자 이상 영단어), 해시/일련번호 제외
+      if (nm && nm.length <= 60 && /[가-힣]|[A-Za-z]{3,}/.test(nm) && !/^[0-9a-f]{8,}$/i.test(nm)) out.push(nm);
+    }
+  }
+  const attrRe = /\b(?:title|aria-label|data-title)\s*=\s*["']([^"']{2,120})["']/gi;
+  while ((m = attrRe.exec(html)) && out.length < 450) { const v = m[1].trim(); if (/[가-힣]|[A-Za-z]{3,}/.test(v)) out.push(v); }
+  const nsRe = /<noscript[^>]*>([\s\S]*?)<\/noscript>/gi;
+  while ((m = nsRe.exec(html))) { const v = htmlToText(m[1]); if (v) out.push(v); }
+  return out;
+}
+// 한 페이지에서 모든 전략으로 텍스트 확보 → {text, richness}
+function harvestFromHtml(html, baseUrl) {
+  const body = htmlToText(html);
+  const parts = [body];
+  parts.push(metaTexts(html).join('\n'));
+  parts.push(embeddedJsonTexts(html).join('\n'));
+  parts.push(imageAndAttrTexts(html).join('\n'));
+  if (baseUrl) parts.push(extractLinks(html, baseUrl).map((l) => l.anchor).filter(Boolean).join(' '));
+  const text = parts.filter(Boolean).join('\n');
+  return { text, bodyLen: body.length, totalLen: text.length };
+}
+async function gatherSiteText(baseUrl, companyName) {
   let html = '';
   try { const p = await proxyOnlyGet('fetchPage', { url: baseUrl }); html = (p && p.text) || ''; } catch { html = ''; }
   if (!html) return null;
-  const texts = [htmlToText(html)]; const pages = [baseUrl];
-  const REL = /(인증|certif|품질|quality|생산|시설|facilit|공장|factory|설비|장비|equip|회사\s*소개|about|company|연구|R&?D|사업|business|수출|export|product|제품)/i;
+  const first = harvestFromHtml(html, baseUrl);
+  const texts = [first.text]; const pages = [baseUrl];
+  const REL = /(인증|certif|품질|quality|생산|시설|facilit|공장|factory|설비|장비|equip|회사\s*소개|about|company|연구|R&?D|사업|business|수출|export|product|제품|브랜드|brand|오시는|contact)/i;
   const seen = new Set([baseUrl.replace(/\/+$/, '')]); const targets = [];
   for (const l of extractLinks(html, baseUrl)) {
     const key = l.href.replace(/\/+$/, ''); if (seen.has(key)) continue;
     if (REL.test(l.anchor) || REL.test(l.href)) { targets.push(l.href); seen.add(key); }
-    if (targets.length >= 4) break;
+    if (targets.length >= 5) break;
+  }
+  // 본문이 빈약(SPA 껍데기)하면 흔한 회사소개 경로를 추측해 추가 시도
+  if (first.bodyLen < 400 && targets.length < 3) {
+    for (const p of ['/about', '/company', '/sub/company', '/company.html', '/about.html', '/introduce', '/kr/company']) {
+      try { const u = new URL(p, baseUrl).href; if (!seen.has(u.replace(/\/+$/, ''))) { targets.push(u); seen.add(u.replace(/\/+$/, '')); } } catch { /* 무시 */ }
+      if (targets.length >= 5) break;
+    }
   }
   const subs = await Promise.all(targets.map((u) =>
-    proxyOnlyGet('fetchPage', { url: u }).then((p) => ({ u, t: htmlToText((p && p.text) || '') })).catch(() => null)));
-  subs.forEach((s) => { if (s && s.t) { texts.push(s.t); pages.push(s.u); } });
-  return { text: texts.join('\n').slice(0, 500000), pages };
+    proxyOnlyGet('fetchPage', { url: u }).then((p) => ({ u, h: (p && p.text) || '' })).catch(() => null)));
+  subs.forEach((s) => { if (s && s.h) { const r = harvestFromHtml(s.h, s.u); if (r.text) { texts.push(r.text); pages.push(s.u); } } });
+
+  let text = texts.join('\n');
+  let webFallback = false;
+  // 그래도 텍스트가 거의 없으면(완전 JS 렌더링/이미지 전용) 웹 검색 스니펫으로 보완
+  if (text.replace(/\s/g, '').length < 300 && companyName) {
+    try {
+      const w = await proxyOnlyGet('naverWeb', { query: `${companyName} 화장품 제조`, display: '25' });
+      const snips = ((w && w.items) || []).map((it) =>
+        `${String(it.title || '')} ${String(it.description || '')}`.replace(/<\/?b>/g, '')).join('\n');
+      if (snips.trim()) { text += '\n' + snips; webFallback = true; }
+    } catch { /* 검색 실패 무시 */ }
+  }
+  return { text: text.slice(0, 500000), pages, webFallback, thin: first.bodyLen < 400 };
+}
+
+// ── 키워드 추출 — 사이트 유형과 무관하게 확보된 텍스트에서 빈도 기반 핵심어 도출 ──
+const KW_STOP = new Set(('그리고 그러나 하지만 또한 위해 통해 대한 대하여 있는 있습니다 합니다 입니다 등의 등을 이나 에서 으로 하는 하여 되는 된다 같은 경우 우리 저희 고객 회사 기업 홈페이지 사이트 페이지 메뉴 바로가기 더보기 전체 목록 검색 로그인 회원가입 이용약관 개인정보 처리방침 저작권 무단 전재 재배포 금지 서울 경기 문의 상담 안내 소개 정보 관련 다양한 최고 최상 다음 이전 확인 신청 접수 오시는길 찾아오시는 사업자등록번호 대표이사 개인정보처리방침 이메일무단수집거부 All Rights Reserved Copyright the and for with our your this that from are was has have not you all can more about home page site menu login search contact info news event list view detail'.split(/\s+/)));
+function extractKeywords(text, limit = 24) {
+  const counts = new Map();
+  const bump = (w, n = 1) => counts.set(w, (counts.get(w) || 0) + n);
+  // 한국어는 조사가 붙어 같은 말이 다르게 세어지므로(예: 유화탱크/유화탱크를) 흔한 조사를 떼고 집계
+  const JOSA = /(으로써|으로서|에서는|에게서|이라고|라고는|으로|에서|에게|부터|까지|보다|처럼|만큼|과의|와의|의|를|을|은|는|이|가|도|와|과|에|로|년|월|일)$/;
+  const ko = String(text).match(/[가-힣]{2,12}/g) || [];
+  for (const raw of ko) {
+    let w = raw;
+    const cut = w.replace(JOSA, '');
+    if (cut.length >= 2) w = cut;                 // 떼고도 2자 이상일 때만 적용
+    if (w.length < 2 || KW_STOP.has(w)) continue;
+    bump(w);
+  }
+  const en = String(text).match(/[A-Za-z][A-Za-z0-9+#&.-]{2,20}/g) || [];
+  for (const raw of en) {
+    const w = raw.replace(/[.\-]+$/, '');
+    if (w.length < 3 || KW_STOP.has(w) || KW_STOP.has(w.toLowerCase())) continue;
+    bump(/^[A-Z0-9+#&-]+$/.test(w) ? w : w.toLowerCase());
+  }
+  // 도메인 관련어 가중치 — 화장품 제조 문맥에서 의미 있는 단어를 위로
+  const BOOST = /(화장품|제조|생산|공장|설비|라인|충전|유화|품질|인증|연구|개발|처방|원료|용기|포장|수출|납품|브랜드|기능성|스킨|크림|세럼|앰플|마스크|선크림|클렌징|샴푸|바디|헤어|OEM|ODM|GMP|ISO|비건|할랄|특허|클린룸|무균|안정성|시험)/i;
+  const arr = [...counts.entries()]
+    .map(([w, c]) => [w, c * (BOOST.test(w) ? 3 : 1)])
+    .filter(([w, c]) => c >= 2 || BOOST.test(w))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([w, c]) => ({ word: w, score: c }));
+  return arr;
 }
 // 문장 단위로 키워드 포함 짧은 구절 발췌
 function pickSentences(text, re, { min = 4, max = 130, cap = 5 } = {}) {
@@ -322,9 +449,9 @@ async function siteDeepHeuristic(name, hpUrl) {
     const hp = await findHomepage(name, {}).catch(() => null);
     baseUrl = hp && hp.proposed ? hp.proposed.url : null;
   }
-  if (!baseUrl) return { data: null, source: 'heuristic', reason: '홈페이지 미확보' };
-  const g = await gatherSiteText(baseUrl);
-  if (!g || !g.text) return { data: null, source: 'heuristic', reason: '페이지 본문 취득 실패(자바스크립트 렌더링 사이트 가능)' };
+  if (!baseUrl) return { data: null, source: 'heuristic', reason: '홈페이지 미확보 — 아래에 주소를 직접 입력하면 분석합니다' };
+  const g = await gatherSiteText(baseUrl, name);
+  if (!g || !g.text) return { data: null, source: 'heuristic', reason: '페이지를 열 수 없음(주소 오류·접속 차단) — 다른 주소로 다시 시도해 보세요', base: baseUrl };
   const T = g.text;
   const arrOrNull = (a) => (a && a.length ? a : null);
   const business_type = arrOrNull(['OEM', 'ODM', 'OGM', 'OBM'].filter((k) => new RegExp(`\\b${k}\\b`, 'i').test(T)));
@@ -340,13 +467,19 @@ async function siteDeepHeuristic(name, hpUrl) {
   const notable = arrOrNull([...(capa || []), ...pickSentences(T, /(글로벌\s*브랜드|유명\s*브랜드|대기업\s*납품|OEM\s*파트너|특허\s*\d|수출\s*\d)/i, { cap: 2 })].slice(0, 5));
   const addrM = T.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^\n,]{4,50}(?:로|길)\s?\d[^\n,]{0,20})/);
   const phoneM = T.match(/(0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4})/);
+  const keywords = extractKeywords(T);
   const data = {
     company_name: name || null, business_type, product_categories, production_items,
     quality_certifications, production_sites, equipment, rnd_centers, export_markets,
     hq_address: addrM ? addrM[1].trim() : null, phone: phoneM ? phoneM[1] : null, notable,
+    keywords: keywords.length ? keywords : null,
   };
   const any = Object.entries(data).some(([k, v]) => k !== 'company_name' && v != null && (!Array.isArray(v) || v.length));
-  return { data: any ? data : null, source: 'heuristic', pages: g.pages, base: baseUrl };
+  return {
+    data: any ? data : null, source: 'heuristic', pages: g.pages, base: baseUrl,
+    harvest: { webFallback: !!g.webFallback, thin: !!g.thin, chars: g.text.length },
+    reason: any ? null : '페이지에서 의미 있는 텍스트를 찾지 못했습니다(이미지 전용 사이트 가능)',
+  };
 }
 // LLM 비값 위에 휴리스틱으로 공백 채우기(둘 다 있으면 병합)
 function mergeDeep(primary, secondary) {
@@ -1157,10 +1290,12 @@ async function siteDeepAnalyze(name, hpUrl) {
   try { llm = await siteDeepExtract(name, hpUrl); } catch (e) { llmErr = e && e.message ? e.message : String(e); }
   const data = mergeDeep(llm, heur && heur.data ? heur.data : null);
   const source = llm ? (heur && heur.data ? 'ai+kw' : 'ai') : 'kw';
-  if (!data) return { source, err: (heur && heur.reason) || llmErr || '추출 결과 없음', keyless: !llm };
-  return { data, source, pages: heur && heur.pages, base: heur && heur.base };
+  const base = (heur && heur.base) || hpUrl || null;
+  if (!data) return { source, base, err: (heur && heur.reason) || llmErr || '추출 결과 없음', keyless: !llm };
+  return { data, source, base, pages: heur && heur.pages, harvest: heur && heur.harvest };
 }
 const SITE_DEEP_FIELDS = [
+  { key: 'keywords', label: '추출 키워드', kind: 'chips' },
   { key: 'business_type', label: '사업 유형', kind: 'chips', hot: true },
   { key: 'quality_certifications', label: '품질·인증', kind: 'chips', hot: true },
   { key: 'product_categories', label: '제형 카테고리', kind: 'chips' },
@@ -1188,31 +1323,66 @@ function siteDeepCell(val, kind, hot) {
 }
 function domainOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return String(u || ''); } }
 const SD_SRC_TAG = { kw: '키워드 기반(무료)', ai: 'AI 웹조사', 'ai+kw': 'AI+키워드' };
+// 수동 주소 입력 UI — 홈페이지 추적 실패/오탐 시 사용자가 직접 주소를 넣어 재분석
+function sdManualRow(base) {
+  return `<div class="sd-manual">` +
+    `<label>홈페이지 주소 직접 입력</label>` +
+    `<div class="sd-manual-in">` +
+    `<input type="url" class="sd-url" placeholder="https://example.co.kr" value="${esc(base || '')}">` +
+    `<button type="button" class="sd-go">이 주소로 분석</button>` +
+    `</div>` +
+    `<span class="sd-hint">추적이 실패했거나 다른 사이트가 잡혔을 때, 정확한 주소를 넣고 다시 분석하세요.</span>` +
+    `</div>`;
+}
 function renderSiteDeepInto(box, state) {
   if (state.loading) {
-    box.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>홈페이지 조사 중…</span></h4><div class="sd-load">홈페이지 본문에서 생산 CAPA·인증 정보를 추출하고 있습니다…</div>';
+    box.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>홈페이지 조사 중…</span></h4>' +
+      '<div class="sd-load">본문·메타·임베드 JSON·이미지 정보까지 훑어 키워드를 추출하고 있습니다…</div>';
     return;
   }
   const srcTag = state.source ? `<b class="sd-tag">${esc(SD_SRC_TAG[state.source] || state.source)}</b>` : '';
   if (state.err && !state.data) {
-    box.innerHTML = `<h4>🔬 홈페이지 심층분석 ${srcTag}</h4><div class="sd-none">${esc(state.err)}` +
-      `<br><span class="sd-hint">홈페이지 본문을 못 읽었습니다(자바스크립트 렌더링 사이트이거나 미게재). ` +
-      `더 정확한 AI 웹조사를 켜려면 Vercel 환경변수에 <code>ANTHROPIC_API_KEY</code>를 추가하세요(선택).</span></div>`;
+    box.innerHTML = `<h4>🔬 홈페이지 심층분석 ${srcTag}</h4>` +
+      `<div class="sd-none">${esc(state.err)}</div>` + sdManualRow(state.base);
     return;
   }
   const d = state.data;
-  if (!d) { box.innerHTML = `<h4>🔬 홈페이지 심층분석 ${srcTag}</h4><div class="sd-none">추출 결과 없음</div>`; return; }
+  if (!d) { box.innerHTML = `<h4>🔬 홈페이지 심층분석 ${srcTag}</h4><div class="sd-none">추출 결과 없음</div>` + sdManualRow(state.base); return; }
   const rows = SITE_DEEP_FIELDS
     .map((f) => ({ f, has: !(d[f.key] == null || (Array.isArray(d[f.key]) && !d[f.key].length) || d[f.key] === '') }))
     .filter((r) => r.has);
   let html = `<h4>🔬 홈페이지 심층분석 ${srcTag}<span>홈페이지 게재 정보 · 참고용(방문 시 원본 확인)</span></h4>`;
-  if (!rows.length) {
-    html += '<div class="sd-none">홈페이지에서 생산·인증 정보를 확인하지 못했습니다(미게재이거나 자바스크립트 렌더링 사이트).</div>';
-  } else {
-    html += '<div class="sd-grid">' + rows.map(({ f }) =>
-      `<div class="sd-row${f.hot ? ' hot' : ''}"><i>${esc(f.label)}</i><div class="sd-v">${siteDeepCell(d[f.key], f.kind, f.hot)}</div></div>`).join('') + '</div>';
-    if (state.base) html += `<div class="sd-foot">출처: <a href="${esc(state.base)}" target="_blank" rel="noopener">${esc(domainOf(state.base))}</a>${state.source === 'kw' ? ' · 키워드 자동추출' : ''}</div>`;
+  // 수집 방식 안내 — 이미지 전용/SPA라 웹검색으로 보완했다면 명시(신뢰도 판단용)
+  const hv = state.harvest;
+  if (hv && (hv.thin || hv.webFallback)) {
+    html += `<div class="sd-warnline">${hv.webFallback
+      ? '⚠ 페이지 본문이 거의 비어 있어(자바스크립트 렌더링·이미지 전용) <b>웹 검색 결과로 보완</b>했습니다 — 홈페이지 원문이 아닐 수 있습니다.'
+      : '⚠ 페이지 본문이 적어 메타·이미지·임베드 데이터에서 보조 추출했습니다.'}</div>`;
   }
+  if (!rows.length) {
+    html += '<div class="sd-none">생산·인증 정보를 확인하지 못했습니다.</div>';
+  } else {
+    // 키워드는 폭이 넓어 별도 행으로 먼저
+    const kw = d.keywords;
+    if (kw && kw.length) {
+      const max = Math.max(...kw.map((k) => k.score || 1));
+      html += `<div class="sd-kwbox"><i>추출 키워드 <em>빈도 상위 ${kw.length}개 · 사이트 전체 텍스트 기준</em></i><div class="sd-kws">` +
+        kw.map((k) => {
+          const w = typeof k === 'object' ? k.word : k;
+          const s = typeof k === 'object' ? (k.score || 1) : 1;
+          const lv = s >= max * 0.6 ? ' kw-hi' : (s >= max * 0.3 ? ' kw-mid' : '');
+          return `<span class="sd-kw${lv}">${esc(String(w))}</span>`;
+        }).join('') + '</div></div>';
+    }
+    const others = rows.filter(({ f }) => f.key !== 'keywords');
+    if (others.length) {
+      html += '<div class="sd-grid">' + others.map(({ f }) =>
+        `<div class="sd-row${f.hot ? ' hot' : ''}"><i>${esc(f.label)}</i><div class="sd-v">${siteDeepCell(d[f.key], f.kind, f.hot)}</div></div>`).join('') + '</div>';
+    }
+    if (state.base) html += `<div class="sd-foot">출처: <a href="${esc(state.base)}" target="_blank" rel="noopener">${esc(domainOf(state.base))}</a>` +
+      `${state.pages && state.pages.length > 1 ? ` 외 ${state.pages.length - 1}개 페이지` : ''}${state.source === 'kw' ? ' · 키워드 자동추출' : ''}</div>`;
+  }
+  html += sdManualRow(state.base);
   box.innerHTML = html;
 }
 
@@ -1508,18 +1678,35 @@ function render(report, opts = {}) {
   if (m.live) {
     const hpBox = el('div', 'hpbox');
     blocks.appendChild(hpBox);
-    const runDeep = () => {
+    // 심층분석 결과를 그린 뒤, 수동 주소 입력 UI에 이벤트를 다시 연결(innerHTML 교체로 리스너가 날아감)
+    const paintDeep = (state) => {
+      renderSiteDeepInto(sdBox, state);
+      const go = sdBox.querySelector('.sd-go');
+      const inp = sdBox.querySelector('.sd-url');
+      if (!go || !inp) return;
+      const submit = () => {
+        let u = inp.value.trim();
+        if (!u) { inp.focus(); return; }
+        if (!/^https?:\/\//i.test(u)) u = 'https://' + u;      // 스킴 생략 허용
+        try { new URL(u); } catch { inp.setCustomValidity('주소 형식을 확인하세요'); inp.reportValidity(); return; }
+        runDeep(u);
+      };
+      go.addEventListener('click', submit);
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    };
+    // url 인자를 주면 그 주소로, 없으면 추적된 홈페이지로 분석
+    const runDeep = (url) => {
       report._siteDeep = { loading: true };
-      renderSiteDeepInto(sdBox, report._siteDeep);
-      const hpUrl = report._homepage && report._homepage.proposed ? report._homepage.proposed.url : '';
+      paintDeep(report._siteDeep);
+      const hpUrl = url || (report._homepage && report._homepage.proposed ? report._homepage.proposed.url : '');
       siteDeepAnalyze(report.meta.vendor_name, hpUrl)
         .then((state) => {
           report._siteDeep = state;
-          renderSiteDeepInto(sdBox, report._siteDeep);
+          paintDeep(report._siteDeep);
           refreshVisitChecklist(report); // 인증·제형·설비 확인항목을 체크리스트에 반영
           saveLastReport(report);
         })
-        .catch((e) => { report._siteDeep = { err: e && e.message ? e.message : String(e) }; renderSiteDeepInto(sdBox, report._siteDeep); });
+        .catch((e) => { report._siteDeep = { err: e && e.message ? e.message : String(e), base: hpUrl }; paintDeep(report._siteDeep); });
     };
     if (report._homepage !== undefined) {
       renderHomepageInto(hpBox, report._homepage);
@@ -1534,12 +1721,24 @@ function render(report, opts = {}) {
     const sdBox = el('div', 'sdbox');
     blocks.appendChild(sdBox);
     if (report._siteDeep && (report._siteDeep.data || report._siteDeep.err)) {
-      renderSiteDeepInto(sdBox, report._siteDeep);
+      paintDeep(report._siteDeep);
     } else {
-      sdBox.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>홈페이지에서 생산 CAPA·인증을 자동추출 (API키 불필요)</span></h4>';
+      sdBox.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>사이트 유형(정적·JS·이미지) 무관 키워드 추출 · API키 불필요</span></h4>';
       const btn = el('button', 'sd-run', '🔬 심층분석 실행');
-      btn.addEventListener('click', runDeep);
+      btn.addEventListener('click', () => runDeep());
       sdBox.appendChild(btn);
+      const man = el('div');
+      man.innerHTML = sdManualRow('');
+      sdBox.appendChild(man);
+      const go = man.querySelector('.sd-go'); const inp = man.querySelector('.sd-url');
+      const submit = () => {
+        let u = inp.value.trim(); if (!u) { inp.focus(); return; }
+        if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+        try { new URL(u); } catch { return; }
+        runDeep(u);
+      };
+      go.addEventListener('click', submit);
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
     }
   }
 
