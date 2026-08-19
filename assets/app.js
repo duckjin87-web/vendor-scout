@@ -408,26 +408,43 @@ async function gatherSiteText(baseUrl, companyName) {
     if (s && s.h) { const r = harvestFromHtml(s.h, s.u); if (r.text) { texts.push(r.text); pages.push(s.u); rawHtmls.push(s.h); } }
   });
 
-  let text = texts.join('\n');
-  let webFallback = false;
-  // 그래도 텍스트가 거의 없으면(완전 JS 렌더링/이미지 전용) 웹 검색 스니펫으로 보완
-  if (text.replace(/\s/g, '').length < 300 && companyName) {
+  const homeText = texts.join('\n');
+  // ★ 홈페이지 본문과 웹 검색 텍스트는 절대 합치지 않는다.
+  //   합치면 집계사이트·채용공고·'다른 회사' 스니펫이 인증·주소·사업장 같은 사실 항목을 오염시킨다.
+  //   검색 보완분은 keywords 용도로만, 그것도 상호가 실제 포함된 스니펫만 사용한다.
+  let webText = '';
+  if (homeText.replace(/\s/g, '').length < 300 && companyName) {
     try {
       const w = await proxyOnlyGet('naverWeb', { query: `${companyName} 화장품 제조`, display: '25' });
-      const snips = ((w && w.items) || []).map((it) =>
-        `${String(it.title || '')} ${String(it.description || '')}`.replace(/<\/?b>/g, '')).join('\n');
-      if (snips.trim()) { text += '\n' + snips; webFallback = true; }
+      const key = stripCorp(companyName).replace(/\s/g, '');
+      webText = ((w && w.items) || [])
+        .map((it) => `${String(it.title || '')} ${String(it.description || '')}`.replace(/<\/?b>/g, ''))
+        .filter((s) => key.length < 2 || s.replace(/\s/g, '').includes(key)) // 타사 스니펫 배제
+        .join('\n');
     } catch { /* 검색 실패 무시 */ }
   }
   return {
-    text: text.slice(0, 500000), pages, webFallback, thin: first.bodyLen < 400,
+    text: homeText.slice(0, 500000),          // 사실 추출용 = 홈페이지 본문만
+    webText: webText.slice(0, 100000),        // 참고용(키워드 전용)
+    pages, webFallback: !!webText, thin: first.bodyLen < 400,
     html: rawHtmls.join('\n').slice(0, 600000), // 설비 추정용 원본(이미지 태그 분석)
     resolvedUrl: baseUrl,
   };
 }
 
 // ── 키워드 추출 — 사이트 유형과 무관하게 확보된 텍스트에서 빈도 기반 핵심어 도출 ──
-const KW_STOP = new Set(('그리고 그러나 하지만 또한 위해 통해 대한 대하여 있는 있습니다 합니다 입니다 등의 등을 이나 에서 으로 하는 하여 되는 된다 같은 경우 우리 저희 고객 회사 기업 홈페이지 사이트 페이지 메뉴 바로가기 더보기 전체 목록 검색 로그인 회원가입 이용약관 개인정보 처리방침 저작권 무단 전재 재배포 금지 서울 경기 문의 상담 안내 소개 정보 관련 다양한 최고 최상 다음 이전 확인 신청 접수 오시는길 찾아오시는 사업자등록번호 대표이사 개인정보처리방침 이메일무단수집거부 All Rights Reserved Copyright the and for with our your this that from are was has have not you all can more about home page site menu login search contact info news event list view detail'.split(/\s+/)));
+const KW_STOP = new Set((
+  '그리고 그러나 하지만 또한 위해 통해 대한 대하여 있는 있습니다 합니다 입니다 등의 등을 이나 에서 으로 하는 하여 되는 된다 같은 경우 ' +
+  '우리 저희 고객 회사 기업 홈페이지 사이트 페이지 메뉴 바로가기 더보기 전체 목록 검색 로그인 회원가입 이용약관 개인정보 처리방침 ' +
+  '저작권 무단 전재 재배포 금지 서울 경기 문의 상담 안내 소개 정보 관련 다양한 최고 최상 다음 이전 확인 신청 접수 오시는길 찾아오시는 ' +
+  '사업자등록번호 대표이사 개인정보처리방침 이메일무단수집거부 거치고 이곳 여기 각종 통한 위한 모든 하나 함께 이상 이하 ' +
+  // 채용공고·집계사이트 스니펫에서 흔한 잡음(회사 자체 정보가 아님)
+  '기업정보 직원수 채용 년차 근무환경 복리후생 연봉 급여 신입 경력 채용정보 구인 지원자격 우대사항 마감일 모집 ' +
+  '자동등록방지 보안절차 자바스크립트 브라우저 로딩 팝업 닫기 이메일 팩스 전화번호 대표번호 상호명 업태 종목 ' +
+  '공장찾기 위세브 기업분석 재무정보 신용등급 매출액순위 ' +
+  'All Rights Reserved Copyright the and for with our your this that from are was has have not you all can more ' +
+  'about home page site menu login search contact info news event list view detail'
+).split(/\s+/));
 function extractKeywords(text, limit = 24) {
   const counts = new Map();
   const bump = (w, n = 1) => counts.set(w, (counts.get(w) || 0) + n);
@@ -573,16 +590,23 @@ async function siteDeepHeuristic(name, hpUrl) {
   const quality_certifications = arrOrNull(CERT_PATTERNS.filter((c) => c.re.test(T)).map((c) => c.label));
   const product_categories = arrOrNull(PROD_CATS.filter(([, re]) => re.test(T)).map(([l]) => l));
   const export_markets = arrOrNull(EXPORT_MKTS.filter((c) => new RegExp(`수출[^\\n]{0,40}${c}|${c}[^\\n]{0,10}수출|${c}\\s*(진출|법인|현지)`, 'i').test(T) || (/(수출|해외|글로벌|export)/i.test(T) && new RegExp(`\\b${c}\\b`).test(T))));
-  const equipment = arrOrNull(pickSentences(T, EQUIP_RE, { cap: 6 }));
-  const production_items = arrOrNull(pickSentences(T, /(출시|납품|수상|대표\s*제품|주요\s*제품|베스트셀러|히트\s*상품|개발\s*완료|런칭)/i, { cap: 4 }));
-  const production_sites = arrOrNull(pickSentences(T, /(제\s*\d\s*공장|본사\s*공장|생산\s*(공장|사업장|시설)|제조소).{0,60}(시|군|구|도)\b|(경기|서울|인천|부산|대구|충|전|경|강원|제주)[^\n]{0,40}(공장|생산)/, { cap: 3 }));
+  // 집계·채용 사이트 문구가 섞여 들어오면 사실이 아닌 문장이 필드에 박히므로 걸러낸다
+  const JUNK = /(공장찾기|위세브|기업정보|기업분석|신용등급|매출액순위|채용|구인|연봉|복리후생|근무환경|자동등록방지|보안절차|전화번호정보없음|정보없음|무단수집)/;
+  const clean = (arr) => (arr || []).filter((s) => !JUNK.test(s));
+  const equipment = arrOrNull(clean(pickSentences(T, EQUIP_RE, { cap: 6 })));
+  const production_items = arrOrNull(clean(pickSentences(T, /(출시|납품|수상|대표\s*제품|주요\s*제품|베스트셀러|히트\s*상품|개발\s*완료|런칭)/i, { cap: 4 })));
+  const production_sites = arrOrNull(clean(pickSentences(T, /(제\s*\d\s*공장|본사\s*공장|생산\s*(공장|사업장|시설)|제조소).{0,60}(시|군|구|도)\b|(경기|서울|인천|부산|대구|충|전|경|강원|제주)[^\n]{0,40}(공장|생산)/, { cap: 3 })));
   const rnd = /(기업부설연구소|부설\s*연구소|R\s*&?\s*D\s*(센터|연구소)|연구개발\s*(센터|본부)|기술연구원)/i.test(T);
   const rnd_centers = rnd ? ['기업부설연구소·R&D 조직 언급(홈페이지 게재)'] : null;
   const capa = extractCapaSnippets(T);
   const notable = arrOrNull([...(capa || []), ...pickSentences(T, /(글로벌\s*브랜드|유명\s*브랜드|대기업\s*납품|OEM\s*파트너|특허\s*\d|수출\s*\d)/i, { cap: 2 })].slice(0, 5));
-  const addrM = T.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^\n,]{4,50}(?:로|길)\s?\d[^\n,]{0,20})/);
+  // 주소는 도로명+번지에서 끊는다(뒤에 붙는 설명문이 딸려오는 문제 방지: "…59입니다. 화장품제조업")
+  //  "남동동로138번길 59" 처럼 번길이 낀 도로명도 끝까지 잡되, 그 뒤 설명문("…입니다. 화장품제조업")은 버린다
+  const addrM = T.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^\n,]{2,40}?(?:로|길)\s?\d+(?:번길\s?\d+)?(?:-\d+)?)/);
   const phoneM = T.match(/(0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4})/);
-  const keywords = extractKeywords(T);
+  // 키워드는 홈페이지 본문 우선, 본문이 빈약할 때만 검색 스니펫으로 보완(출처를 구분해 표기)
+  const kwSource = T.replace(/\s/g, '').length >= 300 ? T : `${T}\n${g.webText || ''}`;
+  const keywords = extractKeywords(kwSource);
   // 설비 추정 — 이미지 파일명/alt + 본문 문구를 설비 지식베이스와 대조(OCR 대체)
   const inf = inferEquipment(g.html, T);
   const equipment_inferred = (inf.items.length || inf.vendors.length || inf.capacities.length)
@@ -1482,7 +1506,8 @@ function renderSiteDeepInto(box, state) {
   const hv = state.harvest;
   if (hv && (hv.thin || hv.webFallback)) {
     html += `<div class="sd-warnline">${hv.webFallback
-      ? '⚠ 페이지 본문이 거의 비어 있어(자바스크립트 렌더링·이미지 전용) <b>웹 검색 결과로 보완</b>했습니다 — 홈페이지 원문이 아닐 수 있습니다.'
+      ? '⚠ 페이지 본문이 적어(자바스크립트 렌더링·이미지 전용) <b>키워드에 한해</b> 웹 검색 결과를 보탰습니다. ' +
+        '인증·주소·사업장 등 <b>사실 항목은 홈페이지 본문에서만</b> 추출합니다.'
       : '⚠ 페이지 본문이 적어 메타·이미지·임베드 데이터에서 보조 추출했습니다.'}</div>`;
   }
   if (!rows.length) {
