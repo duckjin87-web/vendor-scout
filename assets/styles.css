@@ -697,3 +697,9 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .capa-list li { grid-template-columns: 1fr; }
   .sd-tab { padding: 8px 10px; font-size: 12.5px; }
 }
+/* 사이트에 실제 표기된 설비·인증 용어 칩 */
+.lex-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 4px; }
+.lex-chip {
+  font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 7px;
+  background: var(--accent-soft); color: var(--accent); border: 1px solid transparent;
+}

@@ -583,6 +583,40 @@ const FILL_EQUIP = [
   { label: '시험·품질 설비', grp: '부대', text: /(항온\s*(조|항습)|점도계|경도계|입도\s*분석|시험\s*실|실험실|분석\s*장비)/i, asset: /시험|실험|lab|검사|분석|현미경/i },
   { label: '자동창고·물류', grp: '부대', text: /(자동\s*창고|물류\s*센터|원료\s*창고|팔레트)/i, asset: /창고|warehouse|물류|logis/i },
 ];
+// ── 설비/인증 용어 사전(어휘 매칭) ──
+// 카테고리 라벨만 보여주면 실제로 무엇이 적혀 있었는지 알 수 없으므로,
+// 사이트에 '실제로 표기된 용어'를 그대로 회수해 그룹별로 보여준다.
+const EQUIP_LEX = [
+  { grp: '제조 설비', re: /(제조탱크|저장탱크|원료탱크|유상용해조|수상용해조|용해조|가온탱크|냉각탱크|교반탱크|아지테이터|아지호모믹서|진공호모믹서|호모믹서|진공유화기|유화기|디스퍼믹서|디스퍼|고속믹서|헨셀믹서|3단\s?롤밀|롤밀|분산기|분쇄기|분말혼합기|파우더압축기|추출기|농축기|초순수제조기|정제수\s?제조설비|정제수\s?제조기|RO\s?설비|UV\s?살균기|필터하우징|CIP\s?세척설비|SIP\s?살균설비|위생용\s?펌프|로브펌프|다이어프램펌프|이송컨베이어|원료칭량대|원료보관랙|검체보관설비|제조용\s?배관|위생배관|가마)/gi },
+  { grp: '충전 설비', re: /(액상충전기|스킨충전기|토너충전기|로션충전기|에센스충전기|세럼충전기|크림충전기|연고충전기|겔충전기|점도액충전기|피스톤충전기|서보충전기|중량식충전기|유량식충전기|정량충전기|다열충전기|자동충전기|반자동충전기|튜브충전기|병충전기|자용기충전기|드로퍼충전기|스포이드충전기|에어리스용기충전기|펌프용기충전기|스틱충전기|립밤충전기|립글로스충전기|가온충전기|마스크팩충전기|파우치충전기|샘플충전기|형상파우치충전기|분말충전기|타정기|질소충전설비|다노즐충전기|충전노즐|자동용기공급기|정렬기|세병기|누액검사기|중량검사기|멀티셀|단발기|대용량\s?충전)/gi },
+  { grp: '포장 설비', re: /(자동캡핑기|인라인캡핑기|토크캡핑기|펌프캡핑기|스포이드캡핑기|캡핑기|튜브실링기|고주파실링기|초음파실링기|파우치실링기|마스크팩실링기|알루미늄실링기|인덕션실러|열접착기|자동라벨링기|원형라벨러|양면라벨러|수축라벨러|라벨러|로트인쇄기|유통기한인쇄기|잉크젯프린터|레이저마킹기|자동카토너|카토너|박스포장기|케이스포장기|필름포장기|수축포장기|랩핑기|번들포장기|세트포장기|비전검사기|자동검사기|금속검출기|중량선별기|봉함기|테이핑기|박스실러|팔레타이저|로봇패킹|컨베이어|자동이송시스템|바코드검증기|QR코드검증기)/gi },
+  { grp: '품질·시험 설비', re: /(pH\s?미터|Brookfield\s?점도계|점도계|비중계|수분측정기|굴절계|색차계|색도계|입도분석기|원심분리기|항온항습기|항온조|안정성시험기|가속시험기|광안정성시험기|동결융해시험기|열충격시험기|미생물시험설비|배양기|무균작업대|클린벤치|오토클레이브|ICP-?MS|HPLC|GC-?MS|\bGC\b|FT-?IR|UV-?VIS|밀봉강도시험기|낙하시험기|인장시험기)/gi },
+  { grp: '시설·안전', re: /(클린룸|클린벤치|공조설비|항온항습|국소배기장치|국소배기|집진설비|집진기|방폭설비|방폭인증|폐수처리설비|대기오염방지시설|압력용기\s?검사|소방시설|위험물관리|SUS\s?316L|SUS\s?304|데드레그|클린유틸리티|압축공기\s?품질관리|정제수\s?품질관리|스마트팩토리|MES|ERP|제조실행시스템)/gi },
+];
+const CERT_LEX = [
+  { grp: '등록·인허가', re: /(화장품제조업\s?등록|화장품책임판매업\s?등록|책임판매관리자|제조관리자|품질관리자|제조소\s?현장심사|GMP\s?적합판정|제조소\s?등록)/gi },
+  { grp: '품질시스템', re: /(우수화장품\s?제조\s?및\s?품질관리기준|품질관리시스템|품질경영시스템|환경경영시스템|안전보건경영시스템|제조기록서|품질기록서|원료관리|일탈관리|변경관리|불만처리|회수관리|교육훈련|내부심사|공급업체평가|추적성|교정관리)/gi },
+  { grp: '밸리데이션·적격성', re: /(세척밸리데이션|공정밸리데이션|충전밸리데이션|시험법밸리데이션|컴퓨터시스템밸리데이션|밸리데이션|설비적격성평가|적격성평가|\bDQ\b|\bIQ\b|\bOQ\b|\bPQ\b)/gi },
+  { grp: '시험·평가 항목', re: /(제품안전성평가|미생물시험|방부력시험|안정성시험|피부자극시험|인체적용시험|기능성화장품\s?심사|기능성화장품\s?보고|표시[·\s]?광고\s?실증|전성분\s?표시|알레르기\s?유발성분\s?표시)/gi },
+  { grp: '안전·환경 규제', re: /(산업안전보건법|위험성평가|전기안전|KC\s?인증|전기용품\s?안전인증|화학물질관리|MSDS|폐기물관리|에너지관리|온실가스관리|CE\s?인증|UL\s?인증|ATEX\s?인증)/gi },
+];
+// 텍스트에서 사전에 실제로 등장한 용어를 그대로 회수(표기 형태 보존, 중복 제거)
+function extractLexicon(text, lex) {
+  const out = [];
+  for (const l of lex) {
+    const re = new RegExp(l.re.source, l.re.flags);
+    const seen = new Map(); // 소문자 정규화 키 → 원문 표기
+    let m;
+    while ((m = re.exec(text)) && seen.size < 40) {
+      const term = (m[1] || m[0]).replace(/\s+/g, ' ').trim();
+      const key = term.toLowerCase().replace(/\s/g, '');
+      if (!seen.has(key)) seen.set(key, term);
+    }
+    if (seen.size) out.push({ grp: l.grp, terms: [...seen.values()] });
+  }
+  return out;
+}
+
 // ── 생산 CAPA 추출 (CAPA 탭) ──
 // 월/일/연/시간당 생산량, 설비별 수량(라인 수·가마 기수), 규모(면적) 등을 수치와 함께 회수
 const CAPA_RULES = [
@@ -734,9 +768,14 @@ async function siteDeepHeuristic(name, hpUrl) {
   }).filter(Boolean);
   // ③ 생산 CAPA — 수치 표현을 종류별로
   const capaItems = extractCapa(T);
+  // ④ 사이트에 실제 표기된 설비·인증 용어를 그대로 회수(카테고리 라벨보다 구체적)
+  const equipTerms = extractLexicon(T, EQUIP_LEX);
+  const certTerms = extractLexicon(T, CERT_LEX);
   const tabs = {
     cert: certDetail.length ? certDetail : null,
+    certTerms: certTerms.length ? certTerms : null,
     equip: fillEquip.length ? fillEquip : null,
+    equipTerms: equipTerms.length ? equipTerms : null,
     capa: capaItems.length ? capaItems : null,
   };
   const data = {
@@ -1639,8 +1678,17 @@ function renderSiteDeepInto(box, state) {
   }
   const tabs = d.tabs || {};
   const certs = tabs.cert || [];
+  const certTerms = tabs.certTerms || [];
   const equip = tabs.equip || [];
+  const equipTerms = tabs.equipTerms || [];
   const capa = tabs.capa || [];
+  const nTerms = (list) => list.reduce((s, g) => s + g.terms.length, 0);
+  // 사이트에 실제 표기된 용어를 그룹별 칩으로
+  const termBlock = (list, note) => list.length
+    ? list.map((g) => `<div class="sd-sec">${esc(g.grp)} <em>${g.terms.length}건</em></div>` +
+        `<div class="lex-chips">${g.terms.map((t) => `<span class="lex-chip">${esc(t)}</span>`).join('')}</div>`).join('') +
+      (note ? `<div class="sd-mini">${note}</div>` : '')
+    : '';
   const eqi = d.equipment_inferred;
   // 기타 탭에 들어갈 나머지 필드(인증·설비·CAPA 전용 항목 제외)
   const ETC_SKIP = new Set(['keywords', 'equipment_inferred', 'quality_certifications', 'equipment']);
@@ -1653,8 +1701,8 @@ function renderSiteDeepInto(box, state) {
     const CONF = { high: ['확실', 'ec-high'], mid: ['추정', 'ec-mid'], low: ['약한 추정', 'ec-low'] };
     // ── 탭 헤더 ──
     const defs = [
-      { id: 'cert', label: '인증', n: certs.length },
-      { id: 'equip', label: '설비', n: equip.length },
+      { id: 'cert', label: '인증', n: certs.length + nTerms(certTerms) },
+      { id: 'equip', label: '설비', n: equip.length + nTerms(equipTerms) },
       { id: 'capa', label: '생산CAPA', n: capa.length },
       { id: 'etc', label: '기타', n: etcRows.length + (kw.length ? 1 : 0) },
     ];
@@ -1665,7 +1713,7 @@ function renderSiteDeepInto(box, state) {
 
     // ── ① 인증 ──
     html += `<div class="sd-pane${'cert' === first ? ' on' : ''}" data-pane="cert">`;
-    if (!certs.length) html += '<div class="sd-none">홈페이지에서 인증 표기를 찾지 못했습니다.</div>';
+    if (!certs.length && !certTerms.length) html += '<div class="sd-none">홈페이지에서 인증 표기를 찾지 못했습니다.</div>';
     else {
       const byGrp = {};
       certs.forEach((c) => { (byGrp[c.grp || '기타'] = byGrp[c.grp || '기타'] || []).push(c); });
@@ -1674,6 +1722,8 @@ function renderSiteDeepInto(box, state) {
           `<li><span class="cert-b">${esc(c.label)}</span>` +
           (c.evidence ? `<em>${esc(c.evidence)}</em>` : '') + `</li>`).join('') + '</ul>';
       }
+      // 사이트에 그대로 적혀 있던 품질시스템·밸리데이션·규제 용어
+      html += termBlock(certTerms, '사이트에 표기된 용어를 그대로 회수한 것입니다(원문 표현).');
       html += '<div class="sd-mini">게재 표기 기준 — 인증서 원본·유효기간·적용범위는 방문 시 확인하세요.</div>';
     }
     html += '</div>';
@@ -1684,8 +1734,12 @@ function renderSiteDeepInto(box, state) {
       html += `<div class="eq-vend">가마·설비 제조사 단서: ` +
         eqi.vendors.map((v) => `<b>${esc(v.name)}</b><span>(${esc(v.where)})</span>`).join(' ') + `</div>`;
     }
-    if (!equip.length) html += '<div class="sd-none">충전·제조 설비 언급을 찾지 못했습니다.</div>';
+    // 사이트에 실제로 적힌 설비명(제조/충전/포장/품질시험/시설) — 가장 구체적인 근거라 먼저
+    html += termBlock(equipTerms, '사이트에 표기된 설비명을 그대로 회수한 것입니다(원문 표현).');
+    if (!equip.length && !equipTerms.length) html += '<div class="sd-none">충전·제조 설비 언급을 찾지 못했습니다.</div>';
+    else if (!equip.length) { /* 어휘 매칭만 있는 경우 — 위 목록으로 충분 */ }
     else {
+      html += '<div class="sd-sec">설비 유형 판정 <em>본문·이미지 대조</em></div>';
       const order = ['충전', '제조', '포장', '부대'];
       const byGrp = {};
       equip.forEach((e) => { (byGrp[e.grp] = byGrp[e.grp] || []).push(e); });
