@@ -179,6 +179,23 @@ async function handleNtsStatus(url, env) {
   return jsonRes({ error: lastStatus ? `국세청 상류 HTTP ${lastStatus}` : `국세청 호출 실패(${lastErr || '알수없음'})`, detail: (lastBody || lastErr || '').slice(0, 300) }, 502);
 }
 
+// ── DART(금융감독원 전자공시) — 무료 키(DART_API_KEY). 금융위 재무가 오래된 업체의 최신 공시 확보용.
+//    company: 기업개황 / list: 공시목록(감사·사업보고서) / finance: 정기보고서 재무제표
+const DART = {
+  dartCompany: 'https://opendart.fss.or.kr/api/company.json',
+  dartList:    'https://opendart.fss.or.kr/api/list.json',
+  dartFinance: 'https://opendart.fss.or.kr/api/fnlttSinglAcnt.json',
+};
+function handleDart(url, service, env) {
+  if (!env.DART_API_KEY) {
+    return jsonRes({ error: 'DART_API_KEY 미설정', detail: 'opendart.fss.or.kr에서 무료 발급 후 Vercel 환경변수에 추가하세요' }, 501);
+  }
+  const q = new URLSearchParams();
+  for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
+  q.set('crtfc_key', env.DART_API_KEY);
+  return relay(`${DART[service]}?${q}`, `DART(${service})`);
+}
+
 // 카카오 — 주소검색(좌표) / 길찾기(실측 거리·시간). 둘 다 REST 키 헤더 인증.
 function handleKakao(url, env, kind) {
   if (!env.KAKAO_REST_KEY) return jsonRes({ error: 'KAKAO_REST_KEY 미설정' }, 500);
@@ -270,6 +287,7 @@ export default async function handler(req) {
     if (service === 'fetchPage')       return handleFetchPage(url);
     if (service === 'ntsStatus')       return handleNtsStatus(url, env);
     if (service === 'siteExtract')     return handleSiteExtract(url, env);
+    if (DART[service])                 return handleDart(url, service, env);
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
     if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
     if (DATAGO[service])               return handleDataGo(url, service, env);

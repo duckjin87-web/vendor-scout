@@ -706,3 +706,25 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .kw-cat { font-size: 10.5px; font-weight: 800; color: var(--muted); margin: 9px 0 5px; }
 .kw-cat:first-of-type { margin-top: 2px; }
 .kw-cat b { font-weight: 700; color: var(--faint); margin-left: 3px; }
+
+/* 📑 DART 전자공시 */
+.dartbox { grid-column: 1 / -1; background: var(--panel); border: 1px solid var(--border); border-left: 4px solid #0f9d58; border-radius: 14px; padding: 15px 17px; box-shadow: var(--shadow); }
+.dartbox h4 { margin: 0 0 8px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dartbox h4 span { font-size: 11px; font-weight: 500; color: var(--faint); }
+.dart-none { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.dart-hi { font-size: 12.5px; line-height: 1.55; background: var(--gA-bg); color: var(--gA); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.dart-sec { font-size: 11.5px; font-weight: 800; color: var(--muted); margin: 12px 0 6px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.dart-sec:first-of-type { border-top: 0; padding-top: 0; }
+.dart-sec em { font-style: normal; font-weight: 500; color: var(--faint); font-size: 10.5px; margin-left: 5px; }
+.dart-fin { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.dart-fin > div { border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; background: var(--panel-2); }
+.dart-fin i { font-style: normal; display: block; font-size: 10.5px; color: var(--muted); margin-bottom: 3px; }
+.dart-fin b { font-size: 15px; font-weight: 800; color: var(--gA); }
+.dart-co { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px 14px; }
+.dart-co > div { display: flex; gap: 8px; font-size: 12.5px; }
+.dart-co i { font-style: normal; font-weight: 700; color: var(--muted); min-width: 48px; }
+.dart-list { list-style: none; margin: 0; padding: 0; }
+.dart-list li { display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12.5px; }
+.dart-list li:first-child { border-top: 0; }
+.dart-dt { color: var(--faint); font-variant-numeric: tabular-nums; flex: 0 0 84px; }
+.dart-warn { margin-top: 9px; font-size: 11.5px; color: var(--gC); }

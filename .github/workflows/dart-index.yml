@@ -1,0 +1,47 @@
+name: Build DART corp_code index
+
+# Open DART의 고유번호(corpCode.xml)를 받아 "상호 → corp_code" 인덱스를 32개 샤드로 만들어 커밋한다.
+# 프런트는 상호 해시로 샤드 1개만 지연 로드해 corp_code를 찾고, 프록시를 통해 DART 공시/재무를 조회한다.
+# 키는 이 워크플로우 안에만 존재하며(GitHub Secret: DART_API_KEY), 결과 JSON에는 키가 포함되지 않는다.
+# 키 발급: https://opendart.fss.or.kr (무료)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 19 1 * *'   # 매월 1일 04:00 KST — DART 고유번호는 자주 바뀌지 않음
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dart-index
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build index → data/dart
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: node src/build_dart_index.js
+
+      - name: Commit index
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data/dart)" ]; then
+            git add data/dart
+            git commit -m "dart: corp_code 인덱스 갱신 ($(date -u +%F))"
+            git push
+          else
+            echo "변경 없음 — 커밋 생략"
+          fi
