@@ -1181,6 +1181,21 @@ async function npsLookup(nm, bzno) {
   const sumAll = counts.reduce((a, b) => a + b, 0);
   let maxIdx = 0; counts.forEach((c, i) => { if (c > counts[maxIdx]) maxIdx = i; });
 
+  // ★ 그동안 버리던 월 갱신 지표 회수 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 핵심 근거.
+  //   신규취득/상실 = 인력 증감(채용·감원), 당월고지금액 = 인건비 규모 추정 재료.
+  const numOf = (d, ...keys) => { for (const k of keys) { const v = d && d[k]; if (v != null && v !== '') { const n = Number(String(v).replace(/,/g, '')); if (isFinite(n)) return n; } } return 0; };
+  const pick = byBzno ? details : [details[maxIdx] || details[0]];   // 상호조회는 대표 사업장만(타사 혼입 방지)
+  let newCnt = 0, lostCnt = 0, noticeAmt = 0;
+  pick.forEach((d) => {
+    if (!d) return;
+    newCnt += numOf(d, 'nwAcqzrCnt', 'newAcqzrCnt', 'acqzrCnt');
+    lostCnt += numOf(d, 'lssJnngpCnt', 'lossJnngpCnt', 'lssCnt');
+    noticeAmt += numOf(d, 'crrmmNtcAmt', 'currentMonthNoticeAmount', 'ntcAmt');
+  });
+  // 국민연금 보험료율 9%(근로자+사용자) → 고지금액 ÷ 0.09 ≈ 사업장 기준소득월액 합계.
+  // 기준소득월액에 상한·하한이 있어 고소득자는 과소 반영되므로 '하한 추정'으로만 사용.
+  const payrollEst = noticeAmt > 0 ? Math.round(noticeAmt / 0.09) : null;
+
   // 사업자번호 조회면 전 사업장이 동일 사업자 → 합산 안전. 상호명 조회는 타 계열사 혼입 위험 → 최대 사업장 1곳만.
   const total = byBzno ? (sumAll || null) : (counts[maxIdx] || null);
   const activeSites = counts.filter((c) => c > 0).length;
@@ -1191,6 +1206,7 @@ async function npsLookup(nm, bzno) {
     total,
     sites: byBzno ? activeSites : 1,
     byBzno,
+    newCnt, lostCnt, noticeAmt, payrollEst,          // 월 갱신 지표
   };
 }
 

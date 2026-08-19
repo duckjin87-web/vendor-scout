@@ -770,6 +770,29 @@ function assembleLiveReport(name, corp, res) {
         : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
+    // ★ 월 갱신 지표 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 가장 최신 근거
+    (() => {
+      const nw = npsData ? Number(npsData.newCnt || 0) : 0;
+      const ls = npsData ? Number(npsData.lostCnt || 0) : 0;
+      const has = npsData && (nw || ls);
+      const net = nw - ls;
+      const val = has ? `+${nw} / -${ls} (순 ${net >= 0 ? '+' : ''}${net}명)` : null;
+      return f('최근 인력 증감 (연금 취득·상실)', val, has ? 'B' : 'D', '국민연금 사업장 API',
+        has ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null,
+        has
+          ? `해당 월 신규취득 ${nw}명 · 상실 ${ls}명 — ${net > 0 ? '증원(채용 진행) 신호' : net < 0 ? '감소(이탈·감원) 신호 — 사유 확인 권장' : '변동 없음'}. 월 단위로 갱신되는 최신 지표`
+          : why('nps', '취득·상실 자료 없음'));
+    })(),
+    (() => {
+      const amt = npsData ? Number(npsData.payrollEst || 0) : 0;
+      const eok = amt > 0 ? (amt / 1e8) : 0;
+      const val = amt > 0 ? (eok >= 1 ? `월 약 ${eok.toFixed(1)}억 원 이상` : `월 약 ${Math.round(amt / 1e4).toLocaleString()}만 원 이상`) : null;
+      return f('추정 인건비 규모 (연금 고지액 기준)', val, amt > 0 ? 'C' : 'D', '국민연금 사업장 API',
+        amt > 0 ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null,
+        amt > 0
+          ? '★ 당월 연금 고지금액 ÷ 보험료율 9% = 기준소득월액 합계(하한 추정). 기준소득월액에 상한·하한이 있어 고소득자는 과소 반영되므로 실제 인건비는 이보다 큽니다. 재무가 오래된 업체의 현재 규모 가늠용'
+          : why('nps', '고지금액 자료 없음'));
+    })(),
     f('방문 이동거리',
       kkTravel ? travelText(kkTravel) : travelText(estimateTravel(fctAddr || corp?.addr || npsAddr)),
       kkNavi ? 'B' : 'C',
