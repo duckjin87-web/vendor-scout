@@ -252,7 +252,7 @@ function extractCapaSnippets(text) {
 // 확정 홈페이지에서 인증·생산능력 추출 (메인 + 관련 서브페이지 최대 2개)
 async function extractSiteInfo(baseUrl, mainHtml) {
   let html = mainHtml;
-  if (!html) { try { const p = await proxyOnlyGet('fetchPage', { url: baseUrl }); html = (p && p.text) || ''; } catch { html = ''; } }
+  if (!html) { const g = await fetchPageSmart(baseUrl); html = g.html; if (g.url) baseUrl = g.url; }
   if (!html) return null;
   const texts = [htmlToText(html)]; const pages = [baseUrl];
   const REL = /(인증|certif|품질|quality|생산|시설|facilit|공장|factory|설비|장비|회사\s*소개|about|company|연구|R&?D|사업|business)/i;
@@ -270,6 +270,37 @@ async function extractSiteInfo(baseUrl, mainHtml) {
   const capa = extractCapaSnippets(all);
   const oem = ['OEM', 'ODM', 'OGM', 'OBM'].filter((k) => new RegExp(`\\b${k}\\b`, 'i').test(all));
   return (certs.length || capa.length || oem.length) ? { certs, capa, oemOdm: oem, pages } : null;
+}
+
+// ── 페이지 가져오기(스킴·www 변형 폴백) ──
+// 국내 중소 제조사 홈페이지는 http 전용이거나 www 전용인 경우가 흔하다.
+// 한 형태만 시도하면(예: https + www제거) 멀쩡한 사이트도 전부 실패하므로 변형을 순차 시도한다.
+function urlVariants(u) {
+  const out = []; const seen = new Set();
+  const push = (s) => { if (s && !seen.has(s)) { seen.add(s); out.push(s); } };
+  let p;
+  try { p = new URL(/^https?:\/\//i.test(u) ? u : `https://${u}`); } catch { return [String(u)]; }
+  const bare = p.hostname.replace(/^www\./, '');
+  const rest = (p.pathname || '/') + (p.search || '');
+  push(p.href);                                   // 사용자가 준 원본 우선
+  push(`https://www.${bare}${rest}`);
+  push(`http://www.${bare}${rest}`);
+  push(`http://${bare}${rest}`);
+  return out.slice(0, 4);
+}
+// 변형을 시도해 '내용이 있는' 첫 응답을 채택. 실제 도달 주소도 함께 반환.
+async function fetchPageSmart(url) {
+  let lastErr = null, thin = null;
+  for (const u of urlVariants(url)) {
+    let p;
+    try { p = await proxyOnlyGet('fetchPage', { url: u }); }
+    catch (e) { lastErr = e && e.message ? e.message : String(e); continue; }
+    const html = String((p && p.text) || '');
+    if (html.replace(/\s/g, '').length > 200) return { html, url: (p && p.url) || u };
+    if (html && !thin) thin = { html, url: (p && p.url) || u }; // 빈약해도 최후 후보로 보관
+  }
+  if (thin) return thin;
+  return { html: '', url, err: lastErr || '응답 없음' };
 }
 
 // ── 홈페이지 심층분석: 키워드 휴리스틱(무료·API키 불필요) ──
@@ -350,9 +381,10 @@ function harvestFromHtml(html, baseUrl) {
   return { text, bodyLen: body.length, totalLen: text.length };
 }
 async function gatherSiteText(baseUrl, companyName) {
-  let html = '';
-  try { const p = await proxyOnlyGet('fetchPage', { url: baseUrl }); html = (p && p.text) || ''; } catch { html = ''; }
+  const got = await fetchPageSmart(baseUrl);
+  const html = got.html;
   if (!html) return null;
+  baseUrl = got.url || baseUrl;                 // 실제로 열린 주소 기준으로 링크 해석
   const first = harvestFromHtml(html, baseUrl);
   const texts = [first.text]; const pages = [baseUrl];
   const REL = /(인증|certif|품질|quality|생산|시설|facilit|공장|factory|설비|장비|equip|회사\s*소개|about|company|연구|R&?D|사업|business|수출|export|product|제품|브랜드|brand|오시는|contact)/i;
@@ -369,9 +401,12 @@ async function gatherSiteText(baseUrl, companyName) {
       if (targets.length >= 5) break;
     }
   }
+  const rawHtmls = [html];
   const subs = await Promise.all(targets.map((u) =>
     proxyOnlyGet('fetchPage', { url: u }).then((p) => ({ u, h: (p && p.text) || '' })).catch(() => null)));
-  subs.forEach((s) => { if (s && s.h) { const r = harvestFromHtml(s.h, s.u); if (r.text) { texts.push(r.text); pages.push(s.u); } } });
+  subs.forEach((s) => {
+    if (s && s.h) { const r = harvestFromHtml(s.h, s.u); if (r.text) { texts.push(r.text); pages.push(s.u); rawHtmls.push(s.h); } }
+  });
 
   let text = texts.join('\n');
   let webFallback = false;
@@ -384,7 +419,11 @@ async function gatherSiteText(baseUrl, companyName) {
       if (snips.trim()) { text += '\n' + snips; webFallback = true; }
     } catch { /* 검색 실패 무시 */ }
   }
-  return { text: text.slice(0, 500000), pages, webFallback, thin: first.bodyLen < 400 };
+  return {
+    text: text.slice(0, 500000), pages, webFallback, thin: first.bodyLen < 400,
+    html: rawHtmls.join('\n').slice(0, 600000), // 설비 추정용 원본(이미지 태그 분석)
+    resolvedUrl: baseUrl,
+  };
 }
 
 // ── 키워드 추출 — 사이트 유형과 무관하게 확보된 텍스트에서 빈도 기반 핵심어 도출 ──
@@ -443,6 +482,82 @@ const PROD_CATS = [
 ];
 const EXPORT_MKTS = ['미국', '중국', '일본', '베트남', '태국', '인도네시아', '말레이시아', '필리핀', '싱가포르', '대만', '홍콩', '러시아', '유럽', '독일', '프랑스', '영국', '캐나다', '호주', '인도', '중동', 'UAE', '사우디', '브라질', '멕시코'];
 const EQUIP_RE = /(충전\s*(기|라인)|튜브\s*충전|파우치\s*충전|제조\s*(기|탱크)|유화\s*(기|탱크)|호모\s*믹서|homogen|디스퍼|반응기|믹싱\s*탱크|포장\s*라인|카톤|라벨러|클린\s*룸|clean\s*room|자동화\s*라인|생산\s*라인\s*\d)/i;
+// ═══ 생산설비 추정 (OCR 대체) ═══
+// 이미지 안의 글자는 읽을 수 없으므로, 설비 사진의 파일명·alt·주변 문구를 설비 지식베이스와
+// 대조해 '어떤 설비로 보이는지'를 추정한다. 반드시 [추정]으로 표기하고 근거를 함께 남긴다.
+// 가마(제조·유화 탱크) 제조사 — 사용자가 지정한 업체를 우선 수록. 필요 시 이 배열만 늘리면 된다.
+const EQUIP_VENDORS = [
+  { name: '선진', re: /선진(?:기계|테크|엔지니어링|이엔지|테크놀로지)?/ },
+  { name: '우원', re: /우원(?:기계|테크|산업|이엔지)?/ },
+];
+// 설비 유형 — 본문 문구(text)와 이미지 단서(asset: 파일명/alt)를 각각 매칭
+const EQUIP_TYPES = [
+  { label: '제조·유화 가마(탱크)', text: /(가마|제조\s*탱크|유화\s*(기|탱크|가마)|진공\s*유화|emulsif|호모\s*믹서|homo\s*mixer)/i,
+    asset: /(가마|gama|kama|유화|emul|탱크|tank|호모|homo|믹서|mixer|반응기|reactor)/i },
+  { label: '충전기(필링)', text: /(충전\s*(기|라인)|튜브\s*충전|파우치\s*충전|로터리\s*충전|filling|filler)/i,
+    asset: /(충전|filling|filler|튜브|tube|파우치|pouch|노즐|nozzle)/i },
+  { label: '포장·라벨 설비', text: /(포장\s*(기|라인)|라벨(러|링)?|카톤|실링\s*기|packing|labeler|carton|sealing)/i,
+    asset: /(포장|packing|package|라벨|label|카톤|carton|실링|sealing)/i },
+  { label: '교반·분산기(아지·디스퍼)', text: /(아지\s*믹서|디스퍼|disper|agitator|교반기|패들\s*믹서)/i,
+    asset: /(아지|agi|디스퍼|disper|교반|stir|paddle)/i },
+  { label: '클린룸·공조', text: /(클린\s*룸|clean\s*room|무진실|공조\s*설비|헤파|HEPA)/i,
+    asset: /(클린룸|cleanroom|clean_room|무진|hepa|공조)/i },
+  { label: '시험·품질 설비', text: /(항온\s*(조|항습)|점도계|경도계|입도\s*분석|시험\s*실|실험실|분석\s*장비)/i,
+    asset: /(시험|실험|lab|검사|inspect|분석|analy|현미경|micro)/i },
+  { label: '보관·물류(창고)', text: /(자동\s*창고|물류\s*센터|원료\s*창고|보관\s*시설|팔레트)/i,
+    asset: /(창고|warehouse|물류|logis|보관|storage)/i },
+];
+// 이미지 태그에서 (파일명, alt) 쌍을 뽑아 설비 사진 후보로 사용
+function imageAssets(html) {
+  const out = []; const re = /<img\b[^>]*>/gi; let m;
+  while ((m = re.exec(html)) && out.length < 400) {
+    const tag = m[0];
+    const alt = ((tag.match(/\balt\s*=\s*["']([^"']*)["']/i) || [])[1] || '').trim();
+    let src = ((tag.match(/\b(?:src|data-src|data-original)\s*=\s*["']([^"']+)["']/i) || [])[1] || '');
+    if (!src && !alt) continue;
+    let file = src.split(/[?#]/)[0].split('/').pop() || '';
+    try { file = decodeURIComponent(file); } catch { /* 인코딩 아님 */ }
+    out.push({ file, alt, src });
+  }
+  return out;
+}
+// 설비 추정 — {label, confidence, basis, evidence}
+function inferEquipment(html, text) {
+  const assets = imageAssets(html || '');
+  const T = String(text || '');
+  const results = [];
+  for (const t of EQUIP_TYPES) {
+    const inText = t.text.test(T);
+    const hits = assets.filter((a) => t.asset.test(`${a.file} ${a.alt}`)).slice(0, 3);
+    if (!inText && !hits.length) continue;
+    // 본문에도 있고 사진 단서도 있으면 확실, 하나만 있으면 추정
+    const confidence = inText && hits.length ? 'high' : (inText ? 'mid' : 'low');
+    const ev = [];
+    if (inText) { const s = pickSentences(T, t.text, { cap: 1 }); if (s.length) ev.push(`본문: ${s[0].slice(0, 70)}`); else ev.push('본문에 관련 문구 있음'); }
+    hits.forEach((h) => ev.push(`이미지: ${(h.alt || h.file).slice(0, 50)}`));
+    results.push({ label: t.label, confidence, basis: inText && hits.length ? '본문+이미지' : (inText ? '본문' : '이미지 파일명/alt'), evidence: ev.slice(0, 3) });
+  }
+  // 가마 제조사 — 설비 문맥 주변에서만 인정(회사명 오탐 방지)
+  const vendorHits = [];
+  for (const v of EQUIP_VENDORS) {
+    const near = new RegExp(`${v.re.source}[^\\n]{0,30}(가마|탱크|유화|믹서|설비|기계)|(가마|탱크|유화|믹서|설비|기계)[^\\n]{0,30}${v.re.source}`, 'i');
+    const inText = near.test(T);
+    const inAsset = assets.some((a) => v.re.test(`${a.file} ${a.alt}`));
+    if (inText || inAsset) vendorHits.push({ name: v.name, where: inText ? '본문' : '이미지' });
+  }
+  // 용량 표기(3톤 가마, 500L 등) — 설비 규모 추정 근거
+  const capHits = [];
+  const capRe = /(\d[\d,.]*)\s*(톤|t\b|ton|L\b|리터|kg)\s*(?:짜리|규모|용량)?\s*(가마|탱크|유화|믹서|제조)?/gi;
+  let cm; const seenCap = new Set();
+  while ((cm = capRe.exec(T)) && capHits.length < 5) {
+    const whole = cm[0].trim();
+    if (!cm[3] && !/톤|ton|L|리터/i.test(cm[2])) continue;
+    if (seenCap.has(whole)) continue; seenCap.add(whole);
+    capHits.push(whole);
+  }
+  return { items: results, vendors: vendorHits, capacities: capHits, imageCount: assets.length };
+}
+
 async function siteDeepHeuristic(name, hpUrl) {
   let baseUrl = hpUrl;
   if (!baseUrl) { // 홈페이지 미확보 시 검색으로 확보
@@ -468,11 +583,16 @@ async function siteDeepHeuristic(name, hpUrl) {
   const addrM = T.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^\n,]{4,50}(?:로|길)\s?\d[^\n,]{0,20})/);
   const phoneM = T.match(/(0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4})/);
   const keywords = extractKeywords(T);
+  // 설비 추정 — 이미지 파일명/alt + 본문 문구를 설비 지식베이스와 대조(OCR 대체)
+  const inf = inferEquipment(g.html, T);
+  const equipment_inferred = (inf.items.length || inf.vendors.length || inf.capacities.length)
+    ? { items: inf.items, vendors: inf.vendors, capacities: inf.capacities, imageCount: inf.imageCount }
+    : null;
   const data = {
     company_name: name || null, business_type, product_categories, production_items,
     quality_certifications, production_sites, equipment, rnd_centers, export_markets,
     hq_address: addrM ? addrM[1].trim() : null, phone: phoneM ? phoneM[1] : null, notable,
-    keywords: keywords.length ? keywords : null,
+    keywords: keywords.length ? keywords : null, equipment_inferred,
   };
   const any = Object.entries(data).some(([k, v]) => k !== 'company_name' && v != null && (!Array.isArray(v) || v.length));
   return {
@@ -513,7 +633,8 @@ async function findHomepage(nm, corp) {
     try { host = new URL(it.link).hostname.replace(/^www\./, ''); } catch { continue; }
     if (HP_SKIP.test(host) || seen.has(host)) continue;
     seen.add(host);
-    cands.push({ url: `https://${host}`, host, title: String(it.title || '').replace(/<\/?b>/g, '') });
+    // url은 후보 '시작점'일 뿐 — fetchPageSmart가 https/http·www 변형을 시도해 실제 열리는 주소를 찾는다.
+    cands.push({ url: `https://${host}`, host, origLink: it.link, title: String(it.title || '').replace(/<\/?b>/g, '') });
     if (cands.length >= 4) break;
   }
   if (!cands.length) return { proposed: null, candidates: [] };
@@ -525,16 +646,19 @@ async function findHomepage(nm, corp) {
   const addrCores = hpAddrCores(corp && corp.addr);
 
   const scored = await Promise.all(cands.map(async (c) => {
-    let page;
-    try { page = await proxyOnlyGet('fetchPage', { url: c.url }); } catch { return { ...c, matches: [], score: 0 }; }
-    const rawHtml = String((page && page.text) || '');
+    // https/http · www 변형을 시도(국내 중소사 홈페이지는 http·www 전용이 흔함)
+    let got = await fetchPageSmart(c.url);
+    if (!got.html && c.origLink && c.origLink !== c.url) got = await fetchPageSmart(c.origLink);
+    const rawHtml = String(got.html || '');
+    if (!rawHtml) return { ...c, matches: [], score: 0 };
+    const url = got.url || c.url;                 // 실제 열린 주소로 갱신
     const text = rawHtml.replace(/\s/g, '');
     const m = [];
     if (nameCore && text.includes(nameCore)) m.push('상호');
     if (rep && text.includes(rep)) m.push('대표자');
     if (bz && (text.includes(bz) || (bzFmt && text.includes(bzFmt)))) m.push('사업자번호');
     if (addrCores.length && addrCores.some((a) => text.includes(a))) m.push('주소');
-    return { ...c, matches: m, score: m.length, html: rawHtml };
+    return { ...c, url, matches: m, score: m.length, html: rawHtml };
   }));
   scored.sort((a, b) => b.score - a.score);
   const proposed = scored[0] && scored[0].score >= 2 ? scored[0] : null; // 2개 이상 매칭 → 확정 제안
@@ -1296,6 +1420,8 @@ async function siteDeepAnalyze(name, hpUrl) {
 }
 const SITE_DEEP_FIELDS = [
   { key: 'keywords', label: '추출 키워드', kind: 'chips' },
+  // 설비 추정은 전용 UI로 그리지만, '결과 있음' 판정에 포함돼야 하므로 목록에 둔다
+  { key: 'equipment_inferred', label: '생산설비 추정', kind: 'skip' },
   { key: 'business_type', label: '사업 유형', kind: 'chips', hot: true },
   { key: 'quality_certifications', label: '품질·인증', kind: 'chips', hot: true },
   { key: 'product_categories', label: '제형 카테고리', kind: 'chips' },
@@ -1374,7 +1500,30 @@ function renderSiteDeepInto(box, state) {
           return `<span class="sd-kw${lv}">${esc(String(w))}</span>`;
         }).join('') + '</div></div>';
     }
-    const others = rows.filter(({ f }) => f.key !== 'keywords');
+    // 🏭 설비 추정 — 확정 정보가 아니므로 근거와 신뢰도를 함께 노출
+    const eqi = d.equipment_inferred;
+    if (eqi && (eqi.items || []).length + (eqi.vendors || []).length + (eqi.capacities || []).length) {
+      const CONF = { high: ['확실', 'ec-high'], mid: ['추정', 'ec-mid'], low: ['약한 추정', 'ec-low'] };
+      html += `<div class="sd-eqbox"><i>🏭 생산설비 추정 <em>이미지 파일명·alt + 본문 대조 (OCR 아님 · 방문 시 실물 확인)</em></i>`;
+      if ((eqi.vendors || []).length) {
+        html += `<div class="eq-vend">가마·설비 제조사 단서: ` +
+          eqi.vendors.map((v) => `<b>${esc(v.name)}</b><span>(${esc(v.where)})</span>`).join(' ') + `</div>`;
+      }
+      if ((eqi.capacities || []).length) {
+        html += `<div class="eq-cap">용량 표기: ` + eqi.capacities.map((c) => `<b>${esc(c)}</b>`).join(', ') + `</div>`;
+      }
+      if ((eqi.items || []).length) {
+        html += '<ul class="eq-list">' + eqi.items.map((it) => {
+          const [lbl, cls] = CONF[it.confidence] || CONF.low;
+          return `<li><span class="eq-conf ${cls}">${lbl}</span>` +
+            `<span class="eq-name">${esc(it.label)}</span>` +
+            `<span class="eq-basis">${esc(it.basis)}</span>` +
+            `<div class="eq-ev">${(it.evidence || []).map((e) => esc(e)).join(' · ')}</div></li>`;
+        }).join('') + '</ul>';
+      }
+      html += `<div class="eq-foot">이미지 ${eqi.imageCount || 0}장 분석 — 사진 속 글자는 읽지 못하며 파일명·alt·본문 문구 기반 추정입니다.</div></div>`;
+    }
+    const others = rows.filter(({ f }) => f.key !== 'keywords' && f.key !== 'equipment_inferred');
     if (others.length) {
       html += '<div class="sd-grid">' + others.map(({ f }) =>
         `<div class="sd-row${f.hot ? ' hot' : ''}"><i>${esc(f.label)}</i><div class="sd-v">${siteDeepCell(d[f.key], f.kind, f.hot)}</div></div>`).join('') + '</div>';

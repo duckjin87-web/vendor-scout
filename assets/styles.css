@@ -638,3 +638,22 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   font-size: 12.5px; font-weight: 700; padding: 9px 16px; white-space: nowrap;
 }
 .sd-go:hover { filter: brightness(1.07); }
+
+/* 🏭 생산설비 추정 (이미지 파일명·alt 기반 · OCR 아님) */
+.sd-eqbox { margin-top: 12px; border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px; background: var(--panel-2); }
+.sd-eqbox > i { font-style: normal; font-size: 11.5px; font-weight: 700; color: var(--text); display: block; margin-bottom: 8px; }
+.sd-eqbox > i em { font-style: normal; font-weight: 500; color: var(--faint); font-size: 10.5px; margin-left: 5px; }
+.eq-vend, .eq-cap { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.eq-vend b, .eq-cap b { color: var(--accent); font-weight: 700; }
+.eq-vend span { font-size: 10.5px; color: var(--faint); font-weight: 400; margin-left: 2px; }
+.eq-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.eq-list li { padding: 7px 0; border-top: 1px solid var(--border); display: grid; grid-template-columns: auto 1fr auto; gap: 4px 8px; align-items: baseline; }
+.eq-list li:first-child { border-top: 0; }
+.eq-conf { font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 999px; }
+.ec-high { background: var(--gA-bg); color: var(--gA); }
+.ec-mid { background: var(--gC-bg); color: var(--gC); }
+.ec-low { background: var(--gD-bg); color: var(--gD); }
+.eq-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.eq-basis { font-size: 10.5px; color: var(--faint); }
+.eq-ev { grid-column: 1 / -1; font-size: 11px; color: var(--muted); line-height: 1.45; }
+.eq-foot { margin-top: 8px; font-size: 10.5px; color: var(--faint); }
