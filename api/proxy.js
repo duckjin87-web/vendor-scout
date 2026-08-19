@@ -139,15 +139,13 @@ async function handleFetchPage(url) {
   return jsonRes({ status: up.status, url: up.url, text });
 }
 
-// 국세청 사업자상태 — odcloud POST(JSON body). data.go 키 그대로 사용.
-// odcloud는 간헐적으로 500 "EOF"를 반환 → 고정길이 바이트 전송 + 최대 3회 재시도.
-async function handleNtsStatus(url, env) {
+// 국세청 odcloud POST 공통 — 상태조회(status)·진위확인(validate)이 같은 서비스·같은 키를 쓴다.
+// odcloud는 간헐적으로 500 "EOF"/503을 반환 → 고정길이 바이트 전송 + 지수 백오프 재시도.
+async function odcloudPost(env, op, payload) {
   if (!env.DATA_GO_KR_API_KEY) return jsonRes({ error: 'DATA_GO_KR_API_KEY 미설정' }, 500);
-  const bno = (url.searchParams.get('b_no') || '').replace(/\D/g, '');
-  if (bno.length !== 10) return jsonRes({ error: '사업자번호 10자리 필요' }, 400);
   const q = new URLSearchParams({ serviceKey: env.DATA_GO_KR_API_KEY });
-  const target = `https://api.odcloud.kr/api/nts-businessman/v1/status?${q}`;
-  const bodyBytes = new TextEncoder().encode(JSON.stringify({ b_no: [bno] }));
+  const target = `https://api.odcloud.kr/api/nts-businessman/v1/${op}?${q}`;
+  const bodyBytes = new TextEncoder().encode(JSON.stringify(payload));
   let lastStatus = 0, lastBody = '', lastErr = '';
   // 최대 4회, 각 5초 + 지수 백오프(0.6→1.2→2.4s). 500(EOF)·503·네트워크오류·타임아웃 모두 재시도.
   // 지수 백오프로 회복 중인 상류(odcloud 간헐 503)를 더 잘 포착. 총예산 Edge 한도(~25초) 내.
@@ -177,6 +175,24 @@ async function handleNtsStatus(url, env) {
     break; // 4xx 등은 즉시 종료
   }
   return jsonRes({ error: lastStatus ? `국세청 상류 HTTP ${lastStatus}` : `국세청 호출 실패(${lastErr || '알수없음'})`, detail: (lastBody || lastErr || '').slice(0, 300) }, 502);
+}
+
+// 사업자 상태조회 — 계속사업자/휴업/폐업
+function handleNtsStatus(url, env) {
+  const bno = (url.searchParams.get('b_no') || '').replace(/\D/g, '');
+  if (bno.length !== 10) return jsonRes({ error: '사업자번호 10자리 필요' }, 400);
+  return odcloudPost(env, 'status', { b_no: [bno] });
+}
+
+// 사업자등록 진위확인 — 사업자번호 + 개업일 + 대표자명이 국세청 등록증과 일치하는지 검증.
+// 상태조회와 동일 서비스(국세청_사업자등록정보 진위확인 및 상태조회)라 추가 활용신청이 대개 불필요.
+function handleNtsValidate(url, env) {
+  const bno = (url.searchParams.get('b_no') || '').replace(/\D/g, '');
+  const startDt = (url.searchParams.get('start_dt') || '').replace(/\D/g, '').slice(0, 8);
+  const pNm = (url.searchParams.get('p_nm') || '').trim();
+  if (bno.length !== 10) return jsonRes({ error: '사업자번호 10자리 필요' }, 400);
+  if (startDt.length !== 8 || !pNm) return jsonRes({ error: '개업일(YYYYMMDD)·대표자명 필요' }, 400);
+  return odcloudPost(env, 'validate', { businesses: [{ b_no: bno, start_dt: startDt, p_nm: pNm }] });
 }
 
 // ── DART(금융감독원 전자공시) — 무료 키(DART_API_KEY). 금융위 재무가 오래된 업체의 최신 공시 확보용.
@@ -286,6 +302,7 @@ export default async function handler(req) {
     if (service === 'naverLocal')      return handleNaver(url, env, 'local');
     if (service === 'fetchPage')       return handleFetchPage(url);
     if (service === 'ntsStatus')       return handleNtsStatus(url, env);
+    if (service === 'ntsValidate')     return handleNtsValidate(url, env);
     if (service === 'siteExtract')     return handleSiteExtract(url, env);
     if (DART[service])                 return handleDart(url, service, env);
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');

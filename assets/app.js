@@ -1307,6 +1307,28 @@ async function financeLookup(crno) {
   return { body: { items: all }, _diag: diag }; // assembleLiveReport의 listOf가 읽는 형태 + 진단
 }
 
+// ── 국세청 사업자등록 진위확인 ──
+// 상태조회(휴·폐업)와 달리 "사업자번호 + 개업일 + 대표자명"이 등록증과 일치하는지 검증한다.
+// 금융위·DART가 가진 대표자·설립일이 국세청 원부와 맞는지 확인 = 실체 검증의 핵심 근거.
+async function ntsValidate(bzno, repNm, startDt) {
+  const b = String(bzno || '').replace(/\D/g, '');
+  const d = String(startDt || '').replace(/\D/g, '').slice(0, 8);
+  const p = String(repNm || '').trim();
+  if (b.length !== 10 || d.length !== 8 || !p) return null;      // 3요소 다 있어야 검증 가능
+  let res;
+  try { res = await proxyOnlyGet('ntsValidate', { b_no: b, start_dt: d, p_nm: p }); }
+  catch (e) { return { ok: false, err: e && e.message ? e.message : String(e) }; }
+  const it = res && Array.isArray(res.data) ? res.data[0] : null;
+  if (!it) return { ok: false, err: '응답 없음' };
+  // valid: '01' 일치 / '02' 확인 불가(불일치)
+  return {
+    ok: true, valid: it.valid === '01',
+    code: it.valid || null,
+    msg: (it.valid_msg || '').trim() || null,
+    checked: { bzno: b, rep: p, startDt: d },
+  };
+}
+
 // ── DART(전자공시) 조회 ──
 // 금융위 재무가 수년 전에서 멈춘 업체의 '최신 결산·감사의견·공시 원문'을 확보한다.
 // corp_code는 GitHub Action이 만든 샤드 인덱스(data/dart/NN.json)에서 상호로 찾는다.
@@ -1428,6 +1450,8 @@ async function finishLive(name, corp) {
     bizAgg: Promise.resolve(null),
     // DART 전자공시 — 금융위 재무가 오래된 업체의 최신 결산·공시 원문 확보(무료 키, 미설정 시 조용히 생략)
     dart: dartLookup(corp.corpNm || name),
+    // 국세청 진위확인 — 사업자번호·대표자·개업일 3요소 대조(상태조회와 동일 서비스)
+    ntsVal: ntsValidate(corp.bzno, corp.rep, corp.estbDt),
   };
   const keys = Object.keys(calls);
   const settled = await Promise.allSettled(keys.map((k) => calls[k]));

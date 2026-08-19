@@ -629,6 +629,19 @@ function assembleLiveReport(name, corp, res) {
       (fctAddr || mkAddr) ? today : null,
       fctAddr ? fctNote : (mkAddr ? '식약처 제조업 허가상 제조소 소재지 (산단공 공장등록 없음)' : fctNote)),
   ];
+  // 국세청 사업자등록 진위확인 — 사업자번호+대표자+개업일 3요소 대조.
+  //  일치(01)는 강한 실체 근거. 불일치(02)는 '가짜'가 아니라 '확인 불가'로만 해석해야 한다
+  //  (우리가 개업일 대신 법인 설립일을 넣기 때문에 정상 업체도 02가 나올 수 있음).
+  const nv = R.ntsVal && R.ntsVal.ok ? R.ntsVal.data : null;
+  if (nv && nv.ok) {
+    basic.push(f('사업자등록 진위확인', nv.valid ? '일치 (국세청 원부 확인)' : '확인 불가',
+      nv.valid ? 'A' : 'C', '국세청 진위확인 API', today,
+      nv.valid
+        ? '★ 사업자번호·대표자명·개업일 3요소가 국세청 등록 원부와 일치 — 실체 확인의 가장 강한 근거'
+        : `국세청 원부와 대조 실패${nv.msg ? ` (${nv.msg})` : ''} — 조회에 법인 설립일을 개업일 대신 사용하므로 ` +
+          '정상 업체도 불일치가 나올 수 있습니다. 사업자등록증의 개업일자로 재확인하세요(폐업 여부는 위 사업자 상태 참고)'));
+  }
+
   // 업종은 식약처 등록 사실 기준으로 정확히(집계 페이지 자유텍스트 오추출 방지). 연락처는 집계 참고.
   if (mk) basic.push(f('업종', '화장품 제조업', 'A', '식약처 화장품제조업 API', today, '식약처 화장품제조업 등록 기준'));
   if (agg && agg.tel) basic.push(f('대표 연락처', agg.tel, 'C', aggSrc, today, '외부 집계 사이트 참고(비공식) — 방문 전 확인'));
@@ -933,6 +946,16 @@ function assembleLiveReport(name, corp, res) {
       detail: oem_trace.length
         ? (() => { const c = {}; oem_trace.forEach((o) => { c[o.tag] = (c[o.tag] || 0) + 1; }); return Object.entries(c).map(([k, v]) => `${k} ${v}`).join(' · '); })()
         : '업체 언급 웹문서 없음' } : null,
+    // 국세청 진위확인 — 3요소 대조 결과(상태조회와 별개 항목)
+    (() => {
+      if (!R.ntsVal) return null;
+      if (!R.ntsVal.ok) return { key: 'ntsval', name: '국세청 진위확인', ok: false, warn: true, detail: briefErr(R.ntsVal.err) };
+      const v = R.ntsVal.data;
+      if (!v) return { key: 'ntsval', name: '국세청 진위확인', ok: false, warn: true, detail: '대조 3요소(사업자번호·대표자·개업일) 미확보' };
+      if (!v.ok) return { key: 'ntsval', name: '국세청 진위확인', ok: false, warn: true, detail: briefErr(v.err) };
+      return { key: 'ntsval', name: '국세청 진위확인', ok: v.valid, warn: !v.valid,
+        detail: v.valid ? '사업자번호·대표자·개업일 일치' : `확인 불가${v.msg ? ` (${v.msg})` : ''} — 개업일 대신 설립일 사용에 따른 불일치 가능` };
+    })(),
     // DART 전자공시 — 무료 키 필요. 미설정/미대상도 사유를 명확히 표시.
     (() => {
       const dt = R.dart;
