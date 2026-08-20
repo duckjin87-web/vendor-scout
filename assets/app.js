@@ -190,7 +190,7 @@ async function proxyOnlyGet(service, params) {
 
 // ── 홈페이지 추적 ──
 // 네이버 웹문서 검색으로 후보 사이트 추출 → 각 페이지에서 상호·대표자·사업자번호·주소 대조.
-// 2개 이상 매칭되면 '확정 제안'. 포털·블로그·쇼핑·구인 도메인은 후보에서 제외.
+// 근거 가중합 4점 이상이면 '확정 제안'. 포털·블로그·쇼핑·구인 도메인은 후보에서 제외.
 const HP_SKIP = /(^|\.)(naver|daum|kakao|tistory|blog|cafe|youtube|instagram|facebook|linkedin|jobkorea|saramin|wanted|incruit|catch|nicebizinfo|wikipedia|namu\.wiki|google|11st|coupang|gmarket|auction|ssg|smartstore|blogspot|medium|threads|x)\./i;
 function hpAddrCores(addr) {
   return String(addr || '').replace(/\s/g, '').match(/[가-힣]{2,}(읍|면|동|리|가|로|길)/g) || [];
@@ -736,9 +736,10 @@ function inferEquipment(html, text) {
 
 async function siteDeepHeuristic(name, hpUrl) {
   let baseUrl = hpUrl;
-  if (!baseUrl) { // 홈페이지 미확보 시 검색으로 확보
+  if (!baseUrl) { // 홈페이지 미확보 시 검색으로 확보 — 확정 실패면 최고점 후보라도 사용
     const hp = await findHomepage(name, {}).catch(() => null);
-    baseUrl = hp && hp.proposed ? hp.proposed.url : null;
+    const best = hp && Array.isArray(hp.candidates) ? hp.candidates.find((c) => (c.score || 0) >= 2) : null;
+    baseUrl = (hp && hp.proposed ? hp.proposed.url : (best ? best.url : null));
   }
   if (!baseUrl) return { data: null, source: 'heuristic', reason: '홈페이지 미확보 — 아래에 주소를 직접 입력하면 분석합니다' };
   const g = await gatherSiteText(baseUrl, name);
@@ -831,6 +832,54 @@ function mergeDeep(primary, secondary) {
   return out;
 }
 
+// ── 도메인 ↔ 상호 유사도 (로마자 표기 흔들림 흡수) ──
+// 국내 화장품사 도메인은 상호의 로마자 축약형인 경우가 많다(바이오코스텍 → biocostec).
+// 엄격한 로마자 변환으로는 매칭이 안 되므로(baio≠bio, koseu≠cos) '자음 골격'으로 비교한다.
+const HAN_CHO = ['g', 'kk', 'n', 'd', 'tt', 'r', 'm', 'b', 'pp', 's', 'ss', '', 'j', 'jj', 'ch', 'k', 't', 'p', 'h'];
+const HAN_JONG = ['', 'k', 'k', 'k', 'n', 'n', 'n', 't', 'l', 'k', 'm', 'l', 'l', 'l', 'p', 'l', 'm', 'p', 'p', 't', 't', 'ng', 't', 't', 'k', 't', 'p', 't'];
+function hangulToLatin(s) {
+  let out = '';
+  for (const ch of String(s || '')) {
+    const c = ch.charCodeAt(0);
+    if (c >= 0xac00 && c <= 0xd7a3) {
+      const i = c - 0xac00;
+      out += HAN_CHO[Math.floor(i / 588)] + 'a' + HAN_JONG[i % 28]; // 모음은 골격 비교에서 무시하므로 자리표시만
+    } else out += ch;
+  }
+  return out.toLowerCase();
+}
+// 자음만 남기고 표기 흔들림을 정규화: c/q→k, x→ks, ph/f→p, th→t, z→j, 중복 제거
+function consonantSkeleton(s) {
+  return String(s || '').toLowerCase()
+    .replace(/ph|f/g, 'p').replace(/th/g, 't').replace(/ch/g, 'c')
+    .replace(/x/g, 'ks').replace(/[cq]/g, 'k').replace(/z/g, 'j')
+    .replace(/[^a-z]/g, '')
+    .replace(/[aeiouwy]/g, '')
+    .replace(/(.)\1+/g, '$1');
+}
+// 두 골격의 최장 공통 연속부분 길이
+function lcsLen(a, b) {
+  let best = 0;
+  for (let i = 0; i < a.length; i++) {
+    for (let j = 0; j < b.length; j++) {
+      let k = 0;
+      while (i + k < a.length && j + k < b.length && a[i + k] === b[j + k]) k++;
+      if (k > best) best = k;
+    }
+  }
+  return best;
+}
+function domainAffinity(korName, host) {
+  const dom = String(host || '').replace(/^www\./, '').split('.')[0];
+  const a = consonantSkeleton(hangulToLatin(stripCorp(korName)));
+  const b = consonantSkeleton(dom);
+  if (a.length < 3 || b.length < 3) return false;
+  if (a.includes(b) || b.includes(a)) return true;
+  // 상호 일부만 딴 도메인(한국콜마 → kolmar)도 인정: 공통부분 3자 이상 + 짧은 쪽의 절반 이상
+  const n = lcsLen(a, b);
+  return n >= 3 && n >= Math.min(a.length, b.length) * 0.5;
+}
+
 async function findHomepage(nm, corp) {
   if (!getProxy()) return null;
   // 공장등록부에 홈페이지가 있으면 그게 공식 확정 — 웹검색보다 신뢰
@@ -863,23 +912,37 @@ async function findHomepage(nm, corp) {
   const bzFmt = bz.length === 10 ? `${bz.slice(0, 3)}-${bz.slice(3, 5)}-${bz.slice(5)}` : '';
   const addrCores = hpAddrCores(corp && corp.addr);
 
+  // 근거별 가중치 — 사업자번호가 가장 확실하고, 도메인·제목은 페이지 본문을 못 읽어도 얻을 수 있는 단서.
+  const W = { 사업자번호: 4, 상호: 3, 대표자: 3, 주소: 2, 도메인: 2, 제목: 2, 업종: 1 };
   const scored = await Promise.all(cands.map(async (c) => {
     // https/http · www 변형을 시도(국내 중소사 홈페이지는 http·www 전용이 흔함)
     let got = await fetchPageSmart(c.url);
-    if (!got.html && c.origLink && c.origLink !== c.url) got = await fetchPageSmart(c.origLink);
+    // 루트가 프레임셋/스플래시라 내용이 빈약하면 검색결과가 가리킨 실제 내용 페이지도 시도
+    if (c.origLink && c.origLink !== c.url) {
+      const thin = !got.html || htmlToText(got.html).replace(/\s/g, '').length < 200;
+      if (thin) { const deep = await fetchPageSmart(c.origLink); if (deep.html) got = deep; }
+    }
     const rawHtml = String(got.html || '');
-    if (!rawHtml) return { ...c, matches: [], score: 0 };
     const url = got.url || c.url;                 // 실제 열린 주소로 갱신
-    const text = rawHtml.replace(/\s/g, '');
+    // ★ 본문만 보지 않는다 — meta·임베드 JSON·이미지 alt까지 훑어야 SPA·이미지형 사이트에서도 잡힌다
+    const text = (rawHtml ? harvestFromHtml(rawHtml, url).text : '').replace(/\s/g, '');
+    const title = String(c.title || '').replace(/\s/g, '');
     const m = [];
     if (nameCore && text.includes(nameCore)) m.push('상호');
     if (rep && text.includes(rep)) m.push('대표자');
     if (bz && (text.includes(bz) || (bzFmt && text.includes(bzFmt)))) m.push('사업자번호');
     if (addrCores.length && addrCores.some((a) => text.includes(a))) m.push('주소');
-    return { ...c, url, matches: m, score: m.length, html: rawHtml };
+    // 페이지를 못 읽어도 판단할 수 있는 단서 두 가지
+    if (nameCore && title.includes(nameCore)) m.push('제목');
+    if (domainAffinity(nm, c.host)) m.push('도메인');
+    // 화장품 제조 문맥 — 동명 타업종 사이트를 걸러내는 보조 신호
+    if (/화장품|코스메틱|cosmetic|OEM|ODM|제조/i.test(text) || /화장품|코스메틱|cosmetic/i.test(title)) m.push('업종');
+    const score = m.reduce((s, k) => s + (W[k] || 1), 0);
+    return { ...c, url, matches: m, score, html: rawHtml };
   }));
   scored.sort((a, b) => b.score - a.score);
-  const proposed = scored[0] && scored[0].score >= 2 ? scored[0] : null; // 2개 이상 매칭 → 확정 제안
+  // 4점 이상 = 강한 근거 1개 + 보조, 또는 보조 근거 2~3개. (예: 제목+도메인+업종 = 5)
+  const proposed = scored[0] && scored[0].score >= 4 ? scored[0] : null;
   // 확정 사이트에서만 인증·생산능력 추출(오매칭 사이트 정보 방지). 이미 받은 HTML 재사용.
   if (proposed) { try { proposed.extract = await extractSiteInfo(proposed.url, proposed.html); } catch { /* 무시 */ } }
   scored.forEach((c) => { delete c.html; }); // 원문 HTML은 저장 용량 커서 제거
@@ -1884,7 +1947,7 @@ function renderHomepageInto(box, hp) {
     html += `<div class="hp-top">` +
       `<span class="hp-badge">확정 제안</span>` +
       `<a href="${esc(p.url)}" target="_blank" rel="noopener" class="hp-url">${esc(p.host)}</a>` +
-      `<div class="hp-ms">${p.matches.map(chip).join('')} <em>(${p.matches.length}개 일치)</em></div>` +
+      `<div class="hp-ms">${p.matches.map(chip).join('')} <em>(근거 ${p.matches.length}종 · 신뢰점수 ${p.score})</em></div>` +
       `</div>`;
     // 🏭 홈페이지 발췌 — 생산능력·인증(자동추출). 홈페이지 게재값이라 방문 시 원본 확인 필요.
     const ex = p.extract;
@@ -1898,12 +1961,15 @@ function renderHomepageInto(box, hp) {
       html += `<div class="hp-ext-none">홈페이지에서 인증·생산능력 문구를 추출하지 못함 (자바스크립트 렌더링 사이트이거나 미게재 — 사이트 직접 확인)</div>`;
     }
   } else {
-    html += `<div class="hp-none">2개 이상 일치하는 확정 사이트 없음 — 아래 후보 수동 확인</div>`;
+    const best = (hp.candidates || [])[0];
+    html += `<div class="hp-none">확정 기준(신뢰점수 4점) 미달 — 아래 후보를 직접 확인하거나, ` +
+      `심층분석의 <b>주소 직접 입력</b>을 쓰세요.` +
+      (best && best.score ? ` (최고 ${esc(best.host)} ${best.score}점)` : '') + `</div>`;
   }
   const others = (hp.candidates || []).filter((c) => !p || c.host !== p.host);
   if (others.length) {
     html += `<div class="hp-cands"><i>후보</i>` + others.map((c) =>
-      `<a href="${esc(c.url)}" target="_blank" rel="noopener" class="hp-cand">${esc(c.host)}${c.matches.length ? ` <b>${c.matches.join('·')}</b>` : ''}</a>`).join('') + `</div>`;
+      `<a href="${esc(c.url)}" target="_blank" rel="noopener" class="hp-cand">${esc(c.host)}${c.matches.length ? ` <b>${c.matches.join('·')}</b>` : ''}${c.score ? ` <em>${c.score}점</em>` : ''}</a>`).join('') + `</div>`;
   }
   box.innerHTML = html;
 }
@@ -2451,7 +2517,12 @@ function render(report, opts = {}) {
     const runDeep = (url) => {
       report._siteDeep = { loading: true };
       paintDeep(report._siteDeep);
-      const hpUrl = url || (report._homepage && report._homepage.proposed ? report._homepage.proposed.url : '');
+      // 확정 사이트 우선. 확정 실패라도 최고점 후보(2점 이상)가 있으면 그걸로라도 분석한다
+      // — "홈페이지 미확보"로 아무것도 못 보여주는 것보다 낫고, 출처는 화면에 그대로 표시된다.
+      const hp = report._homepage;
+      const best = hp && !hp.proposed && Array.isArray(hp.candidates)
+        ? hp.candidates.find((c) => (c.score || 0) >= 2) : null;
+      const hpUrl = url || (hp && hp.proposed ? hp.proposed.url : (best ? best.url : ''));
       siteDeepAnalyze(report.meta.vendor_name, hpUrl)
         .then((state) => {
           report._siteDeep = state;
