@@ -224,31 +224,59 @@ async function handleDartCorpCode(url, env) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20000);
   let up;
-  try { up = await fetch(target, { signal: ctrl.signal }); }
-  catch (e) {
+  try {
+    // Edge에서 큰 바이너리는 통째로 버퍼링하면 런타임이 죽는다("internal error") → 스트림으로만 다룬다
+    up = await fetch(target, {
+      signal: ctrl.signal, redirect: 'follow',
+      headers: { Accept: '*/*', 'User-Agent': 'Mozilla/5.0 (vendor-scout)' },
+    });
+  } catch (e) {
     clearTimeout(timer);
-    return jsonRes({ error: 'DART 고유번호 파일 호출 실패', detail: (e && e.name === 'AbortError') ? '타임아웃(20초)' : String(e && e.message || e) }, 502);
+    const nm = e && e.name ? `${e.name}: ` : '';
+    return jsonRes({
+      error: 'DART 고유번호 파일 호출 실패',
+      detail: (e && e.name === 'AbortError') ? '타임아웃(20초)' : `${nm}${String(e && e.message || e)}`,
+      hint: 'Edge 런타임 제약일 수 있습니다 — GitHub Actions의 "Build DART corp_code index"를 1회 실행하면 인덱스로 동작합니다',
+    }, 502);
   }
   clearTimeout(timer);
   if (!up.ok) return jsonRes({ error: `DART 상류 HTTP ${up.status}`, detail: cleanUpstreamDetail(await up.text().catch(() => ''), up.status) }, 502);
+  if (!up.body) return jsonRes({ error: 'DART 응답 본문 없음' }, 502);
 
-  const buf = new Uint8Array(await up.arrayBuffer());
-  clearTimeout(timer);
-  // 키 오류 등이면 ZIP이 아니라 XML 오류문이 온다
-  if (buf.length < 30 || !(buf[0] === 0x50 && buf[1] === 0x4b)) {
-    const head = new TextDecoder().decode(buf.subarray(0, 300));
-    return jsonRes({ error: 'DART 응답이 ZIP이 아님(키 오류 가능)', detail: head.slice(0, 200) }, 502);
+  // ── ZIP 로컬 헤더만 앞에서 읽어 건너뛰고, 나머지는 스트림 그대로 inflate ──
+  const src = up.body.getReader();
+  let head = new Uint8Array(0);
+  const concat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; };
+  let headerLen = 30, method = 8;
+  try {
+    while (head.length < headerLen) {
+      const { done, value } = await src.read();
+      if (value) head = concat(head, value);
+      if (head.length >= 30 && headerLen === 30) {
+        if (!(head[0] === 0x50 && head[1] === 0x4b)) {   // 키 오류면 ZIP이 아니라 XML 오류문
+          try { await src.cancel(); } catch { /* 무시 */ }
+          return jsonRes({ error: 'DART 응답이 ZIP이 아님(키 오류 가능)', detail: new TextDecoder().decode(head.subarray(0, 200)) }, 502);
+        }
+        const dv = new DataView(head.buffer, head.byteOffset, head.byteLength);
+        method = dv.getUint16(8, true);
+        headerLen = 30 + dv.getUint16(26, true) + dv.getUint16(28, true);
+      }
+      if (done) break;
+    }
+  } catch (e) {
+    return jsonRes({ error: 'DART ZIP 헤더 읽기 실패', detail: String(e && e.message || e) }, 502);
   }
-  // ZIP 로컬 헤더를 지나 압축 본문 위치 계산
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  const method = dv.getUint16(8, true);
-  const nameLen = dv.getUint16(26, true);
-  const extraLen = dv.getUint16(28, true);
-  const start = 30 + nameLen + extraLen;
-  const body = buf.subarray(start);
-
-  // deflate 스트림을 흘려보내며 <list> 블록 단위로 검사 → 찾으면 즉시 종료(20MB를 다 들고 있지 않음)
-  let stream = new Blob([body]).stream();
+  const rest = head.subarray(Math.min(headerLen, head.length));   // 헤더 이후 = 압축 본문 시작
+  // 헤더 뒤 조각 + 남은 스트림을 이어붙여 하나의 압축 스트림으로
+  const zipBody = new ReadableStream({
+    start(c) { if (rest.length) c.enqueue(rest); },
+    async pull(c) {
+      const { done, value } = await src.read();
+      if (done) c.close(); else c.enqueue(value);
+    },
+    cancel() { try { src.cancel(); } catch { /* 무시 */ } },
+  });
+  let stream = zipBody;
   if (method !== 0) stream = stream.pipeThrough(new DecompressionStream('deflate-raw'));
   const reader = stream.getReader();
   const dec = new TextDecoder('utf-8');

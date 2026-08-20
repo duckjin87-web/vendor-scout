@@ -138,7 +138,8 @@ async function proxyErrMsg(res) {
   try {
     const j = JSON.parse(body);
     const err = typeof j.error === 'object' ? JSON.stringify(j.error) : (j.error || '');
-    const parts = [err, j.detail].filter(Boolean);
+    // hint는 '다음에 뭘 하면 되는지'라 오류만큼 중요 — 함께 노출
+    const parts = [err, j.detail, j.hint].filter(Boolean);
     if (parts.length) return parts.join(' · ');
   } catch { /* JSON 아님 */ }
   return body ? body.slice(0, 200) : `프록시 HTTP ${res.status}`;
