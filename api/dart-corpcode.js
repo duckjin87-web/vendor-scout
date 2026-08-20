@@ -10,6 +10,8 @@
 // 필요 환경변수: DART_API_KEY (opendart.fss.or.kr 무료 발급)
 
 import zlib from 'node:zlib';
+import { Readable, Transform } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 
 // 상호 정규화 — 법인 접두/접미어·공백·괄호 제거. 프런트(app.js dartNormName)와 동일해야 한다.
 function normName(s) {
@@ -19,21 +21,23 @@ function normName(s) {
     .toLowerCase();
 }
 
-// ZIP(단일 엔트리)에서 첫 파일의 압축 데이터를 꺼내 inflateRaw — 외부 의존성 없이 처리
-function unzipSingle(buf) {
-  if (buf.length < 30 || buf.readUInt32LE(0) !== 0x04034b50) throw new Error('ZIP 시그니처 아님');
-  const method = buf.readUInt16LE(8);
-  const nameLen = buf.readUInt16LE(26);
-  const extraLen = buf.readUInt16LE(28);
-  const start = 30 + nameLen + extraLen;
-  let compSize = buf.readUInt32LE(18);
-  // 스트리밍 저장(크기 0)이면 중앙 디렉터리 시작 전까지를 압축 데이터로 본다
-  if (!compSize) {
-    const cd = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]), start);
-    compSize = (cd > start ? cd : buf.length) - start;
-  }
-  const body = buf.subarray(start, start + compSize);
-  return method === 0 ? body : zlib.inflateRawSync(body);
+// ZIP 로컬 헤더(가변 길이)만 앞에서 떼어내는 Transform — 뒤는 그대로 흘려보낸다.
+// 20MB를 통째로 메모리에 풀면 함수 실행시간을 초과(504)하므로 전 구간 스트리밍으로 처리한다.
+function zipHeaderStripper(onMethod) {
+  let head = Buffer.alloc(0), done = false;
+  return new Transform({
+    transform(chunk, _enc, cb) {
+      if (done) { cb(null, chunk); return; }
+      head = Buffer.concat([head, chunk]);
+      if (head.length < 30) { cb(); return; }
+      if (head.readUInt32LE(0) !== 0x04034b50) { cb(new Error('ZIP 시그니처 아님')); return; }
+      const headerLen = 30 + head.readUInt16LE(26) + head.readUInt16LE(28);
+      if (head.length < headerLen) { cb(); return; }
+      if (onMethod) onMethod(head.readUInt16LE(8));
+      done = true;
+      cb(null, head.subarray(headerLen));
+    },
+  });
 }
 
 export default async function handler(req, res) {
@@ -51,55 +55,80 @@ export default async function handler(req, res) {
   if (want.length < 2) { res.status(400).json({ error: '상호 2자 이상 필요' }); return; }
 
   const target = `https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=${encodeURIComponent(KEY)}`;
-  let buf;
+  const started = Date.now();
+  const BUDGET = 8500;                      // 함수 실행한도(10초) 안에서 안전 여유
+  let up;
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 25000);
-    const up = await fetch(target, {
+    const timer = setTimeout(() => ctrl.abort(), BUDGET);
+    up = await fetch(target, {
       signal: ctrl.signal, redirect: 'follow',
       headers: { Accept: '*/*', 'User-Agent': 'Mozilla/5.0 (vendor-scout)' },
     });
     clearTimeout(timer);
-    if (!up.ok) { res.status(502).json({ error: `DART 상류 HTTP ${up.status}` }); return; }
-    buf = Buffer.from(await up.arrayBuffer());
   } catch (e) {
     res.status(502).json({
       error: 'DART 고유번호 파일 호출 실패',
-      detail: (e && e.name === 'AbortError') ? '타임아웃(25초)' : String((e && e.message) || e),
+      detail: (e && e.name === 'AbortError') ? `타임아웃(${BUDGET / 1000}초)` : String((e && e.message) || e),
     });
     return;
   }
+  if (!up.ok) { res.status(502).json({ error: `DART 상류 HTTP ${up.status}` }); return; }
+  if (!up.body) { res.status(502).json({ error: 'DART 응답 본문 없음' }); return; }
 
-  // 키가 잘못되면 ZIP 대신 XML 오류문이 온다
-  if (buf.length < 30 || !(buf[0] === 0x50 && buf[1] === 0x4b)) {
-    res.status(502).json({
-      error: 'DART 응답이 ZIP이 아님(키 오류 가능)',
-      detail: buf.subarray(0, 200).toString('utf8'),
-    });
+  // ── 스트리밍 처리: 헤더 제거 → inflate → 청크 단위 스캔 → 찾으면 즉시 중단 ──
+  // 정규식으로 20MB를 훑으면 느리므로 indexOf 기반으로 <list> 블록만 잘라 본다.
+  const pick = (b, t) => {
+    const o = b.indexOf(`<${t}>`); if (o === -1) return '';
+    const c = b.indexOf(`</${t}>`, o); if (c === -1) return '';
+    return b.slice(o + t.length + 2, c).trim();
+  };
+  // 청크 경계에서 UTF-8 한글이 잘리면 상호가 깨져 매칭에 실패한다 → StringDecoder로 경계 처리
+  const decoder = new StringDecoder('utf8');
+  let hit = null, scanned = 0, carry = '', truncated = false;
+  try {
+    const inflated = Readable.fromWeb(up.body)
+      .pipe(zipHeaderStripper())
+      .pipe(zlib.createInflateRaw());
+    for await (const chunk of inflated) {
+      carry += decoder.write(chunk);
+      let idx;
+      while ((idx = carry.indexOf('</list>')) !== -1) {
+        const s = carry.lastIndexOf('<list>', idx);
+        if (s !== -1) {
+          scanned++;
+          const block = carry.slice(s + 6, idx);
+          if (normName(pick(block, 'corp_name')) === want) {
+            const stock = pick(block, 'stock_code');
+            const cand = { code: pick(block, 'corp_code'), corpName: pick(block, 'corp_name'), stock: stock || null };
+            if (stock) { hit = cand; break; }   // 상장사면 확정
+            if (!hit) hit = cand;                // 비상장이면 보관하고 상장 동명이 있는지 계속
+          }
+        }
+        carry = carry.slice(idx + 7);
+      }
+      if (hit && hit.stock) break;               // 상장사 확정 시에만 조기 종료
+      if (carry.length > 65536) carry = carry.slice(-4096);
+      if (Date.now() - started > BUDGET) { truncated = true; break; }
+    }
+    inflated.destroy();
+  } catch (e) {
+    res.status(502).json({ error: 'DART ZIP 해제/스캔 실패', detail: String((e && e.message) || e) });
     return;
-  }
-
-  let xml;
-  try { xml = unzipSingle(buf).toString('utf8'); }
-  catch (e) { res.status(502).json({ error: 'DART ZIP 해제 실패', detail: String((e && e.message) || e) }); return; }
-
-  // <list> 블록을 순회하며 정규화 상호가 일치하는 첫 건을 찾는다(상장사 우선)
-  const re = /<list>([\s\S]*?)<\/list>/g;
-  const pick = (b, t) => { const m = b.match(new RegExp(`<${t}>([\\s\\S]*?)</${t}>`)); return m ? m[1].trim() : ''; };
-  let m, hit = null, scanned = 0;
-  while ((m = re.exec(xml))) {
-    scanned++;
-    const b = m[1];
-    if (normName(pick(b, 'corp_name')) !== want) continue;
-    const stock = pick(b, 'stock_code');
-    const cand = { code: pick(b, 'corp_code'), corpName: pick(b, 'corp_name'), stock: stock || null };
-    if (stock) { hit = cand; break; }        // 상장사면 확정
-    if (!hit) hit = cand;                     // 비상장이면 첫 건 보관 후 계속(상장사 있으면 교체)
   }
 
   // 고유번호는 자주 바뀌지 않으므로 CDN에 길게 캐시 — 같은 상호 재조회는 즉시
-  res.setHeader('Cache-Control', 'public, s-maxage=604800, stale-while-revalidate=86400');
+  // 찾았을 때만 길게 캐시 — 시간초과로 못 찾은 결과를 일주일 캐시하면 계속 실패한다
+  res.setHeader('Cache-Control', hit
+    ? 'public, s-maxage=604800, stale-while-revalidate=86400'
+    : (truncated ? 'no-store' : 'public, s-maxage=86400'));
   res.status(200).json(hit
-    ? { found: true, ...hit, scannedCount: scanned }
-    : { found: false, reason: 'DART 공시대상 아님(고유번호 미등록) — 외부감사·상장 대상이 아닐 수 있음', scannedCount: scanned });
+    ? { found: true, ...hit, scannedCount: scanned, ms: Date.now() - started }
+    : {
+      found: false,
+      reason: truncated
+        ? `시간 내 전체 탐색 미완료(${scanned}건까지) — 다시 시도하거나 GitHub Actions의 "Build DART corp_code index"로 인덱스를 만들면 즉시 조회됩니다`
+        : 'DART 공시대상 아님(고유번호 미등록) — 외부감사·상장 대상이 아닐 수 있음',
+      scannedCount: scanned, ms: Date.now() - started,
+    });
 }

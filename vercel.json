@@ -52,7 +52,7 @@
   ],
   "functions": {
     "api/dart-corpcode.js": {
-      "maxDuration": 30
+      "maxDuration": 10
     }
   }
 }
