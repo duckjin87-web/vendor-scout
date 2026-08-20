@@ -202,6 +202,91 @@ const DART = {
   dartList:    'https://opendart.fss.or.kr/api/list.json',
   dartFinance: 'https://opendart.fss.or.kr/api/fnlttSinglAcnt.json',
 };
+// ── DART 고유번호(corp_code) 온디맨드 조회 ──
+// DART는 회사명으로 조회가 안 되고 corp_code가 필요한데, 그 변환표(corpCode.xml)는
+// 11만 건 ZIP(압축 1.5MB / 해제 20MB) 단일 파일이다. 사전 인덱스 없이도 쓸 수 있도록
+// 서버에서 받아 '스트리밍으로 훑으며' 일치 항목만 찾아 반환한다(찾으면 즉시 중단).
+// 응답은 CDN에 캐시시켜 같은 상호 재조회는 즉시 응답한다.
+function dartNorm(s) {
+  return String(s || '')
+    .replace(/\(주\)|\(유\)|\(재\)|\(사\)|㈜|주식회사|유한회사|유한책임회사/g, '')
+    .replace(/[\s()[\]{}.,·・\-_/]/g, '')
+    .toLowerCase();
+}
+async function handleDartCorpCode(url, env) {
+  if (!env.DART_API_KEY) {
+    return jsonRes({ error: 'DART_API_KEY 미설정', detail: 'opendart.fss.or.kr에서 무료 발급 후 Vercel 환경변수에 추가하세요' }, 501);
+  }
+  const want = dartNorm(url.searchParams.get('name') || '');
+  if (want.length < 2) return jsonRes({ error: '상호 2자 이상 필요' }, 400);
+
+  const target = `https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=${encodeURIComponent(env.DART_API_KEY)}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  let up;
+  try { up = await fetch(target, { signal: ctrl.signal }); }
+  catch (e) {
+    clearTimeout(timer);
+    return jsonRes({ error: 'DART 고유번호 파일 호출 실패', detail: (e && e.name === 'AbortError') ? '타임아웃(20초)' : String(e && e.message || e) }, 502);
+  }
+  clearTimeout(timer);
+  if (!up.ok) return jsonRes({ error: `DART 상류 HTTP ${up.status}`, detail: cleanUpstreamDetail(await up.text().catch(() => ''), up.status) }, 502);
+
+  const buf = new Uint8Array(await up.arrayBuffer());
+  clearTimeout(timer);
+  // 키 오류 등이면 ZIP이 아니라 XML 오류문이 온다
+  if (buf.length < 30 || !(buf[0] === 0x50 && buf[1] === 0x4b)) {
+    const head = new TextDecoder().decode(buf.subarray(0, 300));
+    return jsonRes({ error: 'DART 응답이 ZIP이 아님(키 오류 가능)', detail: head.slice(0, 200) }, 502);
+  }
+  // ZIP 로컬 헤더를 지나 압축 본문 위치 계산
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const method = dv.getUint16(8, true);
+  const nameLen = dv.getUint16(26, true);
+  const extraLen = dv.getUint16(28, true);
+  const start = 30 + nameLen + extraLen;
+  const body = buf.subarray(start);
+
+  // deflate 스트림을 흘려보내며 <list> 블록 단위로 검사 → 찾으면 즉시 종료(20MB를 다 들고 있지 않음)
+  let stream = new Blob([body]).stream();
+  if (method !== 0) stream = stream.pipeThrough(new DecompressionStream('deflate-raw'));
+  const reader = stream.getReader();
+  const dec = new TextDecoder('utf-8');
+  let carry = '', scanned = 0, hit = null;
+  const pick = (block, tag) => { const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)); return m ? m[1].trim() : ''; };
+  try {
+    while (!hit) {
+      const { done, value } = await reader.read();
+      if (value) { carry += dec.decode(value, { stream: true }); scanned += value.length; }
+      let idx;
+      while ((idx = carry.indexOf('</list>')) !== -1) {
+        const s = carry.lastIndexOf('<list>', idx);
+        if (s !== -1) {
+          const block = carry.slice(s + 6, idx);
+          if (dartNorm(pick(block, 'corp_name')) === want) {
+            hit = { code: pick(block, 'corp_code'), corpName: pick(block, 'corp_name'), stock: pick(block, 'stock_code') || null };
+            break;
+          }
+        }
+        carry = carry.slice(idx + 7);
+      }
+      if (carry.length > 65536) carry = carry.slice(-4096); // 블록 경계만 남기고 폐기
+      if (done) break;
+    }
+  } catch (e) {
+    return jsonRes({ error: 'DART 고유번호 해제 실패', detail: String(e && e.message || e) }, 502);
+  } finally { try { await reader.cancel(); } catch { /* 무시 */ } }
+
+  const payload = hit
+    ? { found: true, ...hit, scannedBytes: scanned }
+    : { found: false, reason: 'DART 공시대상 아님(고유번호 미등록) — 외부감사·상장 대상이 아닐 수 있음' };
+  // 같은 상호 재조회는 CDN 캐시로 즉시 응답(고유번호는 자주 바뀌지 않음)
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { ...JSON_HDR, 'Cache-Control': 'public, s-maxage=604800, stale-while-revalidate=86400' },
+  });
+}
+
 function handleDart(url, service, env) {
   if (!env.DART_API_KEY) {
     return jsonRes({ error: 'DART_API_KEY 미설정', detail: 'opendart.fss.or.kr에서 무료 발급 후 Vercel 환경변수에 추가하세요' }, 501);
@@ -304,6 +389,7 @@ export default async function handler(req) {
     if (service === 'ntsStatus')       return handleNtsStatus(url, env);
     if (service === 'ntsValidate')     return handleNtsValidate(url, env);
     if (service === 'siteExtract')     return handleSiteExtract(url, env);
+    if (service === 'dartCorpCode')     return handleDartCorpCode(url, env);
     if (DART[service])                 return handleDart(url, service, env);
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
     if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');

@@ -1444,18 +1444,27 @@ async function dartCorpCode(name) {
   const norm = dartNormName(name);
   if (norm.length < 2) return null;
   const sid = String(dartShardOf(norm)).padStart(2, '0');
+  // ① 사전 인덱스(GitHub Action 산출물)가 있으면 가장 빠름 — 없으면 조용히 ②로 넘어간다
   let shard = _dartShardCache.get(sid);
-  if (!shard) {
+  if (shard === undefined) {
     try {
       const r = await fetch(`data/dart/${sid}.json`, { cache: 'force-cache' });
-      if (!r.ok) return { err: '인덱스 미생성 — GitHub Actions의 "Build DART corp_code index" 실행 필요' };
-      shard = await r.json();
-      _dartShardCache.set(sid, shard);
-    } catch { return { err: '인덱스 로드 실패' }; }
+      shard = r.ok ? await r.json() : null;
+    } catch { shard = null; }
+    _dartShardCache.set(sid, shard);
   }
-  const hits = shard[norm];
-  if (!hits || !hits.length) return null;
-  return { code: hits[0].c, corpName: hits[0].n, stock: hits[0].s || null, dup: hits.length > 1 };
+  if (shard) {
+    const hits = shard[norm];
+    if (!hits || !hits.length) return null;              // 인덱스에 없으면 공시대상 아님
+    return { code: hits[0].c, corpName: hits[0].n, stock: hits[0].s || null, dup: hits.length > 1 };
+  }
+  // ② 인덱스가 없어도 동작 — 프록시가 DART 고유번호 파일을 스트리밍으로 훑어 1건만 반환.
+  //    응답은 CDN에 캐시돼 같은 상호 재조회는 즉시. (별도 셋업 없이 키만 있으면 됨)
+  try {
+    const r = await proxyOnlyGet('dartCorpCode', { name });
+    if (r && r.found) return { code: r.code, corpName: r.corpName, stock: r.stock || null, dup: false };
+    return null;
+  } catch (e) { return { err: e && e.message ? e.message : String(e) }; }
 }
 const RCEPT_URL = (no) => `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${encodeURIComponent(no)}`;
 async function dartLookup(name) {
