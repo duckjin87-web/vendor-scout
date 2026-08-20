@@ -12,6 +12,26 @@
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" }
       ]
+    },
+    {
+      "comment": "index.html은 항상 재검증 — 캐시되면 ?v= 캐시버스터가 갱신되지 않아 배포가 사용자에게 도달하지 않는다",
+      "source": "/",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/index.html",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    },
+    {
+      "comment": "assets는 ?v=로 버전이 바뀌므로 길게 캐시해도 안전",
+      "source": "/assets/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=604800" }
+      ]
     }
   ]
 }

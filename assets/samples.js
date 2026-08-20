@@ -632,14 +632,12 @@ function assembleLiveReport(name, corp, res) {
   // 국세청 사업자등록 진위확인 — 사업자번호+대표자+개업일 3요소 대조.
   //  일치(01)는 강한 실체 근거. 불일치(02)는 '가짜'가 아니라 '확인 불가'로만 해석해야 한다
   //  (우리가 개업일 대신 법인 설립일을 넣기 때문에 정상 업체도 02가 나올 수 있음).
+  //  ★ 일치할 때만 항목으로 올린다. 불일치(02)는 우리가 개업일 대신 설립일을 넣어서 생기는
+  //    구조적 한계라 '확인 불가' 행을 만들면 문제 있는 업체처럼 보인다 → 소스 상태에만 남긴다.
   const nv = R.ntsVal && R.ntsVal.ok ? R.ntsVal.data : null;
-  if (nv && nv.ok) {
-    basic.push(f('사업자등록 진위확인', nv.valid ? '일치 (국세청 원부 확인)' : '확인 불가',
-      nv.valid ? 'A' : 'C', '국세청 진위확인 API', today,
-      nv.valid
-        ? '★ 사업자번호·대표자명·개업일 3요소가 국세청 등록 원부와 일치 — 실체 확인의 가장 강한 근거'
-        : `국세청 원부와 대조 실패${nv.msg ? ` (${nv.msg})` : ''} — 조회에 법인 설립일을 개업일 대신 사용하므로 ` +
-          '정상 업체도 불일치가 나올 수 있습니다. 사업자등록증의 개업일자로 재확인하세요(폐업 여부는 위 사업자 상태 참고)'));
+  if (nv && nv.ok && nv.valid) {
+    basic.push(f('사업자등록 진위확인', '일치 (국세청 원부 확인)', 'A', '국세청 진위확인 API', today,
+      '★ 사업자번호·대표자명·개업일 3요소가 국세청 등록 원부와 일치 — 실체 확인의 가장 강한 근거'));
   }
 
   // 업종은 식약처 등록 사실 기준으로 정확히(집계 페이지 자유텍스트 오추출 방지). 연락처는 집계 참고.
@@ -953,8 +951,11 @@ function assembleLiveReport(name, corp, res) {
       const v = R.ntsVal.data;
       if (!v) return { key: 'ntsval', name: '국세청 진위확인', ok: false, warn: true, detail: '대조 3요소(사업자번호·대표자·개업일) 미확보' };
       if (!v.ok) return { key: 'ntsval', name: '국세청 진위확인', ok: false, warn: true, detail: briefErr(v.err) };
-      return { key: 'ntsval', name: '국세청 진위확인', ok: v.valid, warn: !v.valid,
-        detail: v.valid ? '사업자번호·대표자·개업일 일치' : `확인 불가${v.msg ? ` (${v.msg})` : ''} — 개업일 대신 설립일 사용에 따른 불일치 가능` };
+      // 불일치는 '경고'가 아니라 '대조 불가'로 표기 — 개업일을 못 구해 설립일로 대신한 구조적 한계
+      return { key: 'ntsval', name: '국세청 진위확인', ok: v.valid, warn: false,
+        detail: v.valid
+          ? '사업자번호·대표자·개업일 일치'
+          : '대조 불가 — 등록증상 개업일이 필요하나 법인 설립일로 조회(정상 업체도 불일치). 휴·폐업은 사업자상태 참고' };
     })(),
     // DART 전자공시 — 무료 키 필요. 미설정/미대상도 사유를 명확히 표시.
     (() => {

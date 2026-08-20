@@ -248,15 +248,30 @@ const CERT_PATTERNS = [
   { label: '수출유망중소기업·글로벌강소', grp: '기업인증', re: /수출유망중소기업|글로벌\s*강소기업|월드클래스/i },
 ];
 // 동일 도메인 링크 추출 (서브페이지 탐색용)
+// <a> 외에 프레임셋(<frame>/<iframe>)과 JS 내비게이션(location.href='...')까지 본다.
+// 구형 국내 사이트는 본문이 프레임 안에 있어 <a>만 보면 링크가 0개로 나온다.
 function extractLinks(html, baseUrl) {
   let origin = ''; try { origin = new URL(baseUrl).origin; } catch { return []; }
-  const out = []; const re = /<a\b[^>]*href\s*=\s*["']([^"'#\s]+)["'][^>]*>([\s\S]*?)<\/a>/gi; let m;
-  while ((m = re.exec(html)) && out.length < 80) {
-    let abs; try { abs = new URL(m[1], baseUrl).href; } catch { continue; }
-    if (!/^https?:/i.test(abs)) continue;
-    try { if (new URL(abs).origin !== origin) continue; } catch { continue; }
-    out.push({ href: abs, anchor: htmlToText(m[2]) });
-  }
+  const out = []; const seen = new Set();
+  const add = (href, anchor) => {
+    if (!href || out.length >= 80) return;
+    let abs; try { abs = new URL(href, baseUrl).href; } catch { return; }
+    if (!/^https?:/i.test(abs)) return;
+    try { if (new URL(abs).origin !== origin) return; } catch { return; }
+    const key = abs.replace(/#.*$/, '');
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ href: abs, anchor: anchor || '' });
+  };
+  let m;
+  const aRe = /<a\b[^>]*href\s*=\s*["']([^"'#\s]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  while ((m = aRe.exec(html))) add(m[1], htmlToText(m[2]));
+  // 프레임/아이프레임 — 실제 본문이 여기 있는 경우가 많아 앵커 텍스트가 없어도 반드시 포함
+  const fRe = /<(?:frame|iframe)\b[^>]*\bsrc\s*=\s*["']([^"'#\s]+)["']/gi;
+  while ((m = fRe.exec(html))) add(m[1], '프레임 본문');
+  // JS 이동 경로 — 메뉴가 스크립트로 구현된 사이트 대응
+  const jRe = /(?:location\.href|location\.replace|window\.open)\s*\(?\s*=?\s*["']([^"'#\s]+\.(?:html?|php|asp|jsp))["']/gi;
+  while ((m = jRe.exec(html))) add(m[1], '');
   return out;
 }
 // 생산능력 관련 문장 발췌 (키워드 + 숫자가 함께 있는 짧은 구절)
@@ -403,7 +418,7 @@ function harvestFromHtml(html, baseUrl) {
   const text = parts.filter(Boolean).join('\n');
   return { text, bodyLen: body.length, totalLen: text.length };
 }
-async function gatherSiteText(baseUrl, companyName) {
+async function gatherSiteText(baseUrl, companyName, seedUrls) {
   const got = await fetchPageSmart(baseUrl);
   const html = got.html;
   if (!html) return null;
@@ -411,19 +426,30 @@ async function gatherSiteText(baseUrl, companyName) {
   const first = harvestFromHtml(html, baseUrl);
   const texts = [first.text]; const pages = [baseUrl];
   const REL = /(인증|certif|품질|quality|생산|시설|facilit|공장|factory|설비|장비|equip|회사\s*소개|about|company|연구|R&?D|사업|business|수출|export|product|제품|브랜드|brand|오시는|contact)/i;
-  const seen = new Set([baseUrl.replace(/\/+$/, '')]); const targets = [];
+  const seen = new Set([baseUrl.replace(/\/+$/, '')]); let targets = [];
   for (const l of extractLinks(html, baseUrl)) {
     const key = l.href.replace(/\/+$/, ''); if (seen.has(key)) continue;
-    if (REL.test(l.anchor) || REL.test(l.href)) { targets.push(l.href); seen.add(key); }
+    // 프레임 본문은 주제어와 무관해도 반드시 포함(구형 프레임셋 사이트의 실제 내용)
+    if (l.anchor === '프레임 본문' || REL.test(l.anchor) || REL.test(l.href)) { targets.push(l.href); seen.add(key); }
     if (targets.length >= 5) break;
   }
-  // 본문이 빈약(SPA 껍데기)하면 흔한 회사소개 경로를 추측해 추가 시도
-  if (first.bodyLen < 400 && targets.length < 3) {
+  // ★ 검색결과가 알려준 실제 내용 페이지를 최우선으로 넣는다.
+  //   (예: 루트는 프레임셋인데 검색결과는 /about/intro.html 을 가리키는 경우 — 추측 경로보다 확실)
+  for (const sd of (seedUrls || [])) {
+    try {
+      const u = new URL(sd, baseUrl).href;
+      const key = u.replace(/\/+$/, '');
+      if (!seen.has(key)) { targets.unshift(u); seen.add(key); }
+    } catch { /* 무시 */ }
+  }
+  // 그래도 본문이 빈약하면 흔한 회사소개 경로를 추측해 추가 시도
+  if (first.bodyLen < 400 && targets.length < 4) {
     for (const p of ['/about', '/company', '/sub/company', '/company.html', '/about.html', '/introduce', '/kr/company']) {
       try { const u = new URL(p, baseUrl).href; if (!seen.has(u.replace(/\/+$/, ''))) { targets.push(u); seen.add(u.replace(/\/+$/, '')); } } catch { /* 무시 */ }
-      if (targets.length >= 5) break;
+      if (targets.length >= 6) break;
     }
   }
+  targets = targets.slice(0, 6);
   const rawHtmls = [html];
   const subs = await Promise.all(targets.map((u) =>
     proxyOnlyGet('fetchPage', { url: u }).then((p) => ({ u, h: (p && p.text) || '' })).catch(() => null)));
@@ -465,6 +491,8 @@ const KW_STOP = new Set((
   '기업정보 직원수 채용 년차 근무환경 복리후생 연봉 급여 신입 경력 채용정보 구인 지원자격 우대사항 마감일 모집 ' +
   '자동등록방지 보안절차 자바스크립트 브라우저 로딩 팝업 닫기 이메일 팩스 전화번호 대표번호 상호명 업태 종목 ' +
   '공장찾기 위세브 기업분석 재무정보 신용등급 매출액순위 공고 채용공고 ' +
+  // 집계사이트 요약표의 '항목명'들 — 회사 고유 정보가 아니라 표 라벨이라 키워드로서 무의미
+  '사원수 기업구분 자본금 억원 백만원 천원 주요사업 매출액 영업이익 당기순이익 총자산 총부채 설립일 대표자명 ' +
   // 자바스크립트 차단·로봇검증 안내문에 흔한 영단어(사이트 내용이 아님)
   'please prove human enable javascript browser verify checking security connection redirect ' +
   'All Rights Reserved Copyright the and for with our your this that from are was has have not you all can more ' +
@@ -734,15 +762,19 @@ function inferEquipment(html, text) {
   return { items: results, vendors: vendorHits, capacities: capHits, imageCount: assets.length };
 }
 
-async function siteDeepHeuristic(name, hpUrl) {
+async function siteDeepHeuristic(name, hpUrl, seeds) {
   let baseUrl = hpUrl;
+  const seedList = [...(seeds || [])];
   if (!baseUrl) { // 홈페이지 미확보 시 검색으로 확보 — 확정 실패면 최고점 후보라도 사용
     const hp = await findHomepage(name, {}).catch(() => null);
     const best = hp && Array.isArray(hp.candidates) ? hp.candidates.find((c) => (c.score || 0) >= 2) : null;
-    baseUrl = (hp && hp.proposed ? hp.proposed.url : (best ? best.url : null));
+    const pickC = (hp && hp.proposed) ? hp.proposed : best;
+    baseUrl = pickC ? pickC.url : null;
+    // 검색결과가 가리킨 실제 내용 페이지를 씨앗으로 함께 넘김
+    if (pickC && pickC.origLink) seedList.push(pickC.origLink);
   }
   if (!baseUrl) return { data: null, source: 'heuristic', reason: '홈페이지 미확보 — 아래에 주소를 직접 입력하면 분석합니다' };
-  const g = await gatherSiteText(baseUrl, name);
+  const g = await gatherSiteText(baseUrl, name, seedList);
   if (!g || !g.text) return { data: null, source: 'heuristic', reason: '페이지를 열 수 없음(주소 오류·접속 차단) — 다른 주소로 다시 시도해 보세요', base: baseUrl };
   const T = g.text;
   const arrOrNull = (a) => (a && a.length ? a : null);
@@ -1981,8 +2013,8 @@ async function siteDeepExtract(name, url) {
   return res && res.data ? res.data : null;
 }
 // 오케스트레이터: 휴리스틱(항상) + LLM(키 있을 때) 병합. LLM 값 우선, 공백은 휴리스틱으로 채움.
-async function siteDeepAnalyze(name, hpUrl) {
-  const heur = await siteDeepHeuristic(name, hpUrl).catch(() => null);
+async function siteDeepAnalyze(name, hpUrl, seeds) {
+  const heur = await siteDeepHeuristic(name, hpUrl, seeds).catch(() => null);
   let llm = null, llmErr = null;
   try { llm = await siteDeepExtract(name, hpUrl); } catch (e) { llmErr = e && e.message ? e.message : String(e); }
   const data = mergeDeep(llm, heur && heur.data ? heur.data : null);
@@ -2522,8 +2554,17 @@ function render(report, opts = {}) {
       const hp = report._homepage;
       const best = hp && !hp.proposed && Array.isArray(hp.candidates)
         ? hp.candidates.find((c) => (c.score || 0) >= 2) : null;
-      const hpUrl = url || (hp && hp.proposed ? hp.proposed.url : (best ? best.url : ''));
-      siteDeepAnalyze(report.meta.vendor_name, hpUrl)
+      const pickC = (hp && hp.proposed) ? hp.proposed : best;
+      const hpUrl = url || (pickC ? pickC.url : '');
+      // 검색결과가 가리킨 실제 내용 페이지(origLink)를 씨앗으로 — 루트가 프레임셋이어도 본문 확보
+      const seeds = [];
+      if (!url && pickC && pickC.origLink && pickC.origLink !== pickC.url) seeds.push(pickC.origLink);
+      if (hp && Array.isArray(hp.candidates)) {
+        hp.candidates.forEach((c) => {
+          if (c.origLink && pickC && c.host === pickC.host && !seeds.includes(c.origLink)) seeds.push(c.origLink);
+        });
+      }
+      siteDeepAnalyze(report.meta.vendor_name, hpUrl, seeds)
         .then((state) => {
           report._siteDeep = state;
           paintDeep(report._siteDeep);
