@@ -1459,12 +1459,18 @@ async function dartCorpCode(name) {
     if (!hits || !hits.length) return null;              // 인덱스에 없으면 공시대상 아님
     return { code: hits[0].c, corpName: hits[0].n, stock: hits[0].s || null, dup: hits.length > 1 };
   }
-  // ② 인덱스가 없어도 동작 — 프록시가 DART 고유번호 파일을 스트리밍으로 훑어 1건만 반환.
-  //    응답은 CDN에 캐시돼 같은 상호 재조회는 즉시. (별도 셋업 없이 키만 있으면 됨)
+  // ② 인덱스가 없어도 동작 — 전용 Node 런타임 함수(/api/dart-corpcode)가 고유번호를 찾아 1건만 반환.
+  //    메인 프록시는 Edge라 큰 ZIP을 못 받아('internal error') 이 조회만 Node로 분리했다.
+  //    응답은 CDN 캐시라 같은 상호 재조회는 즉시. (별도 셋업 없이 키만 있으면 됨)
+  const proxy = getProxy();
+  if (!proxy) return { err: '프록시 미설정' };
+  const endpoint = proxy.replace(/\/api\/proxy\/?$/, '/api/dart-corpcode');
   try {
-    const r = await proxyOnlyGet('dartCorpCode', { name });
-    if (r && r.found) return { code: r.code, corpName: r.corpName, stock: r.stock || null, dup: false };
-    return null;
+    const r = await fetchRetry(`${endpoint}?name=${encodeURIComponent(name)}`, { headers: { Accept: 'application/json' } });
+    if (!r.ok) return { err: await proxyErrMsg(r) };
+    const j = await r.json();
+    if (j && j.found) return { code: j.code, corpName: j.corpName, stock: j.stock || null, dup: false };
+    return null;                                   // 공시대상 아님
   } catch (e) { return { err: e && e.message ? e.message : String(e) }; }
 }
 const RCEPT_URL = (no) => `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${encodeURIComponent(no)}`;
