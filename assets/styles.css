@@ -712,6 +712,11 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .dartbox h4 { margin: 0 0 8px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .dartbox h4 span { font-size: 11px; font-weight: 500; color: var(--faint); }
 .dart-none { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.dart-scan { display: block; font-style: normal; font-size: 10.5px; color: var(--faint); margin-top: 4px; }
+.dart-cands { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; }
+.dart-cands > div { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--panel-2); }
+.dart-cands b { display: block; font-size: 12.5px; font-weight: 700; }
+.dart-cands i { font-style: normal; font-size: 10.5px; color: var(--faint); }
 .dart-hi { font-size: 12.5px; line-height: 1.55; background: var(--gA-bg); color: var(--gA); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
 .dart-sec { font-size: 11.5px; font-weight: 800; color: var(--muted); margin: 12px 0 6px; padding-top: 10px; border-top: 1px dashed var(--border); }
 .dart-sec:first-of-type { border-top: 0; padding-top: 0; }

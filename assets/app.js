@@ -1456,7 +1456,7 @@ async function dartCorpCode(name) {
   }
   if (shard) {
     const hits = shard[norm];
-    if (!hits || !hits.length) return null;              // 인덱스에 없으면 공시대상 아님
+    if (!hits || !hits.length) return { none: true, reason: 'DART 공시대상 아님(사전 인덱스에 고유번호 없음)', candidates: [], scanned: 0 };
     return { code: hits[0].c, corpName: hits[0].n, stock: hits[0].s || null, dup: hits.length > 1 };
   }
   // ② 인덱스가 없어도 동작 — 전용 Node 런타임 함수(/api/dart-corpcode)가 고유번호를 찾아 1건만 반환.
@@ -1467,18 +1467,38 @@ async function dartCorpCode(name) {
   const endpoint = proxy.replace(/\/api\/proxy\/?$/, '/api/dart-corpcode');
   try {
     const r = await fetchRetry(`${endpoint}?name=${encodeURIComponent(name)}`, { headers: { Accept: 'application/json' } });
-    if (!r.ok) return { err: await proxyErrMsg(r) };
-    const j = await r.json();
+    // 서버가 보낸 진단(dartStatus·detail)을 그대로 살려 보여준다 — 원인을 숨기면 모든 실패가
+    // "공시대상 아님"으로 뭉개져 키 미승인 같은 설정 문제를 영영 발견할 수 없다.
+    // 본문은 한 번만 읽는다 — 이미 소비한 응답을 proxyErrMsg가 다시 읽으면 내용을 잃는다.
+    const body = await r.text().catch(() => '');
+    let j = null;
+    try { j = JSON.parse(body); } catch { /* 본문이 JSON이 아닐 수 있다 */ }
+    if (!r.ok) {
+      if (j && j.error) {
+        const code = j.dartStatus ? ` (DART ${j.dartStatus})` : '';
+        return { err: `${j.error}${code}${j.detail ? ` · ${j.detail}` : ''}` };
+      }
+      return { err: body ? body.slice(0, 200) : `DART 조회 HTTP ${r.status}` };
+    }
     if (j && j.found) return { code: j.code, corpName: j.corpName, stock: j.stock || null, dup: false };
-    return null;                                   // 공시대상 아님
+    // 미발견 — 몇 건을 훑고 내린 결론인지, 유사 상호가 있는지까지 함께 전달한다
+    return { none: true, reason: (j && j.reason) || null, candidates: (j && j.candidates) || [], scanned: (j && j.scannedCount) || 0 };
   } catch (e) { return { err: e && e.message ? e.message : String(e) }; }
 }
 const RCEPT_URL = (no) => `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${encodeURIComponent(no)}`;
 async function dartLookup(name) {
   if (!getProxy()) return null;
   const found = await dartCorpCode(name);
-  if (!found) return { ok: false, reason: 'DART 공시대상 아님(고유번호 미등록) — 외부감사·상장 대상이 아닐 수 있음' };
+  if (!found) return { ok: false, reason: 'DART 조회를 수행하지 못했습니다' };
   if (found.err) return { ok: false, reason: found.err };
+  if (found.none) {
+    return {
+      ok: false,
+      reason: found.reason || 'DART 공시대상 아님(고유번호 미등록) — 외부감사·상장 대상이 아닐 수 있음',
+      scanned: found.scanned || 0,
+      candidates: Array.isArray(found.candidates) ? found.candidates : [],
+    };
+  }
 
   const yyyymmdd = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
   const end = new Date(); const bgn = new Date(); bgn.setFullYear(bgn.getFullYear() - 5);
@@ -1941,8 +1961,19 @@ function renderDart(d, financeYears) {
   if (!d) return null;
   const box = el('div', 'dartbox');
   if (!d.ok) {
-    box.innerHTML = `<h4>📑 DART 전자공시 <span>금융감독원 전자공시시스템</span></h4>` +
-      `<div class="dart-none">${esc(d.reason || '조회 불가')}</div>`;
+    // 몇 건을 훑고 내린 결론인지 밝힌다 — 0건이면 '공시대상 아님'이 아니라 조회 실패다.
+    const scanned = Number(d.scanned) || 0;
+    const cands = Array.isArray(d.candidates) ? d.candidates : [];
+    let h = `<h4>📑 DART 전자공시 <span>금융감독원 전자공시시스템</span></h4>` +
+      `<div class="dart-none">${esc(d.reason || '조회 불가')}` +
+      (scanned ? `<i class="dart-scan">전체 ${scanned.toLocaleString()}건 대조 완료</i>` : '') +
+      `</div>`;
+    if (cands.length) {
+      h += `<div class="dart-sec">유사 상호 <em>표기 차이·계열사 여부 확인</em></div><div class="dart-cands">` +
+        cands.map((x) => `<div><b>${esc(x.corpName)}</b><i>${esc(x.code)}${x.stock ? ` · 상장 ${esc(x.stock)}` : ' · 비상장'}</i></div>`).join('') +
+        `</div>`;
+    }
+    box.innerHTML = h;
     return box;
   }
   const eok = (v) => (v == null ? null : `${Math.round(v / 1e8).toLocaleString()}억 원`);
