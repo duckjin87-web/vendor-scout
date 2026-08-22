@@ -10,6 +10,23 @@ const el = (tag, cls, html) => {
 };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
+// Vercel 플랫폼 오류처럼 {code, message} 객체일 수도 있다. 어느 쪽이든 화면에
+// "[object Object]"가 찍히면 원인을 통째로 잃는다. 여기서 한 번에 막는다.
+function errText(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v !== 'object') return String(v);
+  // Vercel 플랫폼 오류는 {error:{code,message}} 형태로 한 겹 감싸서 온다 — 안으로 들어간다
+  if (v.error && typeof v.error === 'object' && !Array.isArray(v.error)) return errText(v.error);
+  const parts = [v.message, typeof v.error === 'string' ? v.error : null, typeof v.detail === 'string' ? v.detail : null]
+    .filter((x) => typeof x === 'string' && x);
+  if (v.code && !parts.length) parts.push(String(v.code));
+  else if (v.code) parts.unshift(`[${v.code}]`);
+  if (parts.length) return parts.join(' · ');
+  try { return JSON.stringify(v).slice(0, 300); } catch { return String(v); }
+}
+
 const GRADE_LABEL = { A: '공식 API', B: '공공DB 간접', C: '추정/프록시', D: '데이터 공백' };
 
 let currentReport = null;
@@ -137,9 +154,9 @@ async function proxyErrMsg(res) {
   const body = await res.text().catch(() => '');
   try {
     const j = JSON.parse(body);
-    const err = typeof j.error === 'object' ? JSON.stringify(j.error) : (j.error || '');
     // hint는 '다음에 뭘 하면 되는지'라 오류만큼 중요 — 함께 노출
-    const parts = [err, j.detail, j.hint].filter(Boolean);
+    // 값이 객체여도 errText가 읽을 수 있게 풀어준다(그냥 이으면 [object Object]가 된다)
+    const parts = [j.error, j.detail, j.hint].map(errText).filter(Boolean);
     if (parts.length) return parts.join(' · ');
   } catch { /* JSON 아님 */ }
   return body ? body.slice(0, 200) : `프록시 HTTP ${res.status}`;
@@ -1464,7 +1481,16 @@ async function dartCorpCode(name) {
   //    응답은 CDN 캐시라 같은 상호 재조회는 즉시. (별도 셋업 없이 키만 있으면 됨)
   const proxy = getProxy();
   if (!proxy) return { err: '프록시 미설정' };
-  const endpoint = proxy.replace(/\/api\/proxy\/?$/, '/api/dart-corpcode');
+  // 프록시 주소에서 전용 엔드포인트를 유도한다. 사용자가 넣은 값이 예상 형태가 아니면
+  // replace가 조용히 아무것도 안 바꿔 메인 프록시로 요청이 가버린다 — 그 경우를 잡아낸다.
+  let endpoint;
+  try {
+    const u = new URL(proxy, location.href);
+    u.search = ''; u.hash = '';
+    u.pathname = u.pathname.replace(/\/api\/proxy\/?$/, '/api/dart-corpcode');
+    if (!/\/api\/dart-corpcode$/.test(u.pathname)) u.pathname = '/api/dart-corpcode';
+    endpoint = u.toString();
+  } catch { return { err: `프록시 주소를 해석할 수 없습니다: ${proxy}` }; }
   try {
     const r = await fetchRetry(`${endpoint}?name=${encodeURIComponent(name)}`, { headers: { Accept: 'application/json' } });
     // 서버가 보낸 진단(dartStatus·detail)을 그대로 살려 보여준다 — 원인을 숨기면 모든 실패가
@@ -1474,16 +1500,19 @@ async function dartCorpCode(name) {
     let j = null;
     try { j = JSON.parse(body); } catch { /* 본문이 JSON이 아닐 수 있다 */ }
     if (!r.ok) {
-      if (j && j.error) {
+      // HTTP 상태를 반드시 함께 남긴다 — 404/500이면 이 함수가 배포되지 않았거나
+      // 기동 자체에 실패한 것이고, 502면 DART 상류 문제다. 둘은 대응이 완전히 다르다.
+      const at = `HTTP ${r.status}`;
+      if (j && (j.error || j.detail)) {
         const code = j.dartStatus ? ` (DART ${j.dartStatus})` : '';
-        return { err: `${j.error}${code}${j.detail ? ` · ${j.detail}` : ''}` };
+        return { err: `${errText(j.error)}${code}${j.detail ? ` · ${errText(j.detail)}` : ''} · ${at}` };
       }
-      return { err: body ? body.slice(0, 200) : `DART 조회 HTTP ${r.status}` };
+      return { err: `${body ? errText(j) || body.slice(0, 200) : '응답 본문 없음'} · ${at}` };
     }
     if (j && j.found) return { code: j.code, corpName: j.corpName, stock: j.stock || null, dup: false };
     // 미발견 — 몇 건을 훑고 내린 결론인지, 유사 상호가 있는지까지 함께 전달한다
     return { none: true, reason: (j && j.reason) || null, candidates: (j && j.candidates) || [], scanned: (j && j.scannedCount) || 0 };
-  } catch (e) { return { err: e && e.message ? e.message : String(e) }; }
+  } catch (e) { return { err: errText(e) || '알 수 없는 오류' }; }
 }
 const RCEPT_URL = (no) => `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${encodeURIComponent(no)}`;
 async function dartLookup(name) {
@@ -1965,7 +1994,7 @@ function renderDart(d, financeYears) {
     const scanned = Number(d.scanned) || 0;
     const cands = Array.isArray(d.candidates) ? d.candidates : [];
     let h = `<h4>📑 DART 전자공시 <span>금융감독원 전자공시시스템</span></h4>` +
-      `<div class="dart-none">${esc(d.reason || '조회 불가')}` +
+      `<div class="dart-none">${esc(errText(d.reason) || '조회 불가')}` +
       (scanned ? `<i class="dart-scan">전체 ${scanned.toLocaleString()}건 대조 완료</i>` : '') +
       `</div>`;
     if (cands.length) {
@@ -2822,6 +2851,15 @@ document.addEventListener('DOMContentLoaded', () => {
     lookup(q, bz);
   });
   renderRecent(); // 최근 검색 칩 초기 표시
+
+  // 실행 중인 스크립트 빌드를 화면에 남긴다 — 배포했는데 브라우저가 옛 캐시를 쓰는 경우를
+  // 눈으로 구분하지 못해 원인 추적이 여러 번 헛돌았다. 자기 <script src>에서 버전을 읽는다.
+  const stamp = $('#buildStamp');
+  if (stamp) {
+    const me = document.querySelector('script[src*="app.js"]');
+    const v = me ? (me.getAttribute('src').match(/[?&]v=(\d+)/) || [])[1] : null;
+    stamp.textContent = `build v${v || '?'}`;
+  }
 
   // 마지막 조회 리포트 복원 — 새로고침·탭 복귀·재방문 시 그대로 표시(새 업체 조회 시 교체)
   const last = loadLastReport();
