@@ -88,19 +88,6 @@ function crossVerify(ctx) {
     items.push({ label: '주소 정합성', status: 'na', detail: '대조할 주소 2건 미만 (일부 출처 미확보)' });
   }
 
-  // 3) 등기정보 정합성 — 금융위(기업기본정보) ↔ DART(전자공시 등록정보) 대조.
-  //    두 기관이 각각 보유한 대표자·설립일이 다르면 명의 변경·별개 법인 가능성 → 방문 확인 대상.
-  const { dartCeo, dartEstb, repHq, estbHq } = ctx;
-  if (dartCeo || dartEstb) {
-    const nm = (s) => String(s || '').replace(/\s/g, '');
-    const d8 = (s) => String(s || '').replace(/\D/g, '').slice(0, 8);
-    const diffs = [], sames = [];
-    if (dartCeo && repHq) (nm(dartCeo) === nm(repHq) ? sames : diffs).push(`대표자(금융위 ${repHq} / DART ${dartCeo})`);
-    if (dartEstb && estbHq && d8(dartEstb) && d8(estbHq)) (d8(dartEstb) === d8(estbHq) ? sames : diffs).push(`설립일(금융위 ${estbHq} / DART ${dartEstb})`);
-    if (diffs.length) items.push({ label: '등기정보 정합성', status: 'warn', detail: `${diffs.join(' · ')} — 상이. 동일 법인인지(대표 변경·동명 법인) 확인 필요` });
-    else if (sames.length) items.push({ label: '등기정보 정합성', status: 'match', detail: `금융위 ↔ DART 일치 — ${sames.map((s) => s.split('(')[0]).join(' · ')}` });
-  }
-
   const warnCount = items.filter((x) => x.status === 'warn').length;
   const naAll = items.every((x) => x.status === 'na');
   const level = naAll ? 'na' : (warnCount === 0 ? 'ok' : (warnCount >= 2 ? 'high' : 'mid'));
@@ -957,21 +944,6 @@ function assembleLiveReport(name, corp, res) {
           ? '사업자번호·대표자·개업일 일치'
           : '대조 불가 — 등록증상 개업일이 필요하나 법인 설립일로 조회(정상 업체도 불일치). 휴·폐업은 사업자상태 참고' };
     })(),
-    // DART 전자공시 — 무료 키 필요. 미설정/미대상도 사유를 명확히 표시.
-    (() => {
-      const dt = R.dart;
-      if (!dt) return null;
-      if (!dt.ok) return { key: 'dart', name: 'DART 전자공시', ok: false, warn: true, detail: briefErr(dt.err) };
-      const d = dt.data;
-      if (!d) return null;
-      if (!d.ok) return { key: 'dart', name: 'DART 전자공시', ok: false, warn: true, detail: d.reason || '조회 불가' };
-      const bits = [];
-      if (d.latestFy) bits.push(`최신 결산 ${d.latestFy}년`);
-      if (d.reports && d.reports.length) bits.push(`공시 ${d.reports.length}건`);
-      if (d.fin) bits.push('재무 확보');
-      if (d.stock) bits.push(`상장 ${d.stock}`);
-      return { key: 'dart', name: 'DART 전자공시', ok: true, warn: false, detail: bits.join(' · ') || `고유번호 ${d.corpCode}` };
-    })(),
     agg ? { name: `외부 집계 보강 (${agg.host})`, ok: true, warn: true, detail: `비공식 참고 — ${[agg.bzno ? '사업자번호' : null, agg.rep ? '대표자' : null, agg.opneDe ? '개업일' : null, agg.status ? '상태' : null].filter(Boolean).join('·') || '정보'} 추출` } : null,
   ].filter(Boolean);
 
@@ -981,12 +953,8 @@ function assembleLiveReport(name, corp, res) {
     risk_flags.push({ type: `${bStt}`, detail: `국세청 사업자상태가 '${bStt}' — 정상 영업 여부 확인 필요. 거래 전 반드시 재확인` });
   }
   // 교차검증 자동진단 — 인력(연금 vs 공장)·주소(본점 vs 연금 vs 공장) 대조
-  const dartData = R.dart && R.dart.ok && R.dart.data && R.dart.data.ok ? R.dart.data : null;
-  const dartCo = dartData && dartData.company ? dartData.company : null;
   const cross_diag = crossVerify({
     empNps: empVal, empFct: fctEmpl, addrHq: corp?.addr, addrNps: npsAddr, addrFct: fctAddr || mkAddr,
-    dartCeo: dartCo ? dartCo.ceo : null, dartEstb: dartCo ? dartCo.estb : null,
-    repHq: corp?.rep || null, estbHq: fmtDate(corp?.estbDt) || null,
   });
   cross_diag.items.forEach((c) => {
     if (c.status !== 'warn') return;
@@ -1019,8 +987,6 @@ function assembleLiveReport(name, corp, res) {
     },
     basic, capacity, finance, finance_history, finance_health, cross_diag, recalls, oem_trace, crosscheck, risk_flags, diff_from_prev: [],
     news, insights, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
-    // DART 전자공시 — 최신 결산·공시 원문(금융위 재무 공백 보완)
-    dart: R.dart && R.dart.ok ? R.dart.data : null,
   };
 }
 

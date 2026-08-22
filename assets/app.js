@@ -1422,7 +1422,7 @@ async function financeLookup(crno) {
 
 // ── 국세청 사업자등록 진위확인 ──
 // 상태조회(휴·폐업)와 달리 "사업자번호 + 개업일 + 대표자명"이 등록증과 일치하는지 검증한다.
-// 금융위·DART가 가진 대표자·설립일이 국세청 원부와 맞는지 확인 = 실체 검증의 핵심 근거.
+// 금융위 기업기본정보의 대표자·설립일이 국세청 원부와 맞는지 확인 = 실체 검증의 핵심 근거.
 async function ntsValidate(bzno, repNm, startDt) {
   const b = String(bzno || '').replace(/\D/g, '');
   const d = String(startDt || '').replace(/\D/g, '').slice(0, 8);
@@ -1439,157 +1439,6 @@ async function ntsValidate(bzno, repNm, startDt) {
     code: it.valid || null,
     msg: (it.valid_msg || '').trim() || null,
     checked: { bzno: b, rep: p, startDt: d },
-  };
-}
-
-// ── DART(전자공시) 조회 ──
-// 금융위 재무가 수년 전에서 멈춘 업체의 '최신 결산·감사의견·공시 원문'을 확보한다.
-// corp_code는 GitHub Action이 만든 샤드 인덱스(data/dart/NN.json)에서 상호로 찾는다.
-// 정규화·해시는 src/build_dart_index.js 와 반드시 동일해야 한다.
-function dartNormName(s) {
-  return String(s || '')
-    .replace(/\(주\)|\(유\)|\(재\)|\(사\)|㈜|주식회사|유한회사|유한책임회사/g, '')
-    .replace(/[\s()[\]{}.,·・\-_/]/g, '')
-    .toLowerCase();
-}
-function dartShardOf(norm) {
-  let h = 5381;
-  for (let i = 0; i < norm.length; i++) h = ((h << 5) + h + norm.charCodeAt(i)) >>> 0;
-  return h % 32;
-}
-const _dartShardCache = new Map();
-async function dartCorpCode(name) {
-  const norm = dartNormName(name);
-  if (norm.length < 2) return null;
-  const sid = String(dartShardOf(norm)).padStart(2, '0');
-  // ① 사전 인덱스(GitHub Action 산출물)가 있으면 가장 빠름 — 없으면 조용히 ②로 넘어간다
-  let shard = _dartShardCache.get(sid);
-  if (shard === undefined) {
-    try {
-      const r = await fetch(`data/dart/${sid}.json`, { cache: 'force-cache' });
-      shard = r.ok ? await r.json() : null;
-    } catch { shard = null; }
-    _dartShardCache.set(sid, shard);
-  }
-  if (shard) {
-    const hits = shard[norm];
-    if (!hits || !hits.length) return { none: true, reason: 'DART 공시대상 아님(사전 인덱스에 고유번호 없음)', candidates: [], scanned: 0 };
-    return { code: hits[0].c, corpName: hits[0].n, stock: hits[0].s || null, dup: hits.length > 1 };
-  }
-  // ② 인덱스가 없어도 동작 — 전용 Node 런타임 함수(/api/dart-corpcode)가 고유번호를 찾아 1건만 반환.
-  //    메인 프록시는 Edge라 큰 ZIP을 못 받아('internal error') 이 조회만 Node로 분리했다.
-  //    응답은 CDN 캐시라 같은 상호 재조회는 즉시. (별도 셋업 없이 키만 있으면 됨)
-  const proxy = getProxy();
-  if (!proxy) return { err: '프록시 미설정' };
-  // 프록시 주소에서 전용 엔드포인트를 유도한다. 사용자가 넣은 값이 예상 형태가 아니면
-  // replace가 조용히 아무것도 안 바꿔 메인 프록시로 요청이 가버린다 — 그 경우를 잡아낸다.
-  let endpoint;
-  try {
-    const u = new URL(proxy, location.href);
-    u.search = ''; u.hash = '';
-    u.pathname = u.pathname.replace(/\/api\/proxy\/?$/, '/api/dart-corpcode');
-    if (!/\/api\/dart-corpcode$/.test(u.pathname)) u.pathname = '/api/dart-corpcode';
-    endpoint = u.toString();
-  } catch { return { err: `프록시 주소를 해석할 수 없습니다: ${proxy}` }; }
-  try {
-    const r = await fetchRetry(`${endpoint}?name=${encodeURIComponent(name)}`, { headers: { Accept: 'application/json' } });
-    // 서버가 보낸 진단(dartStatus·detail)을 그대로 살려 보여준다 — 원인을 숨기면 모든 실패가
-    // "공시대상 아님"으로 뭉개져 키 미승인 같은 설정 문제를 영영 발견할 수 없다.
-    // 본문은 한 번만 읽는다 — 이미 소비한 응답을 proxyErrMsg가 다시 읽으면 내용을 잃는다.
-    const body = await r.text().catch(() => '');
-    let j = null;
-    try { j = JSON.parse(body); } catch { /* 본문이 JSON이 아닐 수 있다 */ }
-    if (!r.ok) {
-      // HTTP 상태를 반드시 함께 남긴다 — 404/500이면 이 함수가 배포되지 않았거나
-      // 기동 자체에 실패한 것이고, 502면 DART 상류 문제다. 둘은 대응이 완전히 다르다.
-      const at = `HTTP ${r.status}`;
-      if (j && (j.error || j.detail)) {
-        const code = j.dartStatus ? ` (DART ${j.dartStatus})` : '';
-        // hint는 '다음에 뭘 하면 되는지'라 오류만큼 중요하다 — 함께 보여준다
-        const tail = [j.detail, j.hint].map(errText).filter(Boolean).join(' · ');
-        return { err: `${errText(j.error)}${code}${tail ? ` · ${tail}` : ''} · ${at}` };
-      }
-      return { err: `${body ? errText(j) || body.slice(0, 200) : '응답 본문 없음'} · ${at}` };
-    }
-    if (j && j.found) return { code: j.code, corpName: j.corpName, stock: j.stock || null, dup: false };
-    // 미발견 — 몇 건을 훑고 내린 결론인지, 유사 상호가 있는지까지 함께 전달한다
-    return { none: true, reason: (j && j.reason) || null, candidates: (j && j.candidates) || [], scanned: (j && j.scannedCount) || 0 };
-  } catch (e) { return { err: errText(e) || '알 수 없는 오류' }; }
-}
-const RCEPT_URL = (no) => `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${encodeURIComponent(no)}`;
-async function dartLookup(name) {
-  if (!getProxy()) return null;
-  const found = await dartCorpCode(name);
-  if (!found) return { ok: false, reason: 'DART 조회를 수행하지 못했습니다' };
-  if (found.err) return { ok: false, reason: found.err };
-  if (found.none) {
-    return {
-      ok: false,
-      reason: found.reason || 'DART 공시대상 아님(고유번호 미등록) — 외부감사·상장 대상이 아닐 수 있음',
-      scanned: found.scanned || 0,
-      candidates: Array.isArray(found.candidates) ? found.candidates : [],
-    };
-  }
-
-  const yyyymmdd = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-  const end = new Date(); const bgn = new Date(); bgn.setFullYear(bgn.getFullYear() - 5);
-  const [comp, list] = await Promise.allSettled([
-    proxyOnlyGet('dartCompany', { corp_code: found.code }),
-    // 정기공시(A) = 사업/반기/분기보고서 + 감사보고서(F 계열은 별도) — 우선 정기공시로 최신 결산 파악
-    proxyOnlyGet('dartList', { corp_code: found.code, bgn_de: yyyymmdd(bgn), end_de: yyyymmdd(end), page_count: '100' }),
-  ]);
-  const company = comp.status === 'fulfilled' && comp.value && comp.value.status === '000' ? comp.value : null;
-  const raw = list.status === 'fulfilled' ? list.value : null;
-  const items = raw && raw.status === '000' && Array.isArray(raw.list) ? raw.list : [];
-  const err = (!company && !items.length)
-    ? (raw && raw.message ? `${raw.status} ${raw.message}` : (comp.status === 'rejected' ? String(comp.reason && comp.reason.message || comp.reason) : null))
-    : null;
-
-  // 재무 관련 보고서만 추려 최신순으로
-  const FIN_RE = /(사업보고서|반기보고서|분기보고서|감사보고서|연결감사보고서|결산)/;
-  const reports = items
-    .filter((it) => FIN_RE.test(String(it.report_nm || '')))
-    .map((it) => ({
-      date: String(it.rcept_dt || '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3'),
-      name: String(it.report_nm || '').trim(),
-      url: it.rcept_no ? RCEPT_URL(it.rcept_no) : null,
-    }))
-    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-
-  // 보고서명에서 대상 회계연도 추출 (예: "사업보고서 (2025.12)")
-  const yearOfReport = (nm) => { const m = String(nm).match(/\((\d{4})\.(\d{2})\)/); return m ? Number(m[1]) : null; };
-  const latestFy = reports.reduce((mx, r) => Math.max(mx, yearOfReport(r.name) || 0), 0) || null;
-
-  // 최신 회계연도 재무(정기보고서 제출 법인만 제공 — 미제공이면 조용히 건너뜀)
-  let fin = null;
-  if (latestFy) {
-    try {
-      const d = await proxyOnlyGet('dartFinance', { corp_code: found.code, bsns_year: String(latestFy), reprt_code: '11011', fs_div: 'OFS' });
-      if (d && d.status === '000' && Array.isArray(d.list) && d.list.length) {
-        const num = (s) => { const n = Number(String(s == null ? '' : s).replace(/,/g, '')); return isFinite(n) ? n : null; };
-        const pick = (re) => { const it = d.list.find((x) => re.test(String(x.account_nm || '').replace(/\s/g, ''))); return it ? num(it.thstrm_amount) : null; };
-        fin = {
-          year: latestFy,
-          revenue: pick(/^매출액$|^수익\(매출액\)$|^영업수익$/),
-          operatingProfit: pick(/^영업이익/),
-          assets: pick(/^자산총계$/),
-          debt: pick(/^부채총계$/),
-          capital: pick(/^자본금$/),
-        };
-        if (fin.revenue == null && fin.assets == null) fin = null;
-      }
-    } catch { /* 정기보고서 미제출 법인 — 공시 이력만 사용 */ }
-  }
-
-  return {
-    ok: true,
-    corpCode: found.code, corpName: found.corpName, stock: found.stock, dup: found.dup,
-    company: company ? {
-      ceo: company.ceo_nm || null, estb: company.est_dt || null, addr: company.adres || null,
-      induty: company.induty_code || null, homepage: company.hm_url || null,
-      accMt: company.acc_mt || null, corpCls: company.corp_cls || null,
-    } : null,
-    reports: reports.slice(0, 8), latestFy, fin, err,
   };
 }
 
@@ -1610,8 +1459,6 @@ async function finishLive(name, corp) {
     oemTrace: proxyOnlyGet('naverWeb', { query: `${nm} 제조원`, display: '10' }),
     // 외부 집계(marketbz 등) 비공식 보강 — 사용자 요청으로 비활성화(공식 data.go.kr API 자료만 신뢰).
     bizAgg: Promise.resolve(null),
-    // DART 전자공시 — 금융위 재무가 오래된 업체의 최신 결산·공시 원문 확보(무료 키, 미설정 시 조용히 생략)
-    dart: dartLookup(corp.corpNm || name),
     // 국세청 진위확인 — 사업자번호·대표자·개업일 3요소 대조(상태조회와 동일 서비스)
     ntsVal: ntsValidate(corp.bzno, corp.rep, corp.estbDt),
   };
@@ -1983,65 +1830,6 @@ function renderCheckWeb(report) {
     });
     html += '</ul>';
   }
-  box.innerHTML = html;
-  return box;
-}
-
-// 📑 DART 전자공시 — 최신 결산·감사보고서 원문 링크(금융위 재무가 오래된 업체의 보완 근거)
-function renderDart(d, financeYears) {
-  if (!d) return null;
-  const box = el('div', 'dartbox');
-  if (!d.ok) {
-    // 몇 건을 훑고 내린 결론인지 밝힌다 — 0건이면 '공시대상 아님'이 아니라 조회 실패다.
-    const scanned = Number(d.scanned) || 0;
-    const cands = Array.isArray(d.candidates) ? d.candidates : [];
-    let h = `<h4>📑 DART 전자공시 <span>금융감독원 전자공시시스템</span></h4>` +
-      `<div class="dart-none">${esc(errText(d.reason) || '조회 불가')}` +
-      (scanned ? `<i class="dart-scan">전체 ${scanned.toLocaleString()}건 대조 완료</i>` : '') +
-      `</div>`;
-    if (cands.length) {
-      h += `<div class="dart-sec">유사 상호 <em>표기 차이·계열사 여부 확인</em></div><div class="dart-cands">` +
-        cands.map((x) => `<div><b>${esc(x.corpName)}</b><i>${esc(x.code)}${x.stock ? ` · 상장 ${esc(x.stock)}` : ' · 비상장'}</i></div>`).join('') +
-        `</div>`;
-    }
-    box.innerHTML = h;
-    return box;
-  }
-  const eok = (v) => (v == null ? null : `${Math.round(v / 1e8).toLocaleString()}억 원`);
-  const gap = d.latestFy && financeYears && financeYears.length ? d.latestFy - financeYears[financeYears.length - 1] : 0;
-  let html = `<h4>📑 DART 전자공시 <span>고유번호 ${esc(d.corpCode)}${d.stock ? ` · 상장 ${esc(d.stock)}` : ' · 비상장'}</span></h4>`;
-  if (gap > 0) {
-    html += `<div class="dart-hi">★ 금융위 API보다 <b>${gap}년 최신</b>인 공시가 DART에 있습니다 — 아래 원문에서 최근 실적을 확인하세요.</div>`;
-  }
-  // 공시 기반 최신 재무(정기보고서 제출 법인만 제공)
-  if (d.fin) {
-    const rows = [
-      ['매출액', eok(d.fin.revenue)], ['영업이익', eok(d.fin.operatingProfit)],
-      ['총자산', eok(d.fin.assets)], ['총부채', eok(d.fin.debt)], ['자본금', eok(d.fin.capital)],
-    ].filter(([, v]) => v);
-    if (rows.length) {
-      html += `<div class="dart-sec">${d.fin.year} 회계연도 재무 <em>DART 정기보고서</em></div><div class="dart-fin">` +
-        rows.map(([k, v]) => `<div><i>${esc(k)}</i><b>${esc(v)}</b></div>`).join('') + '</div>';
-    }
-  }
-  // 기업개황(공시 등록정보) — 등기 기준이라 교차검증에 유용
-  const c = d.company;
-  if (c && (c.ceo || c.estb || c.addr)) {
-    const fmt = (s) => String(s || '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3');
-    html += `<div class="dart-sec">기업개황 <em>DART 등록정보</em></div><div class="dart-co">` +
-      [c.ceo ? ['대표자', c.ceo] : null, c.estb ? ['설립일', fmt(c.estb)] : null,
-       c.accMt ? ['결산월', `${c.accMt}월`] : null, c.addr ? ['주소', c.addr] : null]
-        .filter(Boolean).map(([k, v]) => `<div><i>${esc(k)}</i><span>${esc(v)}</span></div>`).join('') + '</div>';
-  }
-  // 공시 원문 — 클릭하면 DART에서 재무제표 확인 가능
-  if (d.reports && d.reports.length) {
-    html += `<div class="dart-sec">최근 재무 관련 공시 <em>클릭 시 DART 원문</em></div><ul class="dart-list">` +
-      d.reports.map((r) => `<li><span class="dart-dt">${esc(r.date)}</span>` +
-        (r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.name)}</a>` : `<span>${esc(r.name)}</span>`) +
-        `</li>`).join('') + '</ul>';
-  }
-  if (d.dup) html += `<div class="dart-warn">⚠ 동일 상호 법인이 여럿 — 대표자·설립일로 동일 법인인지 확인하세요.</div>`;
-  if (d.err) html += `<div class="dart-warn">일부 조회 실패: ${esc(d.err)}</div>`;
   box.innerHTML = html;
   return box;
 }
@@ -2588,13 +2376,6 @@ function render(report, opts = {}) {
   blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic)));
   blocks.appendChild(block('생산역량 · 인원', '🏭', visible(report.capacity)));
   if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
-  // 📑 DART 공시 — 재무 바로 뒤(금융위 재무의 공백을 메우는 근거이므로 나란히 보이게)
-  if (!excl.has('dart')) {
-    const yrs = (report.finance_history || []).map((h) => h.year);
-    const db = renderDart(report.dart, yrs);
-    if (db) blocks.appendChild(db);
-  }
-
   // 🔎 홈페이지 추적 — 실데이터일 때만, 지연 로드(첫 렌더 이후 비동기). 결과는 report에 캐시.
   if (m.live) {
     const hpBox = el('div', 'hpbox');
@@ -2735,7 +2516,18 @@ function saveLastReport(report) {
   try { if (report && report.meta) _sls(LAST_KEY, JSON.stringify(report)); } catch { /* 용량초과 등 무시 */ }
 }
 function loadLastReport() {
-  try { const s = _ls(LAST_KEY); return s ? JSON.parse(s) : null; } catch { return null; }
+  try {
+    const s = _ls(LAST_KEY);
+    if (!s) return null;
+    const r = JSON.parse(s);
+    // DART 연동을 제거하기 전에 저장된 리포트에는 dart 항목이 남아 있다.
+    // 그대로 두면 출처 목록에 조회하지도 않는 소스가 유령처럼 표시되므로 걷어낸다.
+    if (r && r.meta && Array.isArray(r.meta.src_status)) {
+      r.meta.src_status = r.meta.src_status.filter((x) => x && x.key !== 'dart');
+    }
+    if (r) delete r.dart;
+    return r;
+  } catch { return null; }
 }
 function renderRecent() {
   const box = $('#recent');
