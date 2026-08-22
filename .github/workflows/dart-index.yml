@@ -29,6 +29,17 @@ jobs:
         with:
           node-version: '20'
 
+      # 시크릿이 없으면 원인을 알기 어려운 오류로 끝나므로 먼저 확인하고 안내한다.
+      # Vercel 환경변수와 GitHub Secret은 별개다 — 양쪽에 각각 등록해야 한다.
+      - name: Check secret
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: |
+          if [ -z "$DART_API_KEY" ]; then
+            echo "::error::GitHub Secret 'DART_API_KEY'가 없습니다. Settings → Secrets and variables → Actions → New repository secret 에 등록하세요 (Vercel 환경변수와는 별개입니다). 키 발급: https://opendart.fss.or.kr"
+            exit 1
+          fi
+
       - name: Build index → data/dart
         env:
           DART_API_KEY: ${{ secrets.DART_API_KEY }}

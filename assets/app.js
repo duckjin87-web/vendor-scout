@@ -1505,7 +1505,9 @@ async function dartCorpCode(name) {
       const at = `HTTP ${r.status}`;
       if (j && (j.error || j.detail)) {
         const code = j.dartStatus ? ` (DART ${j.dartStatus})` : '';
-        return { err: `${errText(j.error)}${code}${j.detail ? ` · ${errText(j.detail)}` : ''} · ${at}` };
+        // hint는 '다음에 뭘 하면 되는지'라 오류만큼 중요하다 — 함께 보여준다
+        const tail = [j.detail, j.hint].map(errText).filter(Boolean).join(' · ');
+        return { err: `${errText(j.error)}${code}${tail ? ` · ${tail}` : ''} · ${at}` };
       }
       return { err: `${body ? errText(j) || body.slice(0, 200) : '응답 본문 없음'} · ${at}` };
     }

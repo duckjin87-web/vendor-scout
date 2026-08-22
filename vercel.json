@@ -50,6 +50,7 @@
       ]
     }
   ],
+  "regions": ["icn1"],
   "functions": {
     "api/dart-corpcode.js": {
       "maxDuration": 10
