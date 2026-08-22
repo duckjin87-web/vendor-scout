@@ -709,3 +709,44 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .kw-cat b { font-weight: 700; color: var(--faint); margin-left: 3px; }
 
 .hpbox .hp-cand em { font-style: normal; color: var(--faint); font-size: 10.5px; }
+
+/* 🧑‍🏭 채용공고 추적 */
+.hirebox { grid-column: 1 / -1; background: var(--panel); border: 1px solid var(--border); border-left: 4px solid #7c5cff; border-radius: 14px; padding: 15px 17px; box-shadow: var(--shadow); }
+.hirebox h4 { margin: 0 0 10px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.hirebox h4 span { font-size: 11px; font-weight: 500; color: var(--faint); }
+.hire-none { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.hire-sec { font-size: 11.5px; font-weight: 800; color: var(--muted); margin: 13px 0 7px; padding-top: 11px; border-top: 1px dashed var(--border); }
+.hire-sec em { font-style: normal; font-weight: 500; color: var(--faint); font-size: 10.5px; margin-left: 5px; }
+.hire-sig { display: grid; gap: 8px; }
+.hire-sig .hs { border: 1px solid var(--border); border-radius: 11px; padding: 10px 12px; background: var(--panel-2); border-left: 3px solid var(--gD); }
+.hire-sig .hs.high { border-left-color: var(--risk); background: var(--risk-bg); }
+.hire-sig .hs.mid { border-left-color: var(--gC); background: var(--gC-bg); }
+.hire-sig .hs b { display: block; font-size: 13px; font-weight: 800; margin-bottom: 3px; }
+.hire-sig .hs i { font-style: normal; display: block; font-size: 12.5px; line-height: 1.5; }
+.hire-sig .hs em { font-style: normal; display: block; font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+.hire-bars { display: grid; gap: 5px; }
+.hbar { display: flex; align-items: center; gap: 9px; font-size: 12px; }
+.hbar i { font-style: normal; color: var(--muted); flex: 0 0 42px; font-variant-numeric: tabular-nums; }
+.hbar span { height: 9px; border-radius: 5px; background: #7c5cff; min-width: 4px; }
+.hbar b { font-weight: 700; font-variant-numeric: tabular-nums; }
+.hire-roles { display: flex; flex-wrap: wrap; gap: 6px; }
+.hrole { font-size: 12px; border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; background: var(--panel-2); }
+.hrole b { margin-left: 6px; font-weight: 800; color: #7c5cff; }
+.hire-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.hire-head > div { text-align: center; }
+.hire-head i { font-style: normal; display: block; font-size: 10.5px; color: var(--muted); }
+.hire-head b { display: block; font-size: 17px; font-weight: 800; }
+.hire-head u { text-decoration: none; display: block; font-size: 10px; color: var(--faint); }
+.hire-head .arrow { color: var(--faint); font-size: 15px; }
+.hire-head .delta { font-size: 14px; font-weight: 800; padding: 4px 10px; border-radius: 8px; background: var(--gD-bg); color: var(--gD); }
+.hire-head .delta.up { background: var(--gA-bg); color: var(--gA); }
+.hire-head .delta.down { background: var(--risk-bg); color: var(--risk); }
+.hire-int { font-size: 12.5px; line-height: 1.55; }
+.hire-int b { font-weight: 800; color: #7c5cff; }
+.hire-list { list-style: none; margin: 0; padding: 0; }
+.hire-list li { display: flex; gap: 9px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12.5px; }
+.hire-list li:first-child { border-top: 0; }
+.hire-list li.more { color: var(--faint); font-size: 11.5px; }
+.hdt { color: var(--faint); font-variant-numeric: tabular-nums; flex: 0 0 56px; font-size: 11.5px; }
+.hrl { margin-left: auto; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.hire-warn { margin-top: 11px; font-size: 11px; color: var(--faint); line-height: 1.55; }

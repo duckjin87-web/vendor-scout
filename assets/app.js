@@ -1442,6 +1442,214 @@ async function ntsValidate(bzno, repNm, startDt) {
   };
 }
 
+// ── 채용공고 추적 (다개년) ──
+// 왜 필요한가: 이 시스템의 대상은 대부분 뉴스도 홈페이지도 없는 영세 제조업체다. 그런 업체도
+//   사람은 뽑기 때문에, 채용공고는 거의 유일하게 꾸준히 남는 활동 흔적이다.
+// 무엇을 읽어내는가:
+//   · 같은 직종이 짧은 주기로 반복 → 충원이 안 되거나 이탈이 잦다(이직 신호)
+//   · 최근 공고가 급증하고 직종이 넓어짐 → 증설·라인 신설 가능성
+//   · 채용 사이트가 공개하는 사원수(기준일 포함)를 연금 가입자수와 대조 → 인력 증감 확인
+// 한계(반드시 함께 표시): 마감된 공고는 사이트에서 내려가 검색에 잡히지 않는다. 따라서
+//   '수집된 범위 안에서의' 빈도이며 과거일수록 적게 잡히는 편향이 있다. 공고 건수는 채용
+//   인원이 아니며 같은 자리를 반복 게시한 것일 수도 있다. 그래서 결과는 전부 추정으로 낸다.
+
+const HIRE_HOSTS = /(jobkorea|saramin|incruit|albamon|alba\.co\.kr|work24|worknet|jobplanet|wanted\.co\.kr|catch\.co\.kr|kosmes|jobaba|hrd\.go\.kr|superpass|rocketpunch)/i;
+const HIRE_WORDS = /(채용|구인|모집|경력직|신입|입사지원|리크루트|일자리)/;
+// 화장품 제조 현장 기준 직종 분류 — 어느 직종이 반복되는지가 해석의 핵심이다
+const HIRE_ROLES = [
+  ['생산·제조', /(생산|제조|충전|충포장|포장|현장직|오퍼레이터|조색|칭량|믹싱|반제품|라인)/],
+  ['품질(QC·QA)', /(품질|\bQC\b|\bQA\b|시험|검사|미생물|분석)/i],
+  ['연구개발', /(연구|R&D|개발|처방|제형|연구소)/i],
+  ['설비·공무', /(공무|설비|보전|기계|전기|시설|유틸리티)/],
+  ['물류·자재', /(물류|자재|구매|입출고|창고|지게차|배송)/],
+  ['영업·해외', /(영업|수출|해외|무역|마케팅|\bMD\b)/i],
+  ['사무·관리', /(경리|회계|총무|인사|사무|재무|관리직)/],
+];
+function hireRole(text) {
+  const s = String(text || '');
+  for (const [label, re] of HIRE_ROLES) if (re.test(s)) return label;
+  return '기타·불명';
+}
+// 공고 텍스트에서 연·월을 뽑는다. 두 자리 연도는 오탐이 많아 쓰지 않는다.
+function hireDates(text) {
+  const out = new Set();
+  const s = String(text || '');
+  const re = /(20\d{2})\s*[.\-/년]\s*(\d{1,2})?/g;
+  let m;
+  while ((m = re.exec(s))) {
+    const y = Number(m[1]);
+    if (y < 2000 || y > new Date().getFullYear() + 1) continue;      // 사업자번호 등 숫자 오탐 차단
+    const mo = m[2] ? Math.min(12, Math.max(1, Number(m[2]))) : null;
+    out.add(mo ? `${y}-${String(mo).padStart(2, '0')}` : String(y));
+  }
+  return [...out];
+}
+
+// 채용 사이트 기업정보 페이지에서 '사원수 43명 (2025.12.31)' 같은 값을 뽑는다.
+// 연금 가입자수와 시점이 다른 두 번째 인력 관측치라, 증감 방향을 볼 수 있다.
+function hireHeadcount(text) {
+  const s = String(text || '').replace(/\s+/g, ' ');
+  // 사이트마다 표기가 달라(사원수·직원수·종업원수·임직원수) 모두 받는다
+  const m = s.match(/(?:사원수|직원수|종업원수|임직원수|총\s?인원)[^0-9]{0,10}([0-9,]{1,7})\s*명(?:[^0-9(]{0,6}\(?\s*(20\d{2})[.\-/년]\s*(\d{1,2})?)?/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, ''));
+  if (!isFinite(n) || n <= 0 || n > 100000) return null;
+  return { count: n, asOf: m[2] ? `${m[2]}${m[3] ? '-' + String(m[3]).padStart(2, '0') : ''}` : null };
+}
+
+async function hiringTrace(nm) {
+  if (!getProxy() || !nm) return null;
+  // ① 다각도 검색 — 한 질의로는 사이트별로 누락이 커서 여러 각도로 훑는다.
+  //    연도 키워드를 섞어 과거 공고가 조금이라도 더 잡히게 한다(마감분은 상당수 사라진다).
+  const y = new Date().getFullYear();
+  const queries = [
+    `${nm} 채용`, `${nm} 채용공고`, `${nm} 구인`,
+    `${nm} 잡코리아`, `${nm} 사람인`, `${nm} 워크넷`,
+    `${nm} 생산직 채용`, `${nm} 경력 채용`,
+    `${nm} ${y} 채용`, `${nm} ${y - 1} 채용`, `${nm} ${y - 2} 채용`,
+  ];
+  const got = await mapLimit(queries, 4, async (q) => {
+    try { return await proxyOnlyGet('naverWeb', { query: q, display: '30' }); } catch { return null; }
+  });
+
+  // ② 채용 사이트 결과만 남기고 링크 기준 중복 제거
+  const seen = new Set();
+  const posts = [];
+  const strip = (s) => String(s || '').replace(/<[^>]+>/g, '').replace(/&[a-z]+;/gi, ' ').trim();
+  const key = stripCorp(nm).replace(/\s/g, '');
+  got.forEach((d) => {
+    const items = (d && Array.isArray(d.items)) ? d.items : [];
+    items.forEach((it) => {
+      const link = String(it.link || it.originallink || '');
+      const title = strip(it.title), desc = strip(it.description);
+      const blob = `${title} ${desc}`;
+      if (!HIRE_HOSTS.test(link) || !HIRE_WORDS.test(blob)) return;
+      // 상호가 실제로 들어간 결과만 — 동종 업체 공고가 섞이면 전부 무의미해진다
+      if (!stripCorp(blob).replace(/\s/g, '').includes(key)) return;
+      const id = link.replace(/[?#].*$/, '');
+      if (seen.has(id)) return;
+      seen.add(id);
+      posts.push({ title, desc, link, host: (link.match(/^https?:\/\/([^/]+)/) || [])[1] || '', role: hireRole(blob), dates: hireDates(blob) });
+    });
+  });
+
+  // ③ 상위 채용 사이트 기업정보 페이지에서 사원수(기준일)를 확보 — 인력 증감의 두 번째 관측치
+  const headHosts = posts.filter((p) => /jobkorea|saramin|catch\.co\.kr/i.test(p.host)).slice(0, 3);
+  const heads = [];
+  if (headHosts.length) {
+    const pages = await mapLimit(headHosts, 2, async (p) => {
+      try {
+        const r = await proxyOnlyGet('fetchPage', { url: p.link });
+        return { host: p.host, link: p.link, text: (r && r.text) || '' };
+      } catch { return null; }
+    });
+    pages.forEach((pg) => {
+      if (!pg || !pg.text) return;
+      const hc = hireHeadcount(htmlToText(pg.text));
+      if (hc) heads.push({ ...hc, host: pg.host, link: pg.link });
+    });
+  }
+  return { posts, heads };
+}
+
+// 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
+function analyzeHiring(posts, heads, npsCount, npsAsOf) {
+  if (!posts || !posts.length) return { ok: false, reason: '채용 사이트에서 이 업체 공고를 찾지 못했습니다', posts: [], heads: heads || [] };
+  const now = new Date();
+  const curY = now.getFullYear();
+  const ym = (s) => (String(s).length >= 7 ? String(s) : `${s}-06`);          // 연도만 있으면 연중으로 근사
+  const monthsAgo = (s) => {
+    const [yy, mm] = ym(s).split('-').map(Number);
+    return (curY - yy) * 12 + (now.getMonth() + 1 - mm);
+  };
+  // 공고 1건에 여러 날짜가 있으면 가장 최근 것을 그 공고의 시점으로 본다(등록일보다 마감일이 뒤)
+  const dated = [], undated = [];
+  posts.forEach((p) => {
+    if (!p.dates.length) { undated.push(p); return; }
+    const best = p.dates.map(ym).sort().pop();
+    dated.push({ ...p, at: best, age: monthsAgo(best) });
+  });
+
+  const byYear = {}, byRole = {};
+  dated.forEach((p) => { const yy = p.at.slice(0, 4); byYear[yy] = (byYear[yy] || 0) + 1; });
+  posts.forEach((p) => { byRole[p.role] = (byRole[p.role] || 0) + 1; });
+
+  const recent = dated.filter((p) => p.age <= 12).length;                     // 최근 12개월
+  const prior = dated.filter((p) => p.age > 12 && p.age <= 24).length;        // 직전 12개월
+  const spanYears = Object.keys(byYear).length;
+  const signals = [];
+
+  // ㉠ 최근 급증 + 직종 확장 → 증설·라인 신설 의심
+  const recentRoles = new Set(dated.filter((p) => p.age <= 12).map((p) => p.role));
+  const oldRoles = new Set(dated.filter((p) => p.age > 12).map((p) => p.role));
+  const newRoles = [...recentRoles].filter((r) => !oldRoles.has(r) && r !== '기타·불명');
+  if (recent >= 3 && recent >= prior * 2) {
+    signals.push({
+      kind: 'expand', level: newRoles.length ? 'high' : 'mid',
+      title: '최근 채용 급증 — 증설·증원 가능성',
+      detail: `최근 12개월 ${recent}건 vs 직전 12개월 ${prior}건`
+        + (newRoles.length ? ` · 이전에 없던 직종이 새로 등장(${newRoles.join('·')})` : '')
+        + `. 설비 증설이나 신규 라인 가동을 준비 중일 수 있습니다.`,
+      ask: '최근 1년 내 증설·라인 신설 계획이 있었는지, 현재 가동 라인 수와 교대 운영 형태를 확인하세요.',
+    });
+  }
+  // ㉡ 같은 직종 반복 → 이탈이 잦거나 충원이 안 됨
+  Object.entries(byRole).forEach(([role, n]) => {
+    if (role === '기타·불명' || n < 3) return;
+    const rd = dated.filter((p) => p.role === role);
+    if (rd.length < 3) return;
+    const span = Math.max(1, Math.max(...rd.map((p) => p.age)) - Math.min(...rd.map((p) => p.age)));
+    const cycle = Math.round(span / Math.max(1, rd.length - 1));              // 평균 재공고 주기(개월)
+    if (cycle <= 6) {
+      signals.push({
+        kind: 'churn', level: cycle <= 3 ? 'high' : 'mid',
+        title: `${role} 반복 공고 — 이탈·충원난 신호`,
+        detail: `${rd.length}건이 평균 ${cycle}개월 주기로 반복 게시됐습니다. 같은 자리를 계속 다시 뽑고 있다는 뜻일 수 있습니다.`,
+        ask: `${role} 인력의 평균 근속연수와 최근 1년 퇴사 인원을 물어보세요. 반복 공고는 이직률이 높거나(현장 부담) 채용이 안 되는(입지·처우) 두 가지로 갈립니다.`,
+      });
+    }
+  });
+  // ㉢ 채용 강도 — 재직자수 대비 연평균 공고 건수(회전율의 거친 대용치)
+  let intensity = null;
+  const emp = Number(npsCount);
+  if (isFinite(emp) && emp > 0 && dated.length >= 3 && spanYears >= 2) {
+    const perYear = dated.length / spanYears;
+    const r = perYear / emp;
+    const band = r >= 0.5 ? '매우 높음' : r >= 0.25 ? '높음' : r >= 0.1 ? '보통' : '낮음';
+    intensity = { perYear: Math.round(perYear * 10) / 10, ratio: Math.round(r * 100), band, emp };
+    if (r >= 0.25) {
+      signals.push({
+        kind: 'churn', level: r >= 0.5 ? 'high' : 'mid',
+        title: `채용 강도 ${band}`,
+        detail: `재직자 ${emp}명 대비 연평균 공고 ${intensity.perYear}건(${intensity.ratio}%). 상시 충원 성격이 강합니다.`,
+        ask: '연간 퇴사 인원과 생산직 근속 분포를 확인하세요. 성장에 따른 증원인지, 이탈에 따른 충원인지는 근속연수로 갈립니다.',
+      });
+    }
+  }
+  // ㉣ 사원수 관측치 대조 — 채용사이트 공시 사원수 vs 연금 가입자수
+  let headTrend = null;
+  const h = (heads || []).filter((x) => x && x.count).sort((a, b) => String(b.asOf || '').localeCompare(String(a.asOf || '')))[0];
+  if (h && isFinite(emp) && emp > 0) {
+    const diff = emp - h.count;
+    headTrend = { site: h, nps: { count: emp, asOf: npsAsOf || null }, diff };
+    if (Math.abs(diff) >= Math.max(3, h.count * 0.1)) {
+      signals.push({
+        kind: diff > 0 ? 'expand' : 'shrink', level: 'mid',
+        title: diff > 0 ? '인력 증가 확인' : '인력 감소 확인',
+        detail: `${h.host} 공시 사원수 ${h.count}명${h.asOf ? `(${h.asOf} 기준)` : ''} → 국민연금 가입자 ${emp}명${npsAsOf ? `(${npsAsOf} 기준)` : ''} · ${diff > 0 ? '+' : ''}${diff}명`,
+        ask: diff > 0 ? '증원 사유(수주 증가·증설)와 신규 인력의 배치 라인을 확인하세요.' : '감소 사유(수주 축소·자동화·외주 전환)를 확인하세요.',
+      });
+    }
+  }
+
+  return {
+    ok: true, posts, heads: heads || [], byYear, byRole,
+    dated: dated.length, undated: undated.length,
+    recent, prior, spanYears, intensity, headTrend,
+    signals: signals.sort((a, b) => (b.level === 'high' ? 1 : 0) - (a.level === 'high' ? 1 : 0)),
+  };
+}
+
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
@@ -1459,6 +1667,8 @@ async function finishLive(name, corp) {
     oemTrace: proxyOnlyGet('naverWeb', { query: `${nm} 제조원`, display: '10' }),
     // 외부 집계(marketbz 등) 비공식 보강 — 사용자 요청으로 비활성화(공식 data.go.kr API 자료만 신뢰).
     bizAgg: Promise.resolve(null),
+    // 채용공고 추적 — 뉴스도 홈페이지도 없는 영세업체의 거의 유일한 활동 흔적
+    hiring: hiringTrace(nm),
     // 국세청 진위확인 — 사업자번호·대표자·개업일 3요소 대조(상태조회와 동일 서비스)
     ntsVal: ntsValidate(corp.bzno, corp.rep, corp.estbDt),
   };
@@ -1834,6 +2044,71 @@ function renderCheckWeb(report) {
   return box;
 }
 
+// 🧑‍🏭 채용공고 추적 렌더 — 추정임을 숨기지 않는다. 수집 편향과 해석의 갈림길을 함께 적는다.
+function renderHiring(h) {
+  if (!h) return null;
+  const box = el('div', 'hirebox');
+  if (!h.ok) {
+    box.innerHTML = `<h4>🧑‍🏭 채용공고 추적 <span>잡코리아·사람인·워크넷 등</span></h4>`
+      + `<div class="hire-none">${esc(h.reason || '조회 불가')}</div>`;
+    return box;
+  }
+  const yrs = Object.keys(h.byYear).sort();
+  const maxN = Math.max(1, ...Object.values(h.byYear));
+  let html = `<h4>🧑‍🏭 채용공고 추적 <span>공고 ${h.posts.length}건${h.spanYears ? ` · ${h.spanYears}개년 확인` : ''}</span></h4>`;
+
+  // 판정 신호 — 가장 중요한 결론이므로 맨 위
+  if (h.signals.length) {
+    html += '<div class="hire-sig">' + h.signals.map((s) => `<div class="hs ${esc(s.level)} ${esc(s.kind)}">`
+      + `<b>${esc(s.title)}</b><i>${esc(s.detail)}</i><em>▸ ${esc(s.ask)}</em></div>`).join('') + '</div>';
+  } else {
+    html += `<div class="hire-none">뚜렷한 신호 없음 — 반복 공고나 급증 패턴이 확인되지 않았습니다.</div>`;
+  }
+
+  // 연도별 분포 — 3개년 흐름을 한눈에
+  if (yrs.length) {
+    html += `<div class="hire-sec">연도별 공고 <em>날짜가 확인된 ${h.dated}건 기준</em></div><div class="hire-bars">`
+      + yrs.map((y) => `<div class="hbar"><i>${esc(y)}</i>`
+        + `<span style="width:${Math.round((h.byYear[y] / maxN) * 100)}%"></span><b>${h.byYear[y]}건</b></div>`).join('')
+      + '</div>';
+  }
+  // 직종 분포 — 어느 자리가 반복되는지가 이탈 해석의 핵심
+  const roles = Object.entries(h.byRole).sort((a, b) => b[1] - a[1]);
+  if (roles.length) {
+    html += `<div class="hire-sec">모집 직종</div><div class="hire-roles">`
+      + roles.map(([r, n]) => `<span class="hrole">${esc(r)}<b>${n}</b></span>`).join('') + '</div>';
+  }
+  // 인력 관측치 대조 — 채용사이트 공시 사원수 ↔ 연금 가입자수
+  if (h.headTrend) {
+    const t = h.headTrend;
+    html += `<div class="hire-sec">인력 관측치 대조 <em>출처가 다른 두 시점</em></div><div class="hire-head">`
+      + `<div><i>${esc(t.site.host)}</i><b>${t.site.count}명</b><u>${esc(t.site.asOf || '기준일 미상')}</u></div>`
+      + `<div class="arrow">→</div>`
+      + `<div><i>국민연금</i><b>${t.nps.count}명</b><u>${esc(t.nps.asOf || '')}</u></div>`
+      + `<div class="delta ${t.diff > 0 ? 'up' : t.diff < 0 ? 'down' : ''}">${t.diff > 0 ? '+' : ''}${t.diff}명</div>`
+      + '</div>';
+  }
+  if (h.intensity) {
+    const i = h.intensity;
+    html += `<div class="hire-sec">채용 강도 <em>회전율 대용치</em></div>`
+      + `<div class="hire-int">재직자 ${i.emp}명 대비 연평균 공고 <b>${i.perYear}건</b> = <b>${i.ratio}%</b> · ${esc(i.band)}</div>`;
+  }
+  // 근거 원문 — 추정의 출처를 사용자가 직접 열어볼 수 있어야 한다
+  const show = h.posts.slice(0, 6);
+  html += `<div class="hire-sec">공고 원문 <em>클릭 시 해당 사이트</em></div><ul class="hire-list">`
+    + show.map((p) => `<li><span class="hdt">${esc((p.dates[0] || '').slice(0, 7) || '—')}</span>`
+      + `<a href="${esc(p.link)}" target="_blank" rel="noopener">${esc(p.title.slice(0, 60))}</a>`
+      + `<span class="hrl">${esc(p.role)}</span></li>`).join('')
+    + (h.posts.length > show.length ? `<li class="more">외 ${h.posts.length - show.length}건</li>` : '')
+    + '</ul>';
+  // 한계 고지 — 이걸 빼면 추정이 사실처럼 읽힌다
+  html += `<div class="hire-warn">※ 마감된 공고는 사이트에서 내려가 검색에 잡히지 않습니다. 과거일수록 적게 집계되며`
+    + (h.undated ? `, 날짜를 확인하지 못한 공고가 ${h.undated}건 있습니다` : '')
+    + `. 공고 건수는 채용 인원이 아니고 같은 자리를 다시 올린 것일 수 있습니다 — 모든 판정은 추정이며 방문 시 근속연수로 확인하세요.</div>`;
+  box.innerHTML = html;
+  return box;
+}
+
 // 홈페이지 추적 결과를 박스에 렌더 (검색중 → 결과 교체)
 function renderHomepageInto(box, hp) {
   const chip = (m) => `<span class="hp-m">✓ ${esc(m)}</span>`;
@@ -2161,20 +2436,35 @@ function buildVisitChecklist(report) {
   });
 
   // ── ② 채용공고 → 가동·인력 인사이트 ──
-  const hires = oem.filter((o) => o.tag === '채용');
-  if (hires.length) {
-    const txt = hires.map((h) => `${h.title} ${h.desc}`).join(' ');
-    const roles = [];
-    if (/생산|제조|포장|충전|라인/.test(txt)) roles.push('생산');
-    if (/품질|QC|QA|시험/.test(txt)) roles.push('품질');
-    if (/연구|개발|R&D|처방|배합/.test(txt)) roles.push('연구개발');
-    if (/영업|해외|무역|수출/.test(txt)) roles.push('영업');
-    const roleTxt = roles.length ? `모집 직군: ${roles.join('·')}` : '직군 불명';
-    add('mid', '채용', `채용공고 ${hires.length}건 — 현재 근무 인원·교대 운영 여부를 현장에서 확인(공고상 인력과 대조)`,
-      `${roleTxt} · 웹 채용공고 ${hires.length}건`,
-      roles.includes('생산') ? '생산직 상시 채용은 가동률이 높거나 이직률이 높다는 두 가지 해석이 가능 — 근속연수를 물어보세요'
-        : '채용 활동은 사업 확장·가동 지속 신호(단, 공고가 오래된 것일 수 있어 게시일 확인)');
-    if (roles.includes('연구개발')) add('low', '채용', '연구개발 인력 채용 — 자체 처방 개발 역량·연구소 규모 확인', '연구직 채용공고 확인', '자체 처방이 가능하면 개발 의존도가 낮아짐');
+  // 채용공고 추적 모듈이 낸 판정을 그대로 방문 질문으로 옮긴다(모듈이 없으면 웹 언급으로 대체).
+  const hire = report.hiring;
+  if (hire && hire.ok && hire.signals.length) {
+    hire.signals.forEach((sig) => {
+      add(sig.level === 'high' ? 'high' : 'mid', '채용', sig.ask, sig.detail,
+        sig.kind === 'expand' ? '증설이 사실이면 납기 여력은 늘지만 신규 라인 초기 수율이 불안정할 수 있습니다 — 시생산 이력을 함께 확인하세요.'
+          : sig.kind === 'shrink' ? '인력 감소는 수주 축소일 수도, 자동화·외주 전환일 수도 있습니다 — 어느 쪽인지에 따라 리스크가 완전히 다릅니다.'
+            : '반복 공고는 이직률이 높거나(현장 부담) 채용이 안 되는(입지·처우) 두 가지로 갈립니다 — 근속연수로 구분됩니다.');
+    });
+    if (hire.byRole['연구개발']) {
+      add('low', '채용', '연구개발 인력 채용 — 자체 처방 개발 역량·연구소 규모 확인',
+        `연구개발 직군 공고 ${hire.byRole['연구개발']}건`, '자체 처방이 가능하면 개발 의존도가 낮아집니다');
+    }
+  } else {
+    const hires = oem.filter((o) => o.tag === '채용');
+    if (hires.length) {
+      const txt = hires.map((h) => `${h.title} ${h.desc}`).join(' ');
+      const roles = [];
+      if (/생산|제조|포장|충전|라인/.test(txt)) roles.push('생산');
+      if (/품질|QC|QA|시험/.test(txt)) roles.push('품질');
+      if (/연구|개발|R&D|처방|배합/.test(txt)) roles.push('연구개발');
+      if (/영업|해외|무역|수출/.test(txt)) roles.push('영업');
+      const roleTxt = roles.length ? `모집 직군: ${roles.join('·')}` : '직군 불명';
+      add('mid', '채용', `채용공고 ${hires.length}건 — 현재 근무 인원·교대 운영 여부를 현장에서 확인(공고상 인력과 대조)`,
+        `${roleTxt} · 웹 채용공고 ${hires.length}건`,
+        roles.includes('생산') ? '생산직 상시 채용은 가동률이 높거나 이직률이 높다는 두 가지 해석이 가능 — 근속연수를 물어보세요'
+          : '채용 활동은 사업 확장·가동 지속 신호(단, 공고가 오래된 것일 수 있어 게시일 확인)');
+      if (roles.includes('연구개발')) add('low', '채용', '연구개발 인력 채용 — 자체 처방 개발 역량·연구소 규모 확인', '연구직 채용공고 확인', '자체 처방이 가능하면 개발 의존도가 낮아짐');
+    }
   }
 
   // ── ③ 기술·인증(홈페이지 심층분석) → 원본 대조 ──
@@ -2376,6 +2666,11 @@ function render(report, opts = {}) {
   blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic)));
   blocks.appendChild(block('생산역량 · 인원', '🏭', visible(report.capacity)));
   if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
+  // 🧑‍🏭 채용공고 추적 — 재무 뒤(재무가 오래된 업체의 '현재 활동'을 보는 자리이므로 나란히)
+  if (!excl.has('hiring')) {
+    const hb = renderHiring(report.hiring);
+    if (hb) blocks.appendChild(hb);
+  }
   // 🔎 홈페이지 추적 — 실데이터일 때만, 지연 로드(첫 렌더 이후 비동기). 결과는 report에 캐시.
   if (m.live) {
     const hpBox = el('div', 'hpbox');

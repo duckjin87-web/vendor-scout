@@ -936,6 +936,12 @@ function assembleLiveReport(name, corp, res) {
   const crosscheck = all.filter((x) => x.data_gap || x.grade === 'C')
     .map((x) => ({ key: x.key, expected: x.value, verified: null, match: null, src_type: x.source }));
 
+  // 채용공고 판정 — 공고 건수는 채용 인원이 아니고 마감분은 검색에서 사라지므로 전부 추정이다
+  const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
+  const hiring = hireRaw && typeof analyzeHiring === 'function'
+    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null)
+    : null;
+
   // 📡 소스별 조회 상태 — 왜 비었는지 화면에서 바로 보이게 (모바일에선 hover 불가)
   // key: 제외 토글용 소스 키(없으면 항상 포함). part: res 응답 키.
   const stat = (key, part, label, okDetail, emptyDetail) => {
@@ -992,6 +998,11 @@ function assembleLiveReport(name, corp, res) {
       ? { key: 'recall', name: '식약처 회수·판매중지', ok: true, warn: recalls.length > 0, detail: recalls.length ? `⚠ 회수·판매중지 이력 ${recalls.length}건` : `이력 없음 (전체 ${recallListAll.length}건 조회)` }
       : stat('recall', 'recall', '식약처 회수·판매중지', null, '회수정보 조회 실패'),
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
+    R.hiring ? (hiring && hiring.ok
+      ? { key: 'hiring', name: '채용공고 추적', ok: true, warn: hiring.signals.some((x) => x.level === 'high'),
+          detail: `공고 ${hiring.posts.length}건${hiring.spanYears ? ` · ${hiring.spanYears}개년` : ''}`
+            + (hiring.signals.length ? ` · 신호 ${hiring.signals.length}건` : '') }
+      : { key: 'hiring', name: '채용공고 추적', ok: false, warn: false, detail: (hiring && hiring.reason) || '공고 없음' }) : null,
     R.oemTrace ? { key: 'oem', name: '웹 언급 추적', ok: oem_trace.length > 0, warn: false,
       detail: oem_trace.length
         ? (() => { const c = {}; oem_trace.forEach((o) => { c[o.tag] = (c[o.tag] || 0) + 1; }); return Object.entries(c).map(([k, v]) => `${k} ${v}`).join(' · '); })()
@@ -1052,6 +1063,8 @@ function assembleLiveReport(name, corp, res) {
     },
     basic, capacity, finance, finance_history, finance_health, cross_diag, recalls, oem_trace, crosscheck, risk_flags, diff_from_prev: [],
     news, insights, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
+    // 채용공고 추적 — 수집은 조회 단계에서, 판정은 재직자수가 확정된 여기서
+    hiring,
   };
 }
 
