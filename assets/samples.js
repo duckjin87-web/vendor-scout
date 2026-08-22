@@ -94,6 +94,67 @@ function crossVerify(ctx) {
   return { items, level, warnCount };
 }
 
+// ── 재무 계열 단절 진단 ──
+// 금융위 재무 API는 외부감사·공시 대상분만 수록한다. 그래서 어느 해에서 자료가 뚝 끊기는데,
+// 화면에 '끊겼다'만 뜨면 폐업·부실로 오해하기 쉽다. 실제로는 규모가 줄어 외부감사 대상에서
+// 빠진 경우가 대부분이다 — 자료가 사라진 것이지 회사가 사라진 게 아니다.
+// 그래서 끊긴 시점의 수치로 사유를 추정해 함께 적는다.
+//
+// 외부감사 대상 기준 (주식회사 등의 외부감사에 관한 법률 시행령 제5조)
+//   단독 요건: 자산 500억 이상 또는 매출 500억 이상
+//   복합 요건: 자산 120억·부채 70억·매출 100억·종업원 100명 중 2개 이상
+const EXT_AUDIT = { asset: 120, debt: 70, sale: 100, emp: 100, solo: 500 };
+function auditFit(row, emp) {
+  const hit = [];
+  if (row.assets != null && row.assets >= EXT_AUDIT.asset) hit.push(`자산 ${row.assets}억`);
+  if (row.debt != null && row.debt >= EXT_AUDIT.debt) hit.push(`부채 ${row.debt}억`);
+  if (row.revenue != null && row.revenue >= EXT_AUDIT.sale) hit.push(`매출 ${row.revenue}억`);
+  const n = Number(emp);
+  if (isFinite(n) && n >= EXT_AUDIT.emp) hit.push(`종업원 ${n}명`);
+  const solo = (row.assets != null && row.assets >= EXT_AUDIT.solo) || (row.revenue != null && row.revenue >= EXT_AUDIT.solo);
+  return { hit, solo, met: solo || hit.length >= 2 };
+}
+// history: [{year, revenue, assets, debt, ...}] 오름차순 · emp: 재직자수 · bizStt: 국세청 사업자상태
+// 반환: 재무 코멘트에 덧붙일 문장(없으면 '')
+function financeBreakNote(history, curYear, emp, bizStt) {
+  if (!history || !history.length) return '';
+  const years = history.map((h) => h.year);
+  const last = years[years.length - 1];
+  const lag = curYear - last;
+  const parts = [];
+
+  // ① 계열이 최근까지 이어지지 않고 끝난 경우 — 사유 추정까지 붙인다
+  if (lag >= 3) {
+    const L = history[history.length - 1];
+    const fit = auditFit(L, emp);
+    parts.push(`⚠ 재무 계열이 ${last}년에서 끊겼습니다 — 이후 ${lag}년치가 이 API에 없습니다.`);
+    if (fit.met) {
+      const why = fit.solo ? `${L.assets != null && L.assets >= EXT_AUDIT.solo ? `자산 ${L.assets}억` : `매출 ${L.revenue}억`}(단독 요건)` : fit.hit.join(' · ');
+      parts.push(`${last}년 기준 ${why}으로 외부감사 대상 요건을 충족했으나, 이후 요건 미달로 대상에서 제외돼 제출 의무가 사라진 것으로 추정됩니다`
+        + `(기준: 자산 120억·부채 70억·매출 100억·종업원 100명 중 2개 이상, 또는 자산·매출 500억 단독).`);
+    } else {
+      parts.push(`${last}년 시점에도 외부감사 요건을 충족하지 않아, 이후 제출 의무가 없어 자료가 이어지지 않는 것으로 추정됩니다.`);
+    }
+    // 국세청 상태가 정상이 아니면 안심시키는 문장을 붙여선 안 된다 — 정반대로 읽힌다.
+    const ceased = /폐업|휴업/.test(String(bizStt || ''));
+    if (ceased) {
+      parts.push(`국세청 사업자상태가 '${bizStt}'입니다 — 자료 중단을 규모 축소로만 보지 마시고, 실제 영업 중단 여부를 우선 확인하세요.`);
+    } else {
+      parts.push(`자료 중단 자체는 폐업·부실 신호가 아닙니다`
+        + (bizStt ? ` — 국세청 사업자상태는 '${bizStt}'입니다.` : '(국세청 사업자상태를 함께 확인하세요).')
+        + ` 다만 이 API로는 현재 규모를 알 수 없으므로, 아래 수치를 현재 상태로 해석하지 마시고 최근 결산서를 직접 요청하거나 신용조회로 확인하세요.`);
+    }
+  }
+
+  // ② 수록 연도 사이에 빠진 해가 있는 경우 — 증감 해석을 왜곡하므로 별도로 알린다
+  const missing = [];
+  for (let y = years[0] + 1; y < last; y++) if (!years.includes(y)) missing.push(y);
+  if (missing.length) {
+    parts.push(`※ 수록 연도 사이에 결측이 있습니다(${missing.join('·')}) — 미제출이 아니라 API 미수록일 수 있어, 연도 간 증감을 연속 추세로 읽지 마세요.`);
+  }
+  return parts.join(' ');
+}
+
 // 레코드에서 사업자등록번호 추출 — 사업자번호 힌트 키 우선, 없으면 ###-##-##### 패턴 스캔.
 // (금융위 법인 미확보 시 식약처/공장 레코드에서 사업자번호를 건지면 국세청·국민연금 재조회 가능)
 function findBzno(rec) {
@@ -847,11 +908,15 @@ function assembleLiveReport(name, corp, res) {
     // 요약재무제표에 없어 계정과목(재무상태표·손익계산서)에서 보완한 연도는 출처를 구분 표기
     const viaAccounts = !!(byYear.get(L.year) || {})._fromAccounts;
     const src = `금융위 재무정보 API (${L.year} 회계연도${viaAccounts ? ' · 계정과목 보완' : ''})`;
-    const baseNote = stale
+    // 계열이 끊겼거나 중간에 빠진 해가 있으면 그 사유를 추정해 덧붙인다
+    // (끊긴 사실만 보이면 폐업·부실로 오해하기 쉬움 — financeBreakNote 주석 참고)
+    const breakNote = financeBreakNote(finance_history, curYear, empVal, bSttVal);
+    const baseNote = (stale
       ? `★ 금융위(DART 공시 기반) API가 제공하는 가장 최신 회계연도는 ${L.year}년입니다(약 ${lag}년 전). ` +
         `이 API는 상장·외부감사 공시분만 수록해 최근 자료가 없을 수 있습니다 — ` +
         `NICE·KED 등 신용조회에는 더 최근 재무가 있을 수 있으니 방문 전 최근 결산서를 요청하세요.`
-      : `★ ${L.year} 회계연도 확정 실적(금융위 제출 최신). 재무는 통상 1년 지연 공시.`;
+      : `★ ${L.year} 회계연도 확정 실적(금융위 제출 최신). 재무는 통상 1년 지연 공시.`)
+      + (breakNote ? ` ${breakNote}` : '');
     finance = [
       f('매출액', eok(L.revenue), grade, src, asOf, baseNote, !stale),
       f('영업이익', eok(L.operatingProfit), grade, src, asOf, null, !stale),
