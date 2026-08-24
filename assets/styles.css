@@ -558,6 +558,7 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .ib-tag { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; height: fit-content; text-align: center; white-space: nowrap; }
 .ib-tag-up { background: var(--gA-bg); color: var(--gA); }
 .ib-tag-down { background: var(--risk-bg); color: var(--risk); }
+.ib-body { min-width: 0; }
 .ib-body a { font-size: 13px; font-weight: 600; color: var(--text); }
 .ib-body a:hover { color: var(--accent); }
 .ib-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
@@ -765,7 +766,10 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .ib-more summary::-webkit-details-marker { display: none; }
 .ib-more summary::before { content: '▸'; font-size: 10px; transition: transform .15s; }
 .ib-more[open] summary::before { transform: rotate(90deg); }
-.ib-more ul { list-style: none; margin: 6px 0 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); }
-.ib-more li { padding: 3px 0; font-size: 12px; display: flex; gap: 6px; align-items: baseline; }
-.ib-subtag { font-size: 10px; color: var(--faint); white-space: nowrap; }
+.ib-more ul { list-style: none; margin: 6px 0 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); min-width: 0; }
+/* 묶인 기사는 한 행에 하나씩 — 제목이 길어도 줄바꿈하지 않고 말줄임 처리한다.
+   flex/grid 안에서 말줄임이 먹으려면 조상까지 min-width:0 이 필요하다(.ib-body 포함). */
+.ib-more li { padding: 3px 0; font-size: 12px; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.ib-more li a { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ib-subtag { font-size: 10px; color: var(--faint); white-space: nowrap; flex: 0 0 auto; }
 .hp-skip { margin-top: 6px; font-size: 11px; color: var(--faint); line-height: 1.5; }

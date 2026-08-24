@@ -2075,7 +2075,7 @@ function renderCheckWeb(report) {
       if (rest.length) {
         html += `<details class="ib-more"><summary>외 ${rest.length}건`
           + (tags.length > 1 ? ` · ${esc(tags.slice(1).join('·'))} 포함` : '') + `</summary><ul>`
-          + rest.map((r) => `<li><a href="${esc(r.link || '#')}" target="_blank" rel="noopener">${esc(r.title)}</a>`
+          + rest.map((r) => `<li><a href="${esc(r.link || '#')}" target="_blank" rel="noopener" title="${esc(r.title)}">${esc(r.title)}</a>`
             + (r.tag !== t.tag ? `<span class="ib-subtag">${esc(r.tag)}</span>` : '') + `</li>`).join('')
           + `</ul></details>`;
       }
