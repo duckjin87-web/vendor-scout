@@ -868,14 +868,25 @@ function assembleLiveReport(name, corp, res) {
           ? '★ 당월 연금 고지금액 ÷ 보험료율 9% = 기준소득월액 합계(하한 추정). 기준소득월액에 상한·하한이 있어 고소득자는 과소 반영되므로 실제 인건비는 이보다 큽니다. 재무가 오래된 업체의 현재 규모 가늠용'
           : why('nps', '고지금액 자료 없음'));
     })(),
-    f('방문 이동거리',
-      kkTravel ? travelText(kkTravel) : travelText(estimateTravel(fctAddr || corp?.addr || npsAddr)),
-      kkNavi ? 'B' : 'C',
-      kkNavi ? '카카오내비 길찾기 (실측)' : (kkTravel ? '카카오맵 좌표 기반 추정' : '좌표 추정 (지역중심)'),
-      today,
-      kkNavi ? '한국콜마 기준 실제 도로 경로 거리·소요시간'
+    (() => {
+      // 도착지를 반드시 표기한다. 어느 주소로 계산했는지 안 보이면, 주소가 틀렸을 때
+      // 거리만 보고는 알아챌 방법이 없다(본점·공장·연금 사업장 주소가 서로 다른 업체가 많다).
+      const usedAddr = (kkTravel && kkTravel.destAddr) || fctAddr || corp?.addr || npsAddr || null;
+      const src = usedAddr && fctAddr && usedAddr === fctAddr ? '공장 소재지(산단공)'
+        : usedAddr && corp?.addr && usedAddr === corp.addr ? '본점 주소(금융위 등기)'
+          : usedAddr && npsAddr && usedAddr === npsAddr ? '연금 사업장 주소'
+            : usedAddr ? '조회된 주소' : null;
+      const dest = usedAddr ? `도착지: ${usedAddr}${src ? ` (${src})` : ''}` : '도착지 주소 미확보';
+      const how = kkNavi ? '한국콜마 기준 실제 도로 경로 거리·소요시간'
         : (kkTravel ? '정확 좌표 직선거리×도로계수 추정 — 실측은 카카오내비(모빌리티) 신청 시 자동 전환'
-        : '지역 중심점 직선거리 추정 — 카카오맵 버튼으로 재확인')),
+          : '지역 중심점 직선거리 추정 — 카카오맵 버튼으로 재확인');
+      return f('방문 이동거리',
+        kkTravel ? travelText(kkTravel) : travelText(estimateTravel(usedAddr)),
+        kkNavi ? 'B' : 'C',
+        kkNavi ? '카카오내비 길찾기 (실측)' : (kkTravel ? '카카오맵 좌표 기반 추정' : '좌표 추정 (지역중심)'),
+        today,
+        `★ ${dest} — 이 주소가 실제 방문지와 다르면 거리도 틀립니다. 반드시 대조하세요. · ${how}`);
+    })(),
     f('기능성 보고품목 수', rl.length || null, rl.length ? (fresh.length ? 'A' : 'C') : 'D', '식약처 보고품목 API', rl.length ? today : null,
       rl.length ? `전체 ${rl.length}건 · 최근 5년 ${fresh.length}건${fresh.length ? '' : ' — 최근 신고 없음(과거 이력)'}` : why('rpt', rptEmpty)),
     f('신고 제형 분포', allForms.length ? allForms.join(', ') : null, 'C', '식약처 보고품목 API', allForms.length ? today : null, allForms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),

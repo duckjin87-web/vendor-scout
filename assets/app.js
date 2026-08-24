@@ -30,6 +30,7 @@ function errText(v) {
 const GRADE_LABEL = { A: '공식 API', B: '공공DB 간접', C: '추정/프록시', D: '데이터 공백' };
 
 let currentReport = null;
+let _srcOpen = false;   // 데이터 소스 상태 패널 펼침 여부(재렌더 시 유지)
 
 // ── 식약처 실데이터(빌드타임): Actions가 GitHub Secret으로 구운 정적 JSON ──
 let STATIC_INDEX = null;
@@ -209,7 +210,24 @@ async function proxyOnlyGet(service, params) {
 // ── 홈페이지 추적 ──
 // 네이버 웹문서 검색으로 후보 사이트 추출 → 각 페이지에서 상호·대표자·사업자번호·주소 대조.
 // 근거 가중합 4점 이상이면 '확정 제안'. 포털·블로그·쇼핑·구인 도메인은 후보에서 제외.
-const HP_SKIP = /(^|\.)(naver|daum|kakao|tistory|blog|cafe|youtube|instagram|facebook|linkedin|jobkorea|saramin|wanted|incruit|catch|nicebizinfo|wikipedia|namu\.wiki|google|11st|coupang|gmarket|auction|ssg|smartstore|blogspot|medium|threads|x)\./i;
+// 홈페이지 후보에서 제외할 도메인.
+// 뷰티맥스 조회에서 후보 3건이 전부 노이즈였다(홈페이지 제작 대행사·알바몬·사업자정보 집계).
+// 기존 목록은 이름 뒤에 점이 붙는 형태만 막아서 albamon·moneypin·bizno가 그대로 통과했다.
+// 유형별로 나눠 관리한다 — 어느 유형이 새로 생겼는지 알아야 계속 손볼 수 있다.
+const HP_SKIP_GROUPS = {
+  포털·SNS: /(^|\.)(naver|daum|kakao|tistory|blog|cafe|youtube|instagram|facebook|linkedin|google|wikipedia|namu\.wiki|blogspot|medium|threads|twitter|pinterest|band\.us)(\.|$)/i,
+  채용: /(^|\.)(jobkorea|saramin|wanted|incruit|catch|albamon|alba\.co\.kr|jobplanet|work24|worknet|jobaba|kosmes|superpass|rocketpunch|jumpit|programmers)(\.|$)/i,
+  사업자정보집계: /(^|\.)(moneypin|bizno|nicebizinfo|cretop|sbiz24|findbiz|jaoms|ktdb|wgbiz|innobiz|kisline|saramin|ppomppu)(\.|$)/i,
+  쇼핑·오픈마켓: /(^|\.)(11st|coupang|gmarket|auction|ssg|smartstore|interpark|tmon|wemakeprice|lotteon|oliveyoung|naverpay)(\.|$)/i,
+  // 홈페이지 제작·디자인 대행사 포트폴리오 — 고객사 상호가 그대로 실려 상위에 올라온다(ipdesign.kr 사례)
+  제작대행: /(^|\.)(ipdesign|cafe24|imweb|godo|makeshop|wixsite|weebly|modoo|creatorlink|sitepro|homepage|webmaker|design)(\.|$)/i,
+  공공·기관: /(^|\.)(go\.kr|or\.kr\.gov|molit|data\.go)(\.|$)/i,
+  언론: /(^|\.)(news|press|newsis|yna|mk\.co\.kr|hankyung|edaily|etnews|mt\.co\.kr|sedaily)(\.|$)/i,
+};
+function hpSkipReason(host) {
+  for (const [why, re] of Object.entries(HP_SKIP_GROUPS)) if (re.test(host)) return why;
+  return null;
+}
 function hpAddrCores(addr) {
   return String(addr || '').replace(/\s/g, '').match(/[가-힣]{2,}(읍|면|동|리|가|로|길)/g) || [];
 }
@@ -940,21 +958,51 @@ async function findHomepage(nm, corp) {
     try { proposed.extract = await extractSiteInfo(fctHp, null); } catch { /* 추출 실패 무시 */ }
     return { proposed, candidates: [] };
   }
-  let web;
-  try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 화장품`, display: '20' }); }
-  catch (e) { return { proposed: null, candidates: [], err: e.message }; }
-  const items = (web && web.items) || [];
   const seen = new Set(); const cands = [];
-  for (const it of items) {
+  const skipped = {};                       // 어떤 유형이 몇 건 걸러졌는지 — 못 찾은 이유 설명용
+  const addCand = (link, title, via) => {
     let host;
-    try { host = new URL(it.link).hostname.replace(/^www\./, ''); } catch { continue; }
-    if (HP_SKIP.test(host) || seen.has(host)) continue;
+    try { host = new URL(link).hostname.replace(/^www\./, ''); } catch { return; }
+    const why = hpSkipReason(host);
+    if (why) { skipped[why] = (skipped[why] || 0) + 1; return; }
+    if (seen.has(host)) return;
     seen.add(host);
     // url은 후보 '시작점'일 뿐 — fetchPageSmart가 https/http·www 변형을 시도해 실제 열리는 주소를 찾는다.
-    cands.push({ url: `https://${host}`, host, origLink: it.link, title: String(it.title || '').replace(/<\/?b>/g, '') });
-    if (cands.length >= 4) break;
+    cands.push({ url: `https://${host}`, host, origLink: link, title: String(title || '').replace(/<\/?b>/g, ''), via });
+  };
+
+  // ① 네이버 지역검색 — 사업자 등록정보 기반이라 link가 곧 그 업체의 홈페이지다.
+  //    웹문서 검색보다 정확한데 지금까지 쓰지 않고 있었다(프록시에는 이미 열려 있었다).
+  let localHit = null;
+  try {
+    const lo = await proxyOnlyGet('naverLocal', { query: nm, display: '5' });
+    const lit = (lo && lo.items) || [];
+    const nk = stripCorp(nm).replace(/\s/g, '');
+    for (const it of lit) {
+      const t = String(it.title || '').replace(/<\/?b>/g, '').replace(/\s/g, '');
+      if (nk && !t.includes(nk) && !nk.includes(t)) continue;      // 동명 타업소 배제
+      if (it.link) { addCand(it.link, it.title, 'local'); if (!localHit) localHit = { link: it.link, addr: it.roadAddress || it.address || '' }; }
+    }
+  } catch { /* 지역검색 실패는 치명적이지 않다 — 웹문서로 계속 */ }
+
+  // ② 웹문서 다각도 검색 — 한 질의로는 후보가 3~4건뿐이고 그마저 노이즈인 경우가 많다.
+  //    상호 단독·업종·홈페이지·소재지 조합으로 넓힌다.
+  const region = (String((corp && corp.addr) || '').match(/([가-힣]+(?:시|군|구))/) || [])[1] || '';
+  const qs = [`${nm} 화장품`, `${nm} OEM ODM`, `${nm} 홈페이지`, `"${nm}"`, `${nm} 제조`];
+  if (region) qs.push(`${nm} ${region}`);
+  const webs = await mapLimit(qs, 3, async (q) => {
+    try { return await proxyOnlyGet('naverWeb', { query: q, display: '20' }); } catch { return null; }
+  });
+  let webErr = null;
+  if (webs.every((w) => !w)) webErr = '네이버 웹문서 검색 실패';
+  webs.forEach((w) => ((w && w.items) || []).forEach((it) => addCand(it.link, it.title, 'web')));
+
+  if (!cands.length) {
+    const why = Object.entries(skipped).map(([k, v]) => `${k} ${v}건`).join(' · ');
+    return { proposed: null, candidates: [], err: webErr,
+      reason: why ? `검색결과가 모두 제외 대상이었습니다 (${why}) — 자체 홈페이지가 없는 업체일 수 있습니다` : '검색결과 없음' };
   }
-  if (!cands.length) return { proposed: null, candidates: [] };
+  cands.splice(10);                          // 대조 비용 상한 — 노이즈를 걸러낸 뒤라 10건이면 충분
 
   const nameCore = stripCorp(nm).replace(/\s/g, '');
   const rep = corp && corp.rep ? String(corp.rep).replace(/\s/g, '') : '';
@@ -963,7 +1011,8 @@ async function findHomepage(nm, corp) {
   const addrCores = hpAddrCores(corp && corp.addr);
 
   // 근거별 가중치 — 사업자번호가 가장 확실하고, 도메인·제목은 페이지 본문을 못 읽어도 얻을 수 있는 단서.
-  const W = { 사업자번호: 4, 상호: 3, 대표자: 3, 주소: 2, 도메인: 2, 제목: 2, 업종: 1 };
+  // 지역등록: 네이버 지역검색은 사업자 등록정보 기반이라 사업자번호에 준하는 근거로 본다.
+  const W = { 사업자번호: 4, 지역등록: 4, 상호: 3, 대표자: 3, 주소: 2, 도메인: 2, 제목: 2, 업종: 1 };
   const scored = await Promise.all(cands.map(async (c) => {
     // https/http · www 변형을 시도(국내 중소사 홈페이지는 http·www 전용이 흔함)
     let got = await fetchPageSmart(c.url);
@@ -985,6 +1034,7 @@ async function findHomepage(nm, corp) {
     // 페이지를 못 읽어도 판단할 수 있는 단서 두 가지
     if (nameCore && title.includes(nameCore)) m.push('제목');
     if (domainAffinity(nm, c.host)) m.push('도메인');
+    if (c.via === 'local') m.push('지역등록');   // 네이버 지역검색이 이 업체 홈페이지로 등록한 주소
     // 화장품 제조 문맥 — 동명 타업종 사이트를 걸러내는 보조 신호
     if (/화장품|코스메틱|cosmetic|OEM|ODM|제조/i.test(text) || /화장품|코스메틱|cosmetic/i.test(title)) m.push('업종');
     const score = m.reduce((s, k) => s + (W[k] || 1), 0);
@@ -993,10 +1043,16 @@ async function findHomepage(nm, corp) {
   scored.sort((a, b) => b.score - a.score);
   // 4점 이상 = 강한 근거 1개 + 보조, 또는 보조 근거 2~3개. (예: 제목+도메인+업종 = 5)
   const proposed = scored[0] && scored[0].score >= 4 ? scored[0] : null;
+  // 확정 못 했을 때 '왜'인지 남긴다 — 후보가 없어서인지, 있는데 근거가 약해서인지는 대응이 다르다.
+  const reason = proposed ? null
+    : (scored[0]
+      ? `가장 근접한 후보(${scored[0].host})도 근거 ${scored[0].score}점으로 확정 기준(4점)에 못 미쳤습니다`
+        + (scored[0].matches.length ? ` — 확인된 근거: ${scored[0].matches.join('·')}` : ' — 페이지에서 상호·대표자·사업자번호를 찾지 못했습니다')
+      : '대조할 후보가 없습니다');
   // 확정 사이트에서만 인증·생산능력 추출(오매칭 사이트 정보 방지). 이미 받은 HTML 재사용.
   if (proposed) { try { proposed.extract = await extractSiteInfo(proposed.url, proposed.html); } catch { /* 무시 */ } }
   scored.forEach((c) => { delete c.html; }); // 원문 HTML은 저장 용량 커서 제거
-  return { proposed, candidates: scored };
+  return { proposed, candidates: scored, reason, skipped, tried: cands.length };
 }
 
 // 레코드/문자열에서 사업자등록번호 추출 — 대시형 우선, 없으면 10자리.
@@ -1995,14 +2051,35 @@ function renderCheckWeb(report) {
   if (assess) html += `<div class="chk-take ib-${esc(assess.level)}"><b>종합 판단</b> ${esc(assess.note)}</div>`;
 
   // ── 신호 타임라인(시점 있는 항목) ──
+  // 같은 사건을 여러 매체가 같은 날 보도하면 타임라인이 중복으로 길어진다(코빅스: 하루 6건).
+  // 날짜별로 묶어 대표 1건만 펴 보이고 나머지는 '외 N건'으로 접는다. 날짜가 다르면 그대로 둔다.
   if (timeline.length) {
-    html += `<div class="chk-sec">신호 타임라인 <i>발행일 기준</i></div><ul class="ib-tl">`;
+    const groups = [];
+    const idx = new Map();
     timeline.forEach((t) => {
+      const k = t.date || '—';
+      if (!idx.has(k)) { idx.set(k, groups.length); groups.push({ date: k, items: [] }); }
+      groups[idx.get(k)].items.push(t);
+    });
+    html += `<div class="chk-sec">신호 타임라인 <i>발행일 기준 · 같은 날 보도는 대표 1건</i></div><ul class="ib-tl">`;
+    groups.forEach((g) => {
+      // 대표는 설명이 가장 충실한 기사 — 같은 사건이면 정보량이 많은 쪽이 낫다
+      const sorted = [...g.items].sort((a, b) => String(b.desc || '').length - String(a.desc || '').length);
+      const t = sorted[0], rest = sorted.slice(1);
+      const tags = [...new Set(g.items.map((x) => x.tag))];
       html += `<li class="ib-${esc(t.tone)}">` +
-        `<span class="ib-date">${esc(t.date || '—')}</span>` +
+        `<span class="ib-date">${esc(g.date)}</span>` +
         `<span class="ib-tag ib-tag-${esc(t.tone)}">${esc(t.tag)}</span>` +
         `<div class="ib-body"><a href="${esc(t.link || '#')}" target="_blank" rel="noopener">${esc(t.title)}</a>` +
-        (t.desc ? `<div class="ib-desc">${esc(t.desc)}</div>` : '') + `</div></li>`;
+        (t.desc ? `<div class="ib-desc">${esc(t.desc)}</div>` : '');
+      if (rest.length) {
+        html += `<details class="ib-more"><summary>외 ${rest.length}건`
+          + (tags.length > 1 ? ` · ${esc(tags.slice(1).join('·'))} 포함` : '') + `</summary><ul>`
+          + rest.map((r) => `<li><a href="${esc(r.link || '#')}" target="_blank" rel="noopener">${esc(r.title)}</a>`
+            + (r.tag !== t.tag ? `<span class="ib-subtag">${esc(r.tag)}</span>` : '') + `</li>`).join('')
+          + `</ul></details>`;
+      }
+      html += `</div></li>`;
     });
     html += '</ul>';
   }
@@ -2115,7 +2192,7 @@ function renderHomepageInto(box, hp) {
   if (!hp) { box.innerHTML = '<h4>🔎 홈페이지 추적</h4><div class="hp-none">검색 실패 또는 프록시 미설정</div>'; return; }
   if (hp.err) { box.innerHTML = `<h4>🔎 홈페이지 추적</h4><div class="hp-none">검색 실패: ${esc(hp.err)}</div>`; return; }
   const p = hp.proposed;
-  let html = `<h4>🔎 홈페이지 추적 <span>업체명+화장품 웹검색 → 페이지 대조</span></h4>`;
+  let html = `<h4>🔎 홈페이지 추적 <span>지역검색+웹문서 ${hp.tried ? `후보 ${hp.tried}건` : ''} → 페이지 대조</span></h4>`;
   if (p) {
     html += `<div class="hp-top">` +
       `<span class="hp-badge">확정 제안</span>` +
@@ -2134,10 +2211,12 @@ function renderHomepageInto(box, hp) {
       html += `<div class="hp-ext-none">홈페이지에서 인증·생산능력 문구를 추출하지 못함 (자바스크립트 렌더링 사이트이거나 미게재 — 사이트 직접 확인)</div>`;
     }
   } else {
-    const best = (hp.candidates || [])[0];
-    html += `<div class="hp-none">확정 기준(신뢰점수 4점) 미달 — 아래 후보를 직접 확인하거나, ` +
-      `심층분석의 <b>주소 직접 입력</b>을 쓰세요.` +
-      (best && best.score ? ` (최고 ${esc(best.host)} ${best.score}점)` : '') + `</div>`;
+    // 왜 확정 못 했는지 밝힌다 — 후보가 없어서인지, 있는데 근거가 약해서인지는 대응이 다르다.
+    html += `<div class="hp-none">${esc(hp.reason || '확정 기준(신뢰점수 4점) 미달')}`
+      + `<br>아래 후보를 직접 확인하거나, 심층분석의 <b>주소 직접 입력</b>을 쓰세요.</div>`;
+    const sk = hp.skipped && Object.keys(hp.skipped).length
+      ? Object.entries(hp.skipped).map(([k, v]) => `${k} ${v}`).join(' · ') : null;
+    if (sk) html += `<div class="hp-skip">제외한 검색결과: ${esc(sk)} — 채용·집계·제작대행 사이트는 업체 홈페이지가 아니라 후보에서 뺍니다.</div>`;
   }
   const others = (hp.candidates || []).filter((c) => !p || c.host !== p.host);
   if (others.length) {
@@ -2630,8 +2709,20 @@ function render(report, opts = {}) {
     // 📡 소스별 조회 상태 — 무엇이 왜 비었는지 + 체크 해제 시 리포트에서 제외
     if (Array.isArray(m.src_status) && m.src_status.length) {
       const excluded = getExcluded();
-      const sp = el('div', 'srcstat');
-      sp.appendChild(el('div', 'srchead', '📡 데이터 소스 상태 <span>✓조회성공 · ✗실패 · 체크박스=리포트 포함(해제 시 제외)</span>'));
+      // 기본은 접어둔다 — 소스가 십수 개라 늘 펼쳐두면 정작 봐야 할 리포트가 밀린다.
+      // 닫힌 상태에서도 성공/실패 건수는 보이게 해, 열어볼지 말지 판단할 수 있게 한다.
+      const sp = el('details', 'srcstat');
+      const nOk = m.src_status.filter((x) => x.ok && !(x.key && excluded.has(x.key))).length;
+      const nNo = m.src_status.filter((x) => !x.ok && !(x.key && excluded.has(x.key))).length;
+      const nEx = m.src_status.filter((x) => x.key && excluded.has(x.key)).length;
+      const sum = el('summary', 'srchead');
+      sum.innerHTML = `📡 데이터 소스 상태 <b class="sscnt">`
+        + `<u class="ok">✓ ${nOk}</u>${nNo ? `<u class="no">✗ ${nNo}</u>` : ''}${nEx ? `<u class="ex">⊘ ${nEx}</u>` : ''}</b>`
+        + `<span>눌러서 펼치기 · 체크박스 해제 시 리포트에서 제외</span>`;
+      sp.appendChild(sum);
+      // 사용자가 한 번 펼쳤으면 재렌더(제외 토글) 후에도 열린 상태를 유지한다
+      if (_srcOpen) sp.open = true;
+      sp.addEventListener('toggle', () => { _srcOpen = sp.open; });
       m.src_status.forEach((s) => {
         const canToggle = !!s.key;
         const ex = canToggle && excluded.has(s.key);
