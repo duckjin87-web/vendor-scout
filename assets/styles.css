@@ -589,6 +589,7 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .vc-list li.vc-high .vc-txt { font-weight: 600; }
 .vc-foot { margin-top: 11px; font-size: 11px; color: var(--faint); line-height: 1.5; }
 @media (max-width: 640px) {
+  .vc-own { display: none; }
   .vc-list label { grid-template-columns: 40px 1fr; }
   .vc-cat { grid-column: 2; }
   .vc-txt, .vc-why { grid-column: 1 / -1; }
@@ -782,13 +783,16 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 }
 .chk-add:hover { border-color: var(--accent); background: var(--accent-soft); }
 .vc-empty { font-size: 12.5px; color: var(--muted); padding: 6px 0 2px; }
-.vc-mine { background: var(--accent-soft); border-radius: 8px; }
+/* 직접 추가한 항목도 자동 항목과 같은 모양으로 — 배경색 강조 없이 오른쪽에 추가일자만 */
 .vc-done > label { opacity: .5; }
 .vc-done .vc-txt { text-decoration: line-through; }
-.vc-own { font-size: 10px; color: var(--accent); font-weight: 700; margin-left: 6px; white-space: nowrap; }
+.vc-own {
+  flex: 0 0 auto; align-self: flex-start; margin-top: 3px;
+  font-size: 10.5px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
 .vc-del {
   border: 0; background: transparent; color: var(--faint); cursor: pointer;
-  font-size: 13px; line-height: 1; padding: 2px 5px; border-radius: 6px; flex: 0 0 auto; align-self: start;
+  font-size: 13px; line-height: 1; padding: 2px 5px; border-radius: 6px; flex: 0 0 auto; align-self: flex-start;
 }
 .vc-del:hover { color: var(--risk); background: var(--risk-bg); }
 .vc-add { margin-top: 12px; padding-top: 11px; border-top: 1px dashed var(--border); }

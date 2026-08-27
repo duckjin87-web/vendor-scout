@@ -2666,10 +2666,12 @@ function renderVisitChecklist(report) {
         + `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
         + `<span class="vc-cat">${esc(it.cat)}</span>`
         + `<span class="vc-txt">${esc(it.text)}</span>`
-        + (it.mine ? `<span class="vc-own">직접 추가${it.at ? ` · ${esc(it.at)}` : ''}</span>` : '')
         + (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '')
         + (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '')
         + `</label>`
+        // 추가일자·삭제는 label 격자 밖(행 맨 오른쪽)에 둔다.
+        // 격자 안에 넣었더니 4번째 항목이 되어 40px 첫 칸으로 밀리며 세로로 쪼개졌다.
+        + (it.mine ? `<span class="vc-own" title="직접 추가한 항목">${esc(it.at || '')}</span>` : '')
         + (it.mine ? `<button type="button" class="vc-del" data-id="${esc(it.id)}" title="이 항목 삭제" aria-label="삭제">✕</button>` : '')
         + `</li>`;
     });
@@ -2682,13 +2684,13 @@ function renderVisitChecklist(report) {
   const cats = [...new Set([...items.map((x) => x.cat), '실체', '재무', '인증', '설비', '품질', '납기', '단가', '계약', '기타'])].filter(Boolean);
   html += `<details class="vc-add" id="vcAdd"><summary>➕ 확인할 항목 직접 추가</summary>`
     + `<div class="vc-form">`
-    + `<input type="text" class="vc-in-text" placeholder="확인할 내용 (예: 최근 3년 감사보고서 사본 요청)" maxlength="200">`
+    + `<input type="text" class="vc-in-text" placeholder="확인할 내용 (예: 감사보고서 사본 요청)" maxlength="200">`
     + `<input type="text" class="vc-in-cat" placeholder="분류" list="vcCats" maxlength="12" value="기타">`
     + `<datalist id="vcCats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>`
     + `<select class="vc-in-pri"><option value="high">필수</option><option value="mid" selected>권장</option><option value="low">참고</option></select>`
     + `<button type="button" class="vc-in-btn">추가</button>`
     + `</div>`
-    + `<input type="text" class="vc-in-why" placeholder="근거·메모 (선택) — 어떤 자료를 보고 적었는지" maxlength="200">`
+    + `<input type="text" class="vc-in-why" placeholder="근거·메모 (선택)" maxlength="200">`
     + `</details>`;
 
   html += '<div class="vc-foot">📎 = 근거(웹 출처) · 💡 = 해석 인사이트 · 우선순위: <b>필수</b>/<b>권장</b>/<b>참고</b>. '
