@@ -799,40 +799,55 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .vc-edit:hover { color: var(--accent); background: var(--accent-soft); }
 .vc-del:hover { color: var(--risk); background: var(--risk-bg); }
 /* 수정 중인 행 — 같은 자리에서 고친다 */
-.vc-editing { display: block; padding: 9px 2px; border-top: 1px solid var(--border); }
-.vc-editing .vc-form { margin-top: 0; }
-.vc-ed-cancel {
-  border: 1px solid var(--border); background: var(--panel); color: var(--muted);
-  font-size: 12.5px; padding: 8px 14px; border-radius: 8px; cursor: pointer; flex: 0 0 auto;
+/* 수정 중인 행 — .vc-list li 가 display:flex 라 단순 .vc-editing 으로는 이기지 못한다.
+   선택자를 맞춰 블록으로 되돌리지 않으면 폼 전체가 한 줄로 찌그러진다. */
+.vc-list li.vc-editing {
+  display: block; padding: 10px 2px; border-top: 1px solid var(--border);
+  background: var(--panel-2); border-radius: 10px;
 }
-.vc-ed-cancel:hover { border-color: var(--muted); color: var(--text); }
-.vc-ed-text { flex: 1 1 260px; min-width: 0; }
-.vc-ed-cat { flex: 0 0 90px; }
-.vc-ed-pri { flex: 0 0 84px; cursor: pointer; }
-.vc-editing input, .vc-editing select {
-  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
-  font-size: 12.5px; padding: 8px 10px; border-radius: 8px; font-family: inherit; outline: none;
-}
-.vc-editing input:focus, .vc-editing select:focus { border-color: var(--accent); }
+
+/* ── 추가·수정 폼 공통 ──
+   flex-wrap 은 창 너비에 따라 칸이 제멋대로 접혀 입력창이 글자 한두 개 폭으로 줄었다.
+   격자로 고정해 어느 너비에서든 같은 비율을 유지한다. */
 .vc-add { margin-top: 12px; padding-top: 11px; border-top: 1px dashed var(--border); }
 .vc-add summary {
   font-size: 12.5px; font-weight: 700; color: var(--accent); cursor: pointer;
   list-style: none; display: inline-flex; align-items: center; gap: 5px;
 }
 .vc-add summary::-webkit-details-marker { display: none; }
-.vc-form { display: flex; gap: 7px; margin-top: 9px; flex-wrap: wrap; }
+
+.vc-form {
+  display: grid; gap: 8px; margin-top: 10px; align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) 116px 96px auto;      /* 내용 · 분류 · 우선순위 · 추가 */
+}
+.vc-editing .vc-form {
+  margin-top: 0;
+  grid-template-columns: minmax(0, 1fr) 116px 96px auto auto;  /* + 취소 */
+}
 .vc-form input, .vc-form select, .vc-in-why {
-  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
-  font-size: 12.5px; padding: 8px 10px; border-radius: 8px; font-family: inherit; outline: none;
+  width: 100%; min-width: 0; box-sizing: border-box;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  font-size: 13px; padding: 9px 11px; border-radius: 9px; font-family: inherit; outline: none;
 }
-.vc-form input:focus, .vc-form select:focus, .vc-in-why:focus { border-color: var(--accent); }
-.vc-in-text { flex: 1 1 260px; min-width: 0; }
-.vc-in-cat { flex: 0 0 90px; }
-.vc-in-pri { flex: 0 0 84px; cursor: pointer; }
-.vc-in-why { display: block; width: 100%; margin-top: 7px; }
-.vc-in-btn {
-  border: 0; background: var(--accent); color: #fff; font-weight: 700; font-size: 12.5px;
-  padding: 8px 16px; border-radius: 8px; cursor: pointer; flex: 0 0 auto;
+.vc-form select { cursor: pointer; }
+.vc-form input:focus, .vc-form select:focus, .vc-in-why:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
 }
+.vc-in-why { display: block; margin-top: 8px; }
+.vc-in-btn, .vc-ed-cancel {
+  white-space: nowrap; font-size: 13px; font-weight: 700;
+  padding: 9px 18px; border-radius: 9px; cursor: pointer; font-family: inherit;
+}
+.vc-in-btn { border: 0; background: var(--accent); color: #fff; }
 .vc-in-btn:hover { filter: brightness(1.06); }
+.vc-ed-cancel { border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
+.vc-ed-cancel:hover { border-color: var(--muted); color: var(--text); }
+
+/* 좁은 화면에서는 내용칸을 한 줄로 빼고 나머지를 아래에 나란히 둔다 */
+@media (max-width: 760px) {
+  .vc-form { grid-template-columns: minmax(0, 1fr) 96px auto; }
+  .vc-editing .vc-form { grid-template-columns: minmax(0, 1fr) 96px auto; }
+  .vc-in-text, .vc-ed-text { grid-column: 1 / -1; }
+  .vc-in-cat, .vc-ed-cat { grid-column: 1; }
+}
 @media print { .vc-add, .vc-del, .vc-edit, .chk-add { display: none !important; } }
