@@ -786,15 +786,33 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 /* 직접 추가한 항목도 자동 항목과 같은 모양으로 — 배경색 강조 없이 오른쪽에 추가일자만 */
 .vc-done > label { opacity: .5; }
 .vc-done .vc-txt { text-decoration: line-through; }
+/* 날짜는 같은 행의 본문(.vc-txt)과 같은 크기 — 혼자 작으면 다른 종류의 정보처럼 보인다 */
 .vc-own {
-  flex: 0 0 auto; align-self: flex-start; margin-top: 3px;
-  font-size: 10.5px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums;
+  flex: 0 0 auto; align-self: flex-start;
+  font-size: 13px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums;
 }
-.vc-del {
+.vc-edit, .vc-del {
   border: 0; background: transparent; color: var(--faint); cursor: pointer;
   font-size: 13px; line-height: 1; padding: 2px 5px; border-radius: 6px; flex: 0 0 auto; align-self: flex-start;
 }
+.vc-edit:hover { color: var(--accent); background: var(--accent-soft); }
 .vc-del:hover { color: var(--risk); background: var(--risk-bg); }
+/* 수정 중인 행 — 같은 자리에서 고친다 */
+.vc-editing { display: block; padding: 9px 2px; border-top: 1px solid var(--border); }
+.vc-editing .vc-form { margin-top: 0; }
+.vc-ed-cancel {
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  font-size: 12.5px; padding: 8px 14px; border-radius: 8px; cursor: pointer; flex: 0 0 auto;
+}
+.vc-ed-cancel:hover { border-color: var(--muted); color: var(--text); }
+.vc-ed-text { flex: 1 1 260px; min-width: 0; }
+.vc-ed-cat { flex: 0 0 90px; }
+.vc-ed-pri { flex: 0 0 84px; cursor: pointer; }
+.vc-editing input, .vc-editing select {
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  font-size: 12.5px; padding: 8px 10px; border-radius: 8px; font-family: inherit; outline: none;
+}
+.vc-editing input:focus, .vc-editing select:focus { border-color: var(--accent); }
 .vc-add { margin-top: 12px; padding-top: 11px; border-top: 1px dashed var(--border); }
 .vc-add summary {
   font-size: 12.5px; font-weight: 700; color: var(--accent); cursor: pointer;
@@ -816,4 +834,4 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   padding: 8px 16px; border-radius: 8px; cursor: pointer; flex: 0 0 auto;
 }
 .vc-in-btn:hover { filter: brightness(1.06); }
-@media print { .vc-add, .vc-del, .chk-add { display: none !important; } }
+@media print { .vc-add, .vc-del, .vc-edit, .chk-add { display: none !important; } }

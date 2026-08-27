@@ -31,6 +31,7 @@ const GRADE_LABEL = { A: '공식 API', B: '공공DB 간접', C: '추정/프록�
 
 let currentReport = null;
 let _srcOpen = false;   // 데이터 소스 상태 패널 펼침 여부(재렌더 시 유지)
+let _editingCheck = null;  // 수정 중인 직접추가 항목 id — 재렌더로 편집 폼을 그린다
 
 // ── 식약처 실데이터(빌드타임): Actions가 GitHub Secret으로 구운 정적 JSON ──
 let STATIC_INDEX = null;
@@ -80,6 +81,12 @@ function addCustomCheck(vid, item) {
   m[vid] = [...(m[vid] || []), row];
   _writeMap(CUSTOM_KEY, m);
   return row;
+}
+function updateCustomCheck(vid, id, patch) {
+  const m = _readMap(CUSTOM_KEY);
+  if (!m[vid]) return;
+  m[vid] = m[vid].map((x) => (x.id === id ? { ...x, ...patch } : x));
+  _writeMap(CUSTOM_KEY, m);
 }
 function removeCustomCheck(vid, id) {
   const m = _readMap(CUSTOM_KEY);
@@ -2642,6 +2649,10 @@ function refreshVisitChecklist(report, opts = {}) {
     const d = next.querySelector('#vcAdd');
     if (d) { d.open = true; const t = next.querySelector('.vc-in-text'); if (t) t.focus(); }
   }
+  if (opts.focusEdit) {
+    const t = next.querySelector('.vc-ed-text');
+    if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+  }
 }
 function renderVisitChecklist(report) {
   const vid = (report.meta && report.meta.vendor_id) || null;
@@ -2661,7 +2672,20 @@ function renderVisitChecklist(report) {
     items.forEach((it) => {
       const k = checkKeyOf(it);
       const on = checked.has(k);
-      html += `<li class="vc-${esc(it.pri)}${it.mine ? ' vc-mine' : ''}${on ? ' vc-done' : ''}" data-key="${esc(k)}">`
+      // 수정 중인 항목은 입력 폼으로 대체 — 같은 자리에서 고치는 게 목록을 잃지 않는다
+      if (it.mine && it.id === _editingCheck) {
+        html += `<li class="vc-editing" data-id="${esc(it.id)}"><div class="vc-form">`
+          + `<input type="text" class="vc-ed-text" maxlength="200" value="${esc(it.text || '')}">`
+          + `<input type="text" class="vc-ed-cat" maxlength="12" list="vcCats" value="${esc(it.cat || '')}">`
+          + `<select class="vc-ed-pri">`
+          + ['high', 'mid', 'low'].map((v) => `<option value="${v}"${it.pri === v ? ' selected' : ''}>${PRI_LABEL[v]}</option>`).join('')
+          + `</select>`
+          + `<button type="button" class="vc-in-btn vc-ed-save">저장</button>`
+          + `<button type="button" class="vc-ed-cancel">취소</button>`
+          + `</div><input type="text" class="vc-in-why vc-ed-why" maxlength="200" placeholder="근거·메모 (선택)" value="${esc(it.why || '')}"></li>`;
+        return;
+      }
+      html += `<li class="vc-${esc(it.pri)}${on ? ' vc-done' : ''}" data-key="${esc(k)}">`
         + `<input type="checkbox" id="vc-${esc(k)}"${on ? ' checked' : ''}><label for="vc-${esc(k)}">`
         + `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
         + `<span class="vc-cat">${esc(it.cat)}</span>`
@@ -2672,6 +2696,7 @@ function renderVisitChecklist(report) {
         // 추가일자·삭제는 label 격자 밖(행 맨 오른쪽)에 둔다.
         // 격자 안에 넣었더니 4번째 항목이 되어 40px 첫 칸으로 밀리며 세로로 쪼개졌다.
         + (it.mine ? `<span class="vc-own" title="직접 추가한 항목">${esc(it.at || '')}</span>` : '')
+        + (it.mine ? `<button type="button" class="vc-edit" data-id="${esc(it.id)}" title="이 항목 수정" aria-label="수정">✎</button>` : '')
         + (it.mine ? `<button type="button" class="vc-del" data-id="${esc(it.id)}" title="이 항목 삭제" aria-label="삭제">✕</button>` : '')
         + `</li>`;
     });
@@ -2710,6 +2735,34 @@ function renderVisitChecklist(report) {
   box.querySelectorAll('.vc-del').forEach((b) => {
     b.addEventListener('click', () => { removeCustomCheck(vid, b.dataset.id); refreshVisitChecklist(report); });
   });
+  // 수정 진입
+  box.querySelectorAll('.vc-edit').forEach((b) => {
+    b.addEventListener('click', () => { _editingCheck = b.dataset.id; refreshVisitChecklist(report, { focusEdit: true }); });
+  });
+  // 수정 저장·취소
+  const ed = box.querySelector('.vc-editing');
+  if (ed) {
+    const save = () => {
+      const text = ed.querySelector('.vc-ed-text').value.trim();
+      if (!text) { ed.querySelector('.vc-ed-text').focus(); return; }
+      updateCustomCheck(vid, ed.dataset.id, {
+        text,
+        cat: (ed.querySelector('.vc-ed-cat').value || '기타').trim() || '기타',
+        pri: ed.querySelector('.vc-ed-pri').value,
+        why: (ed.querySelector('.vc-ed-why').value || '').trim(),
+      });
+      _editingCheck = null;
+      refreshVisitChecklist(report);
+    };
+    ed.querySelector('.vc-ed-save').addEventListener('click', save);
+    ed.querySelector('.vc-ed-cancel').addEventListener('click', () => { _editingCheck = null; refreshVisitChecklist(report); });
+    ed.querySelectorAll('.vc-ed-text, .vc-ed-why, .vc-ed-cat').forEach((inp) => {
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        if (e.key === 'Escape') { _editingCheck = null; refreshVisitChecklist(report); }
+      });
+    });
+  }
   // 추가
   const addNow = () => {
     const t = box.querySelector('.vc-in-text');
