@@ -2636,6 +2636,26 @@ function buildVisitChecklist(report) {
   return items;
 }
 const PRI_LABEL = { high: '필수', mid: '권장', low: '참고' };
+// 비슷한 성격의 분류를 한 덩어리로 — 항목이 20건을 넘으면 분류가 흩어져 읽기 어렵고,
+// 인쇄하면 같은 주제를 여러 장에 걸쳐 찾아다니게 된다. 방문 시 확인 순서와도 대체로 맞다.
+const VC_GROUPS = [
+  ['실체·재무', ['실체', '재무']],
+  ['인력·채용', ['채용']],
+  ['생산·설비·인증', ['설비', '기술', '인증', '제품']],
+  ['거래·판로', ['레퍼런스', '수출']],
+  ['기타·직접 추가', []],            // 위에 안 걸리는 분류와 직접 추가 항목
+];
+const PRI_ORDER = { high: 0, mid: 1, low: 2 };
+function groupChecklist(items) {
+  const rest = new Set(items.map((x) => x.cat).filter(Boolean));
+  VC_GROUPS.forEach(([, cats]) => cats.forEach((c) => rest.delete(c)));
+  return VC_GROUPS.map(([name, cats]) => {
+    const inGroup = items.filter((it) => (cats.length ? cats.includes(it.cat) : (!it.cat || rest.has(it.cat))));
+    // 그룹 안에서는 우선순위 순 — 필수부터 눈에 들어와야 한다
+    inGroup.sort((a, b) => (PRI_ORDER[a.pri] ?? 9) - (PRI_ORDER[b.pri] ?? 9));
+    return { name, items: inGroup };
+  }).filter((g) => g.items.length);
+}
 // 심층분석 등 비동기 결과 도착 시 체크리스트만 제자리 갱신(전체 재렌더 없이)
 function refreshVisitChecklist(report, opts = {}) {
   const old = document.getElementById('visitChecklist');
@@ -2667,39 +2687,43 @@ function renderVisitChecklist(report) {
   let html = `<h4>✅ 방문 전 체크리스트 <span>웹 기반 자동 도출 + 직접 추가 · 현장 확인용`
     + `${hi ? ` · 필수 ${hi}건` : ''}${items.length ? ` · 완료 ${done}/${items.length}` : ''}</span></h4>`;
 
+  // 한 항목의 <li> 문자열 — 그룹별로 여러 번 쓰므로 함수로 뽑는다
+  const rowHtml = (it) => {
+    const k = checkKeyOf(it);
+    // 수정 중인 항목은 입력 폼으로 대체 — 같은 자리에서 고치는 게 목록을 잃지 않는다
+    if (it.mine && it.id === _editingCheck) {
+      return `<li class="vc-editing" data-id="${esc(it.id)}"><div class="vc-form">`
+        + `<input type="text" class="vc-ed-text" maxlength="200" value="${esc(it.text || '')}">`
+        + `<select class="vc-ed-pri">`
+        + ['high', 'mid', 'low'].map((v) => `<option value="${v}"${it.pri === v ? ' selected' : ''}>${PRI_LABEL[v]}</option>`).join('')
+        + `</select>`
+        + `<button type="button" class="vc-in-btn vc-ed-save">저장</button>`
+        + `<button type="button" class="vc-ed-cancel">취소</button>`
+        + `</div><input type="text" class="vc-in-why vc-ed-why" maxlength="200" placeholder="근거·메모 (선택)" value="${esc(it.why || '')}"></li>`;
+    }
+    const on = checked.has(k);
+    return `<li class="vc-${esc(it.pri)}${on ? ' vc-done' : ''}" data-key="${esc(k)}">`
+      + `<input type="checkbox" id="vc-${esc(k)}"${on ? ' checked' : ''}><label for="vc-${esc(k)}">`
+      + `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
+      + `<span class="vc-cat">${esc(it.cat || '')}</span>`
+      + `<span class="vc-txt">${esc(it.text)}</span>`
+      + (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '')
+      + (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '')
+      + `</label>`
+      // 추가일자·수정·삭제는 label 격자 밖(행 맨 오른쪽)에 둔다.
+      // 격자 안에 넣었더니 4번째 항목이 되어 40px 첫 칸으로 밀리며 세로로 쪼개졌다.
+      + (it.mine ? `<span class="vc-own" title="직접 추가한 항목">${esc(it.at || '')}</span>` : '')
+      + (it.mine ? `<button type="button" class="vc-edit" data-id="${esc(it.id)}" title="이 항목 수정" aria-label="수정">✎</button>` : '')
+      + (it.mine ? `<button type="button" class="vc-del" data-id="${esc(it.id)}" title="이 항목 삭제" aria-label="삭제">✕</button>` : '')
+      + `</li>`;
+  };
+
   if (items.length) {
-    html += '<ul class="vc-list">';
-    items.forEach((it) => {
-      const k = checkKeyOf(it);
-      const on = checked.has(k);
-      // 수정 중인 항목은 입력 폼으로 대체 — 같은 자리에서 고치는 게 목록을 잃지 않는다
-      if (it.mine && it.id === _editingCheck) {
-        html += `<li class="vc-editing" data-id="${esc(it.id)}"><div class="vc-form">`
-          + `<input type="text" class="vc-ed-text" maxlength="200" value="${esc(it.text || '')}">`
-          + `<select class="vc-ed-pri">`
-          + ['high', 'mid', 'low'].map((v) => `<option value="${v}"${it.pri === v ? ' selected' : ''}>${PRI_LABEL[v]}</option>`).join('')
-          + `</select>`
-          + `<button type="button" class="vc-in-btn vc-ed-save">저장</button>`
-          + `<button type="button" class="vc-ed-cancel">취소</button>`
-          + `</div><input type="text" class="vc-in-why vc-ed-why" maxlength="200" placeholder="근거·메모 (선택)" value="${esc(it.why || '')}"></li>`;
-        return;
-      }
-      html += `<li class="vc-${esc(it.pri)}${on ? ' vc-done' : ''}" data-key="${esc(k)}">`
-        + `<input type="checkbox" id="vc-${esc(k)}"${on ? ' checked' : ''}><label for="vc-${esc(k)}">`
-        + `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
-        + `<span class="vc-cat">${esc(it.cat || '')}</span>`
-        + `<span class="vc-txt">${esc(it.text)}</span>`
-        + (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '')
-        + (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '')
-        + `</label>`
-        // 추가일자·삭제는 label 격자 밖(행 맨 오른쪽)에 둔다.
-        // 격자 안에 넣었더니 4번째 항목이 되어 40px 첫 칸으로 밀리며 세로로 쪼개졌다.
-        + (it.mine ? `<span class="vc-own" title="직접 추가한 항목">${esc(it.at || '')}</span>` : '')
-        + (it.mine ? `<button type="button" class="vc-edit" data-id="${esc(it.id)}" title="이 항목 수정" aria-label="수정">✎</button>` : '')
-        + (it.mine ? `<button type="button" class="vc-del" data-id="${esc(it.id)}" title="이 항목 삭제" aria-label="삭제">✕</button>` : '')
-        + `</li>`;
+    // 비슷한 분류끼리 묶어 그룹별로 낸다 — 같은 성격의 확인 항목이 흩어지지 않게
+    groupChecklist(items).forEach((g) => {
+      html += `<div class="vc-gh">${esc(g.name)}<span>${g.items.length}</span></div>`
+        + `<ul class="vc-list">${g.items.map(rowHtml).join('')}</ul>`;
     });
-    html += '</ul>';
   } else {
     html += '<div class="vc-empty">자동 도출된 항목이 없습니다 — 자료를 보다가 확인할 것이 생기면 아래에서 추가하세요.</div>';
   }

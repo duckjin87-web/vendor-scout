@@ -444,7 +444,42 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .minigrid { grid-template-columns: repeat(3, 1fr); }
-  @page { margin: 14mm; }
+
+  /* ── 인쇄 압축 ──
+     화면용 크기 그대로 뽑으면 방문 리포트가 예닐곱 장으로 늘어난다.
+     px로 지정된 값이 수십 군데라 개별 조정으로는 새 요소가 추가될 때마다 어긋난다.
+     리포트 안쪽 글자를 10px로 일괄 고정하고, 제목·수치만 예외로 되돌린다. */
+  .report, .report * { font-size: 10px !important; line-height: 1.35 !important; }
+  .summary .vinfo h2 { font-size: 14px !important; font-weight: 800; }
+  .block h3, .chkbox h3, .vcbox h4, .hirebox h4, .hpbox h4, .riskbox h3, .recallbox h3 { font-size: 11px !important; }
+  .ct b, .ct .v { font-size: 12px !important; }
+  .grade-badge { width: 42px; height: 42px; border-radius: 10px; }
+  .grade-badge { font-size: 22px !important; }
+  .field .v, .hire-head b { font-size: 11px !important; }   /* 수치는 본문보다 조금 크게 — 훑어볼 때 눈에 걸려야 한다 */
+
+  /* 여백 압축 */
+  .summary { padding: 10px 12px; margin-bottom: 8px; gap: 10px; }
+  .coreband { gap: 6px; margin-bottom: 8px; grid-template-columns: repeat(6, 1fr); }
+  .ct { padding: 8px 9px 7px; border-radius: 8px; }
+  .block, .chkbox, .vcbox, .hirebox, .hpbox, .riskbox, .recallbox {
+    padding: 9px 11px; margin-bottom: 8px; border-radius: 8px;
+  }
+  .blocks { gap: 8px; }
+  .field { padding: 4px 0; }
+  .chk-list li, .vc-list li, .hire-list li, .ib-tl li { padding: 4px 0; }
+
+  /* 두 단으로 나눠 세로 길이를 줄인다 — 항목은 단 사이에서 잘리지 않게 */
+  .vc-list, .chk-list { columns: 2; column-gap: 16px; }
+  .vc-list li, .chk-list li { break-inside: avoid; -webkit-column-break-inside: avoid; }
+  .vc-gh { break-after: avoid; }
+  .vcbox, .chkbox, .hirebox { break-inside: auto; }
+
+  /* 인쇄에 필요 없는 안내·보조 UI */
+  .chk-note, .vc-foot, .hire-warn, .livenote, .gennote, .srcstat, .recent,
+  .hp-skip, .hp-cands, .build-stamp, .ot-hint, .sd-mini, .vc-empty,
+  .vc-add, .vc-del, .vc-edit, .chk-add, .ib-more { display: none !important; }
+
+  @page { margin: 10mm; }
 }
 
 @media (max-width: 720px) {
@@ -573,6 +608,16 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .vcbox { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 15px 17px; box-shadow: var(--shadow); margin-bottom: 18px; }
 .vcbox h4 { margin: 0 0 10px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .vcbox h4 span { font-size: 11px; font-weight: 500; color: var(--faint); }
+/* 분류 그룹 머리글 */
+.vc-gh {
+  display: flex; align-items: center; gap: 6px; margin: 12px 0 4px;
+  font-size: 11.5px; font-weight: 800; color: var(--muted); letter-spacing: .01em;
+}
+.vc-gh:first-of-type { margin-top: 4px; }
+.vc-gh span {
+  font-size: 10px; font-weight: 700; color: var(--faint);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px;
+}
 .vc-list { list-style: none; margin: 0; padding: 0; }
 .vc-list li { display: flex; align-items: flex-start; gap: 9px; padding: 9px 2px; border-top: 1px solid var(--border); }
 .vc-list li:first-child { border-top: 0; }
