@@ -786,10 +786,11 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 /* 직접 추가한 항목도 자동 항목과 같은 모양으로 — 배경색 강조 없이 오른쪽에 추가일자만 */
 .vc-done > label { opacity: .5; }
 .vc-done .vc-txt { text-decoration: line-through; }
-/* 날짜는 같은 행의 본문(.vc-txt)과 같은 크기 — 혼자 작으면 다른 종류의 정보처럼 보인다 */
+/* 날짜는 같은 행 본문(.vc-txt 13px)보다 딱 1px 작게 — 눈에 띄게 작지 않으면서 보조 정보로 읽힌다.
+   크기가 1px 다르면 윗선이 어긋나므로 margin-top으로 첫 줄에 맞춘다. */
 .vc-own {
-  flex: 0 0 auto; align-self: flex-start;
-  font-size: 13px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums;
+  flex: 0 0 auto; align-self: flex-start; margin-top: 1px;
+  font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 .vc-edit, .vc-del {
   border: 0; background: transparent; color: var(--faint); cursor: pointer;
