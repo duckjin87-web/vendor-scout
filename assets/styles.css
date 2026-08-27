@@ -773,3 +773,43 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .ib-more li a { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ib-subtag { font-size: 10px; color: var(--faint); white-space: nowrap; flex: 0 0 auto; }
 .hp-skip { margin-top: 6px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+
+/* 체크리스트 직접 추가 */
+.chk-add {
+  margin-left: auto; border: 1px solid var(--border); background: var(--panel);
+  color: var(--accent); font-size: 11.5px; font-weight: 700; padding: 4px 10px;
+  border-radius: 8px; cursor: pointer; white-space: nowrap; transition: all .15s;
+}
+.chk-add:hover { border-color: var(--accent); background: var(--accent-soft); }
+.vc-empty { font-size: 12.5px; color: var(--muted); padding: 6px 0 2px; }
+.vc-mine { background: var(--accent-soft); border-radius: 8px; }
+.vc-done > label { opacity: .5; }
+.vc-done .vc-txt { text-decoration: line-through; }
+.vc-own { font-size: 10px; color: var(--accent); font-weight: 700; margin-left: 6px; white-space: nowrap; }
+.vc-del {
+  border: 0; background: transparent; color: var(--faint); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 2px 5px; border-radius: 6px; flex: 0 0 auto; align-self: start;
+}
+.vc-del:hover { color: var(--risk); background: var(--risk-bg); }
+.vc-add { margin-top: 12px; padding-top: 11px; border-top: 1px dashed var(--border); }
+.vc-add summary {
+  font-size: 12.5px; font-weight: 700; color: var(--accent); cursor: pointer;
+  list-style: none; display: inline-flex; align-items: center; gap: 5px;
+}
+.vc-add summary::-webkit-details-marker { display: none; }
+.vc-form { display: flex; gap: 7px; margin-top: 9px; flex-wrap: wrap; }
+.vc-form input, .vc-form select, .vc-in-why {
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  font-size: 12.5px; padding: 8px 10px; border-radius: 8px; font-family: inherit; outline: none;
+}
+.vc-form input:focus, .vc-form select:focus, .vc-in-why:focus { border-color: var(--accent); }
+.vc-in-text { flex: 1 1 260px; min-width: 0; }
+.vc-in-cat { flex: 0 0 90px; }
+.vc-in-pri { flex: 0 0 84px; cursor: pointer; }
+.vc-in-why { display: block; width: 100%; margin-top: 7px; }
+.vc-in-btn {
+  border: 0; background: var(--accent); color: #fff; font-weight: 700; font-size: 12.5px;
+  padding: 8px 16px; border-radius: 8px; cursor: pointer; flex: 0 0 auto;
+}
+.vc-in-btn:hover { filter: brightness(1.06); }
+@media print { .vc-add, .vc-del, .chk-add { display: none !important; } }

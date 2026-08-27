@@ -62,6 +62,49 @@ const EXCLUDED_KEY = 'vs_excluded';
 const getExcluded = () => { try { return new Set(JSON.parse(_ls(EXCLUDED_KEY) || '[]')); } catch { return new Set(); } };
 function toggleExcluded(key) { const s = getExcluded(); s.has(key) ? s.delete(key) : s.add(key); _sls(EXCLUDED_KEY, JSON.stringify([...s])); }
 
+// ── 사용자 추가 체크 항목 / 체크 상태 ──
+// 자동 도출 항목만으로는 부족하다. 자료를 훑다가 "이건 물어봐야겠다" 싶은 게 생기면
+// 그 자리에서 적어 방문 체크리스트에 넣을 수 있어야 한다. 업체별로 브라우저에 저장한다.
+// 체크 상태도 함께 저장한다 — 홈페이지 분석이 끝나면 목록이 다시 그려지는데,
+// 그때 이미 체크해둔 항목이 전부 풀려버리는 문제가 있었다.
+const CUSTOM_KEY = 'vs_custom_checks';   // { [vendorId]: [{id,text,cat,pri,at}] }
+const CHECKED_KEY = 'vs_checked';        // { [vendorId]: [itemKey, ...] }
+const _readMap = (k) => { try { return JSON.parse(_ls(k) || '{}') || {}; } catch { return {}; } };
+const _writeMap = (k, m) => _sls(k, JSON.stringify(m));
+
+const getCustomChecks = (vid) => (vid ? (_readMap(CUSTOM_KEY)[vid] || []) : []);
+function addCustomCheck(vid, item) {
+  if (!vid) return null;
+  const m = _readMap(CUSTOM_KEY);
+  const row = { id: `u${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, at: new Date().toISOString().slice(0, 10), ...item };
+  m[vid] = [...(m[vid] || []), row];
+  _writeMap(CUSTOM_KEY, m);
+  return row;
+}
+function removeCustomCheck(vid, id) {
+  const m = _readMap(CUSTOM_KEY);
+  if (!m[vid]) return;
+  m[vid] = m[vid].filter((x) => x.id !== id);
+  _writeMap(CUSTOM_KEY, m);
+}
+// 항목 식별키 — 자동 항목은 문구가 바뀌지 않는 한 같은 키를 유지해야 체크가 살아남는다
+function checkKeyOf(it) {
+  if (it.uid) return it.uid;
+  let h = 5381;
+  const s = `${it.cat}|${it.text}`;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return `a${h.toString(36)}`;
+}
+const getCheckedSet = (vid) => new Set(vid ? (_readMap(CHECKED_KEY)[vid] || []) : []);
+function toggleChecked(vid, key, on) {
+  if (!vid) return;
+  const m = _readMap(CHECKED_KEY);
+  const set = new Set(m[vid] || []);
+  on ? set.add(key) : set.delete(key);
+  m[vid] = [...set];
+  _writeMap(CHECKED_KEY, m);
+}
+
 // 필드/블록의 출처 문자열 → 소스 키 (제외 필터링용). 매핑 안 되는 항목(이동거리·PLT 등)은 항상 표시.
 function srcKeyOf(sourceStr) {
   const s = String(sourceStr || '');
@@ -2015,7 +2058,8 @@ function renderCheckOfficial(report) {
   const need = rows.filter((r) => r.sev === 'bad' || r.sev === 'warn').length;
   const box = el('div', 'chkbox chk-official');
   let html = `<h3>🏛 체크 필요사항 <b>· 기준정보 기반</b>` +
-    `<span class="chk-sum ${need ? 'on' : ''}">${need ? `확인 필요 ${need}건` : '특이사항 없음'}</span></h3>` +
+    `<span class="chk-sum ${need ? 'on' : ''}">${need ? `확인 필요 ${need}건` : '특이사항 없음'}</span>` +
+    `<button type="button" class="chk-add" data-chkadd="1">➕ 체크리스트에 추가</button></h3>` +
     `<div class="chk-note">공식 API(국세청·식약처·금융위·국민연금·산단공) 값을 서로 대조한 결과입니다.</div>`;
   html += '<ul class="chk-list">';
   rows.forEach((r) => {
@@ -2044,7 +2088,8 @@ function renderCheckWeb(report) {
   const box = el('div', 'chkbox chk-web');
   const downs = assess ? assess.downs : 0;
   let html = `<h3>🌐 체크 필요사항 <b>· 웹 기반</b>` +
-    `<span class="chk-sum ${downs ? 'on' : ''}">${downs ? `주의 신호 ${downs}건` : (timeline.length ? `신호 ${timeline.length}건` : `언급 ${oem.length + news.length}건`)}</span></h3>` +
+    `<span class="chk-sum ${downs ? 'on' : ''}">${downs ? `주의 신호 ${downs}건` : (timeline.length ? `신호 ${timeline.length}건` : `언급 ${oem.length + news.length}건`)}</span>` +
+    `<button type="button" class="chk-add" data-chkadd="1">➕ 체크리스트에 추가</button></h3>` +
     `<div class="chk-note">네이버 뉴스·웹문서에서 업체명이 실제 포함된 자료만 취합했습니다. 사실관계는 원문 확인 권장.</div>`;
 
   // 종합 판단(재량)
@@ -2585,37 +2630,116 @@ function buildVisitChecklist(report) {
 }
 const PRI_LABEL = { high: '필수', mid: '권장', low: '참고' };
 // 심층분석 등 비동기 결과 도착 시 체크리스트만 제자리 갱신(전체 재렌더 없이)
-function refreshVisitChecklist(report) {
+function refreshVisitChecklist(report, opts = {}) {
   const old = document.getElementById('visitChecklist');
   if (!old) return;
   const next = renderVisitChecklist(report);
   if (!next) return;
   next.id = 'visitChecklist';
   old.replaceWith(next);
+  // 연속으로 여러 건 적는 경우가 많아, 추가 직후에는 입력창을 열어둔 채 커서를 되돌린다
+  if (opts.keepAddOpen) {
+    const d = next.querySelector('#vcAdd');
+    if (d) { d.open = true; const t = next.querySelector('.vc-in-text'); if (t) t.focus(); }
+  }
 }
 function renderVisitChecklist(report) {
-  const items = buildVisitChecklist(report);
-  if (!items.length) return null;
+  const vid = (report.meta && report.meta.vendor_id) || null;
+  const auto = buildVisitChecklist(report);
+  const mine = getCustomChecks(vid).map((c) => ({ ...c, uid: c.id, mine: true }));
+  const items = [...auto, ...mine];
+  // 자동 항목이 없어도 직접 추가할 수 있어야 하므로 패널 자체는 항상 그린다
   const box = el('div', 'vcbox');
+  const checked = getCheckedSet(vid);
   const hi = items.filter((i) => i.pri === 'high').length;
-  let html = `<h4>✅ 방문 전 체크리스트 <span>웹 기반(기사·채용공고·기술/인증·판매제품)에서 자동 도출 · 현장 확인용${hi ? ` · 필수 ${hi}건` : ''}</span></h4>`;
-  html += '<ul class="vc-list">';
-  items.forEach((it, idx) => {
-    html += `<li class="vc-${esc(it.pri)}">` +
-      `<input type="checkbox" id="vc${idx}"><label for="vc${idx}">` +
-      `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri])}</span>` +
-      `<span class="vc-cat">${esc(it.cat)}</span>` +
-      `<span class="vc-txt">${esc(it.text)}</span>` +
-      (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '') +
-      (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '') +
-      `</label></li>`;
-  });
-  html += '</ul>';
-  html += '<div class="vc-foot">📎 = 근거(웹 출처) · 💡 = 해석 인사이트 · 우선순위: <b>필수</b>/<b>권장</b>/<b>참고</b>. ' +
-    '공식 API 대조 결과는 아래 <b>🏛 체크 필요사항 · 기준정보 기반</b>을 참고하세요. 인쇄해서 방문 시 체크하세요.</div>';
+  const done = items.filter((i) => checked.has(checkKeyOf(i))).length;
+  let html = `<h4>✅ 방문 전 체크리스트 <span>웹 기반 자동 도출 + 직접 추가 · 현장 확인용`
+    + `${hi ? ` · 필수 ${hi}건` : ''}${items.length ? ` · 완료 ${done}/${items.length}` : ''}</span></h4>`;
+
+  if (items.length) {
+    html += '<ul class="vc-list">';
+    items.forEach((it) => {
+      const k = checkKeyOf(it);
+      const on = checked.has(k);
+      html += `<li class="vc-${esc(it.pri)}${it.mine ? ' vc-mine' : ''}${on ? ' vc-done' : ''}" data-key="${esc(k)}">`
+        + `<input type="checkbox" id="vc-${esc(k)}"${on ? ' checked' : ''}><label for="vc-${esc(k)}">`
+        + `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
+        + `<span class="vc-cat">${esc(it.cat)}</span>`
+        + `<span class="vc-txt">${esc(it.text)}</span>`
+        + (it.mine ? `<span class="vc-own">직접 추가${it.at ? ` · ${esc(it.at)}` : ''}</span>` : '')
+        + (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '')
+        + (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '')
+        + `</label>`
+        + (it.mine ? `<button type="button" class="vc-del" data-id="${esc(it.id)}" title="이 항목 삭제" aria-label="삭제">✕</button>` : '')
+        + `</li>`;
+    });
+    html += '</ul>';
+  } else {
+    html += '<div class="vc-empty">자동 도출된 항목이 없습니다 — 자료를 보다가 확인할 것이 생기면 아래에서 추가하세요.</div>';
+  }
+
+  // ── 직접 추가 ──
+  const cats = [...new Set([...items.map((x) => x.cat), '실체', '재무', '인증', '설비', '품질', '납기', '단가', '계약', '기타'])].filter(Boolean);
+  html += `<details class="vc-add" id="vcAdd"><summary>➕ 확인할 항목 직접 추가</summary>`
+    + `<div class="vc-form">`
+    + `<input type="text" class="vc-in-text" placeholder="확인할 내용 (예: 최근 3년 감사보고서 사본 요청)" maxlength="200">`
+    + `<input type="text" class="vc-in-cat" placeholder="분류" list="vcCats" maxlength="12" value="기타">`
+    + `<datalist id="vcCats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>`
+    + `<select class="vc-in-pri"><option value="high">필수</option><option value="mid" selected>권장</option><option value="low">참고</option></select>`
+    + `<button type="button" class="vc-in-btn">추가</button>`
+    + `</div>`
+    + `<input type="text" class="vc-in-why" placeholder="근거·메모 (선택) — 어떤 자료를 보고 적었는지" maxlength="200">`
+    + `</details>`;
+
+  html += '<div class="vc-foot">📎 = 근거(웹 출처) · 💡 = 해석 인사이트 · 우선순위: <b>필수</b>/<b>권장</b>/<b>참고</b>. '
+    + '체크 상태와 직접 추가한 항목은 이 브라우저에 업체별로 저장됩니다. '
+    + '공식 API 대조 결과는 아래 <b>🏛 체크 필요사항 · 기준정보 기반</b>을 참고하세요. 인쇄해서 방문 시 체크하세요.</div>';
   box.innerHTML = html;
+
+  // 체크 상태 저장 — 재렌더(홈페이지 분석 완료 등)에도 살아남게
+  box.querySelectorAll('.vc-list input[type=checkbox]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const li = cb.closest('li');
+      toggleChecked(vid, li.dataset.key, cb.checked);
+      li.classList.toggle('vc-done', cb.checked);
+    });
+  });
+  // 직접 추가 항목 삭제
+  box.querySelectorAll('.vc-del').forEach((b) => {
+    b.addEventListener('click', () => { removeCustomCheck(vid, b.dataset.id); refreshVisitChecklist(report); });
+  });
+  // 추가
+  const addNow = () => {
+    const t = box.querySelector('.vc-in-text');
+    const text = t.value.trim();
+    if (!text) { t.focus(); return; }
+    addCustomCheck(vid, {
+      text,
+      cat: (box.querySelector('.vc-in-cat').value || '기타').trim() || '기타',
+      pri: box.querySelector('.vc-in-pri').value,
+      why: (box.querySelector('.vc-in-why').value || '').trim(),
+    });
+    refreshVisitChecklist(report, { keepAddOpen: true });
+  };
+  box.querySelector('.vc-in-btn').addEventListener('click', addNow);
+  box.querySelectorAll('.vc-in-text, .vc-in-why').forEach((inp) => {
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addNow(); } });
+  });
   return box;
 }
+
+// '➕ 체크리스트에 추가' — 체크 필요사항을 보다가 누르면 방문 체크리스트의 입력창으로 데려간다.
+// 위임 처리라 패널이 다시 그려져도 계속 동작한다.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-chkadd]');
+  if (!b) return;
+  const d = document.getElementById('vcAdd');
+  if (!d) return;
+  d.open = true;
+  d.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const t = d.querySelector('.vc-in-text');
+  if (t) setTimeout(() => t.focus(), 260);
+});
 
 function render(report, opts = {}) {
   currentReport = report;
