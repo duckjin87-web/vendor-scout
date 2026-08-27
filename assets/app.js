@@ -2676,7 +2676,6 @@ function renderVisitChecklist(report) {
       if (it.mine && it.id === _editingCheck) {
         html += `<li class="vc-editing" data-id="${esc(it.id)}"><div class="vc-form">`
           + `<input type="text" class="vc-ed-text" maxlength="200" value="${esc(it.text || '')}">`
-          + `<input type="text" class="vc-ed-cat" maxlength="12" list="vcCats" value="${esc(it.cat || '')}">`
           + `<select class="vc-ed-pri">`
           + ['high', 'mid', 'low'].map((v) => `<option value="${v}"${it.pri === v ? ' selected' : ''}>${PRI_LABEL[v]}</option>`).join('')
           + `</select>`
@@ -2688,7 +2687,7 @@ function renderVisitChecklist(report) {
       html += `<li class="vc-${esc(it.pri)}${on ? ' vc-done' : ''}" data-key="${esc(k)}">`
         + `<input type="checkbox" id="vc-${esc(k)}"${on ? ' checked' : ''}><label for="vc-${esc(k)}">`
         + `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
-        + `<span class="vc-cat">${esc(it.cat)}</span>`
+        + `<span class="vc-cat">${esc(it.cat || '')}</span>`
         + `<span class="vc-txt">${esc(it.text)}</span>`
         + (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '')
         + (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '')
@@ -2706,14 +2705,12 @@ function renderVisitChecklist(report) {
   }
 
   // ── 직접 추가 ──
-  const cats = [...new Set([...items.map((x) => x.cat), '실체', '재무', '인증', '설비', '품질', '납기', '단가', '계약', '기타'])].filter(Boolean);
   html += `<details class="vc-add" id="vcAdd"><summary>➕ 확인할 항목 직접 추가</summary>`
     + `<div class="vc-form">`
     + `<input type="text" class="vc-in-text" placeholder="확인할 내용 (예: 감사보고서 사본 요청)" maxlength="200">`
-    + `<input type="text" class="vc-in-cat" placeholder="분류" list="vcCats" maxlength="12" value="기타">`
-    + `<datalist id="vcCats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>`
     + `<select class="vc-in-pri"><option value="high">필수</option><option value="mid" selected>권장</option><option value="low">참고</option></select>`
     + `<button type="button" class="vc-in-btn">추가</button>`
+    + `<button type="button" class="vc-in-cancel">취소</button>`
     + `</div>`
     + `<input type="text" class="vc-in-why" placeholder="근거·메모 (선택)" maxlength="200">`
     + `</details>`;
@@ -2747,7 +2744,6 @@ function renderVisitChecklist(report) {
       if (!text) { ed.querySelector('.vc-ed-text').focus(); return; }
       updateCustomCheck(vid, ed.dataset.id, {
         text,
-        cat: (ed.querySelector('.vc-ed-cat').value || '기타').trim() || '기타',
         pri: ed.querySelector('.vc-ed-pri').value,
         why: (ed.querySelector('.vc-ed-why').value || '').trim(),
       });
@@ -2756,7 +2752,7 @@ function renderVisitChecklist(report) {
     };
     ed.querySelector('.vc-ed-save').addEventListener('click', save);
     ed.querySelector('.vc-ed-cancel').addEventListener('click', () => { _editingCheck = null; refreshVisitChecklist(report); });
-    ed.querySelectorAll('.vc-ed-text, .vc-ed-why, .vc-ed-cat').forEach((inp) => {
+    ed.querySelectorAll('.vc-ed-text, .vc-ed-why').forEach((inp) => {
       inp.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); save(); }
         if (e.key === 'Escape') { _editingCheck = null; refreshVisitChecklist(report); }
@@ -2770,15 +2766,23 @@ function renderVisitChecklist(report) {
     if (!text) { t.focus(); return; }
     addCustomCheck(vid, {
       text,
-      cat: (box.querySelector('.vc-in-cat').value || '기타').trim() || '기타',
       pri: box.querySelector('.vc-in-pri').value,
       why: (box.querySelector('.vc-in-why').value || '').trim(),
     });
     refreshVisitChecklist(report, { keepAddOpen: true });
   };
+  const cancelAdd = () => {
+    const d = box.querySelector('#vcAdd');
+    box.querySelectorAll('.vc-in-text, .vc-in-why').forEach((i) => { i.value = ''; });
+    if (d) d.open = false;
+  };
   box.querySelector('.vc-in-btn').addEventListener('click', addNow);
+  box.querySelector('.vc-in-cancel').addEventListener('click', cancelAdd);
   box.querySelectorAll('.vc-in-text, .vc-in-why').forEach((inp) => {
-    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addNow(); } });
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addNow(); }
+      if (e.key === 'Escape') { e.preventDefault(); cancelAdd(); }
+    });
   });
   return box;
 }

@@ -818,12 +818,9 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 
 .vc-form {
   display: grid; gap: 8px; margin-top: 10px; align-items: stretch;
-  grid-template-columns: minmax(0, 1fr) 116px 96px auto;      /* 내용 · 분류 · 우선순위 · 추가 */
+  grid-template-columns: minmax(0, 1fr) 96px auto auto;   /* 내용 · 우선순위 · 확인 · 취소 */
 }
-.vc-editing .vc-form {
-  margin-top: 0;
-  grid-template-columns: minmax(0, 1fr) 116px 96px auto auto;  /* + 취소 */
-}
+.vc-editing .vc-form { margin-top: 0; }
 .vc-form input, .vc-form select, .vc-in-why {
   width: 100%; min-width: 0; box-sizing: border-box;
   border: 1px solid var(--border); background: var(--panel); color: var(--text);
@@ -834,20 +831,19 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .vc-in-why { display: block; margin-top: 8px; }
-.vc-in-btn, .vc-ed-cancel {
+.vc-in-btn, .vc-ed-cancel, .vc-in-cancel {
   white-space: nowrap; font-size: 13px; font-weight: 700;
   padding: 9px 18px; border-radius: 9px; cursor: pointer; font-family: inherit;
 }
 .vc-in-btn { border: 0; background: var(--accent); color: #fff; }
 .vc-in-btn:hover { filter: brightness(1.06); }
-.vc-ed-cancel { border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
-.vc-ed-cancel:hover { border-color: var(--muted); color: var(--text); }
+.vc-ed-cancel, .vc-in-cancel { border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
+.vc-ed-cancel:hover, .vc-in-cancel:hover { border-color: var(--muted); color: var(--text); }
 
 /* 좁은 화면에서는 내용칸을 한 줄로 빼고 나머지를 아래에 나란히 둔다 */
+/* 좁은 화면 — 내용은 한 줄 전체, 아래에 우선순위·버튼을 나란히 */
 @media (max-width: 760px) {
-  .vc-form { grid-template-columns: minmax(0, 1fr) 96px auto; }
-  .vc-editing .vc-form { grid-template-columns: minmax(0, 1fr) 96px auto; }
+  .vc-form { grid-template-columns: minmax(0, 1fr) auto auto; }
   .vc-in-text, .vc-ed-text { grid-column: 1 / -1; }
-  .vc-in-cat, .vc-ed-cat { grid-column: 1; }
 }
 @media print { .vc-add, .vc-del, .vc-edit, .chk-add { display: none !important; } }
