@@ -295,6 +295,23 @@ function htmlToText(html) {
 }
 // 인증 키워드 사전 — 홈페이지에 게재된 인증 문구 탐지(과대광고 아닌 표기 여부만)
 // grp: 제조품질 / 국가규제 / 친환경·윤리 / 시험·평가 / 기업인증
+// ── 인증 '보유' 판정 ──
+// 키워드가 본문에 나왔다는 것만으로 인증을 가졌다고 볼 수 없다. 유스케어팜 사례가 정확히
+// 그랬다 — 보도자료의 "원료가 미국화장품협회에 등록, cGMP(미국 FDA 의약품 품질 관리 기준)"
+// 라는 설명 문장에서 CGMP를 뽑아, 식약처 GMP API가 '미등재'라고 답한 업체에 CGMP를 달았다.
+// 그래서 문장 단위로 보고 (1) 소유를 뜻하는 표현이 있는지 (2) 남의 것을 가리키는 문맥은
+// 아닌지를 함께 본다. 근거가 약하면 버리지 않고 '언급'으로 낮춰 표시한다.
+const OWN_CUES = /(인증|취득|획득|보유|적합\s*판정|적합업소|인정|등재|지정|받았|받아|완료|유지|승인|허가|등록(?!된\s*원료)|certified|accredited)/;
+// 남의 인증·설명·계획을 가리키는 문맥 — 이게 걸리면 '보유'로 보지 않는다
+const THIRD_PARTY = /(원료|성분|협회|기준(?:이|입니다|을)|이란|란\s|의미|추진|예정|계획|준비\s*중|목표|협력사|고객사|파트너사|공급사|타사|해당\s*없|미보유|미인증|미등재)/;
+function certOwnership(sentence) {
+  const t = String(sentence || '');
+  if (!t) return { level: 'weak', why: '근거 문장 없음' };
+  if (THIRD_PARTY.test(t)) return { level: 'weak', why: '타사·원료·설명 문맥으로 보임' };
+  if (OWN_CUES.test(t)) return { level: 'own', why: null };
+  return { level: 'mention', why: '보유를 뜻하는 표현 없이 언급만 확인' };
+}
+
 const CERT_PATTERNS = [
   // ── 제조·품질 시스템 ──
   { label: 'CGMP (우수화장품제조)', grp: '제조품질', re: /\bCGMP\b|우수화장품\s*제조|우수화장품\s*및\s*품질관리/i },
@@ -511,14 +528,29 @@ async function gatherSiteText(baseUrl, companyName, seedUrls) {
   baseUrl = got.url || baseUrl;                 // 실제로 열린 주소 기준으로 링크 해석
   const first = harvestFromHtml(html, baseUrl);
   const texts = [first.text]; const pages = [baseUrl];
-  const REL = /(인증|certif|품질|quality|생산|시설|facilit|공장|factory|설비|장비|equip|회사\s*소개|about|company|연구|R&?D|사업|business|수출|export|product|제품|브랜드|brand|오시는|contact)/i;
+  // 관련 페이지 우선순위 — 설비·인증·시설 페이지가 뒤로 밀려 수집에서 빠지는 일이 있었다.
+  // (유스케어팜: 회사소개 계열 6개만 받고 제품·기술 페이지를 놓쳤다)
+  const REL_TIERS = [
+    [3, /(설비|장비|equip|시설|facilit|공장|factory|생산|production|제조|manufactur|라인|클린룸)/i],
+    [3, /(인증|certif|품질|quality|GMP|ISO|허가|특허|patent)/i],
+    [2, /(제품|product|브랜드|brand|품목|라인업|item)/i],
+    [2, /(회사\s*소개|about|company|기업|연혁|history|overview|비전)/i],
+    [1, /(연구|R&?D|기술|tech|사업|business|수출|export|글로벌|global)/i],
+    [1, /(오시는|contact|location|찾아|고객)/i],
+  ];
+  const relRank = (str) => { for (const [w, re] of REL_TIERS) if (re.test(str)) return w; return 0; };
   const seen = new Set([baseUrl.replace(/\/+$/, '')]); let targets = [];
+  const scored = [];
   for (const l of extractLinks(html, baseUrl)) {
     const key = l.href.replace(/\/+$/, ''); if (seen.has(key)) continue;
     // 프레임 본문은 주제어와 무관해도 반드시 포함(구형 프레임셋 사이트의 실제 내용)
-    if (l.anchor === '프레임 본문' || REL.test(l.anchor) || REL.test(l.href)) { targets.push(l.href); seen.add(key); }
-    if (targets.length >= 5) break;
+    if (l.anchor === '프레임 본문') { targets.push(l.href); seen.add(key); continue; }
+    const w = Math.max(relRank(l.anchor || ''), relRank(l.href || ''));
+    // 게시판 글 하나하나는 보도자료라 사실 추출에 해로우면서 수집 칸만 잡아먹는다 — 목록만 허용
+    if (w && !/wr_id=|\bidx=|articleView|view\.php\?/i.test(l.href)) scored.push({ href: l.href, key, w });
   }
+  scored.sort((a, b) => b.w - a.w);
+  for (const c of scored) { if (seen.has(c.key)) continue; seen.add(c.key); targets.push(c.href); if (targets.length >= 14) break; }
   // ★ 검색결과가 알려준 실제 내용 페이지를 최우선으로 넣는다.
   //   (예: 루트는 프레임셋인데 검색결과는 /about/intro.html 을 가리키는 경우 — 추측 경로보다 확실)
   for (const sd of (seedUrls || [])) {
@@ -535,7 +567,7 @@ async function gatherSiteText(baseUrl, companyName, seedUrls) {
       if (targets.length >= 6) break;
     }
   }
-  targets = targets.slice(0, 6);
+  targets = targets.slice(0, 14);   // 회사소개 계열만 받고 설비·제품 페이지를 놓치던 문제
   const rawHtmls = [html];
   const subs = await Promise.all(targets.map((u) =>
     proxyOnlyGet('fetchPage', { url: u }).then((p) => ({ u, h: (p && p.text) || '' })).catch(() => null)));
@@ -709,7 +741,7 @@ const EQUIP_LEX = [
   { grp: '충전 설비', re: /(액상충전기|스킨충전기|토너충전기|로션충전기|에센스충전기|세럼충전기|크림충전기|연고충전기|겔충전기|점도액충전기|피스톤충전기|서보충전기|중량식충전기|유량식충전기|정량충전기|다열충전기|자동충전기|반자동충전기|튜브충전기|병충전기|자용기충전기|드로퍼충전기|스포이드충전기|에어리스용기충전기|펌프용기충전기|스틱충전기|립밤충전기|립글로스충전기|가온충전기|마스크팩충전기|파우치충전기|샘플충전기|형상파우치충전기|분말충전기|타정기|질소충전설비|다노즐충전기|충전노즐|자동용기공급기|정렬기|세병기|누액검사기|중량검사기|멀티셀|단발기|대용량\s?충전)/gi },
   { grp: '포장 설비', re: /(자동캡핑기|인라인캡핑기|토크캡핑기|펌프캡핑기|스포이드캡핑기|캡핑기|튜브실링기|고주파실링기|초음파실링기|파우치실링기|마스크팩실링기|알루미늄실링기|인덕션실러|열접착기|자동라벨링기|원형라벨러|양면라벨러|수축라벨러|라벨러|로트인쇄기|유통기한인쇄기|잉크젯프린터|레이저마킹기|자동카토너|카토너|박스포장기|케이스포장기|필름포장기|수축포장기|랩핑기|번들포장기|세트포장기|비전검사기|자동검사기|금속검출기|중량선별기|봉함기|테이핑기|박스실러|팔레타이저|로봇패킹|컨베이어|자동이송시스템|바코드검증기|QR코드검증기)/gi },
   { grp: '품질·시험 설비', re: /(pH\s?미터|Brookfield\s?점도계|점도계|비중계|수분측정기|굴절계|색차계|색도계|입도분석기|원심분리기|항온항습기|항온조|안정성시험기|가속시험기|광안정성시험기|동결융해시험기|열충격시험기|미생물시험설비|배양기|무균작업대|클린벤치|오토클레이브|ICP-?MS|HPLC|GC-?MS|\bGC\b|FT-?IR|UV-?VIS|밀봉강도시험기|낙하시험기|인장시험기)/gi },
-  { grp: '시설·안전', re: /(클린룸|클린벤치|공조설비|항온항습|국소배기장치|국소배기|집진설비|집진기|방폭설비|방폭인증|폐수처리설비|대기오염방지시설|압력용기\s?검사|소방시설|위험물관리|SUS\s?316L|SUS\s?304|데드레그|클린유틸리티|압축공기\s?품질관리|정제수\s?품질관리|스마트팩토리|MES|ERP|제조실행시스템)/gi },
+  { grp: '시설·안전', re: /(클린룸|클린벤치|공조설비|항온항습|국소배기장치|국소배기|집진설비|집진기|방폭설비|방폭인증|폐수처리설비|대기오염방지시설|압력용기\s?검사|소방시설|위험물관리|SUS\s?316L|SUS\s?304|데드레그|클린유틸리티|압축공기\s?품질관리|정제수\s?품질관리|스마트팩토리|\bMES\b|\bERP\b|제조실행시스템)/gi },
 ];
 const CERT_LEX = [
   { grp: '등록·인허가', re: /(화장품제조업\s?등록|화장품책임판매업\s?등록|책임판매관리자|제조관리자|품질관리자|제조소\s?현장심사|GMP\s?적합판정|제조소\s?등록)/gi },
@@ -865,14 +897,24 @@ async function siteDeepHeuristic(name, hpUrl, seeds) {
   const T = g.text;
   const arrOrNull = (a) => (a && a.length ? a : null);
   const business_type = arrOrNull(['OEM', 'ODM', 'OGM', 'OBM'].filter((k) => new RegExp(`\\b${k}\\b`, 'i').test(T)));
-  const quality_certifications = arrOrNull(CERT_PATTERNS.filter((c) => c.re.test(T)).map((c) => c.label));
+  // 인증은 '보유'로 판정된 것만 사실 필드에 넣는다. 언급뿐인 것은 아래 탭에 별도 표시한다.
+  const certAll = CERT_PATTERNS.filter((c) => c.re.test(T)).map((c) => {
+    const ev = pickSentences(T, c.re, { cap: 1 })[0] || null;
+    return { label: c.label, grp: c.grp, evidence: ev ? ev.slice(0, 110) : null, ...certOwnership(ev) };
+  });
+  const quality_certifications = arrOrNull(certAll.filter((c) => c.level === 'own').map((c) => c.label));
   const product_categories = arrOrNull(PROD_CATS.filter(([, re]) => re.test(T)).map(([l]) => l));
   const export_markets = arrOrNull(EXPORT_MKTS.filter((c) => new RegExp(`수출[^\\n]{0,40}${c}|${c}[^\\n]{0,10}수출|${c}\\s*(진출|법인|현지)`, 'i').test(T) || (/(수출|해외|글로벌|export)/i.test(T) && new RegExp(`\\b${c}\\b`).test(T))));
   // 집계·채용 사이트 문구가 섞여 들어오면 사실이 아닌 문장이 필드에 박히므로 걸러낸다
   const JUNK = /(공장찾기|위세브|기업정보|기업분석|신용등급|매출액순위|채용|구인|연봉|복리후생|근무환경|자동등록방지|보안절차|전화번호정보없음|정보없음|무단수집)/;
   const clean = (arr) => (arr || []).filter((s) => !JUNK.test(s));
-  const equipment = arrOrNull(clean(pickSentences(T, EQUIP_RE, { cap: 6 })));
-  const production_items = arrOrNull(clean(pickSentences(T, /(출시|납품|수상|대표\s*제품|주요\s*제품|베스트셀러|히트\s*상품|개발\s*완료|런칭)/i, { cap: 4 })));
+  // 문장을 통째로 담으면 보도자료 서술이 설비·생산품으로 둔갑한다(유스케어팜: '가교 히아루론산
+  // 제조 기술을 화장품에 적용한…' 문장이 설비로 잡혔다). 실제 설비어가 든 문장만 남긴다.
+  const hasEquipTerm = (str) => EQUIP_LEX.some((l) => new RegExp(l.re.source, 'i').test(str));
+  const equipment = arrOrNull(clean(pickSentences(T, EQUIP_RE, { cap: 10 })).filter(hasEquipTerm).slice(0, 6));
+  const production_items = arrOrNull(clean(pickSentences(T, /(출시|납품|수상|대표\s*제품|주요\s*제품|베스트셀러|히트\s*상품|개발\s*완료|런칭)/i, { cap: 8 }))
+    // 제품명·제형이 실제로 들어간 문장만 — 홍보 서술은 제외
+    .filter((x) => PROD_CATS.some(([, re]) => re.test(x)) || /(브랜드|제품|라인업|시리즈)/.test(x)).slice(0, 4));
   const production_sites = arrOrNull(clean(pickSentences(T, /(제\s*\d\s*공장|본사\s*공장|생산\s*(공장|사업장|시설)|제조소).{0,60}(시|군|구|도)\b|(경기|서울|인천|부산|대구|충|전|경|강원|제주)[^\n]{0,40}(공장|생산)/, { cap: 3 })));
   const rnd = /(기업부설연구소|부설\s*연구소|R\s*&?\s*D\s*(센터|연구소)|연구개발\s*(센터|본부)|기술연구원)/i.test(T);
   const rnd_centers = rnd ? ['기업부설연구소·R&D 조직 언급(홈페이지 게재)'] : null;
@@ -894,10 +936,7 @@ async function siteDeepHeuristic(name, hpUrl, seeds) {
   // ── 탭 데이터 ── 인증 / 설비 / 생산CAPA / 기타
   const assets = imageAssets(g.html || '');
   // ① 인증 — 그룹별로 묶고 근거 문장을 함께
-  const certDetail = CERT_PATTERNS.filter((c) => c.re.test(T)).map((c) => {
-    const ev = pickSentences(T, c.re, { cap: 1 });
-    return { label: c.label, grp: c.grp, evidence: ev[0] ? ev[0].slice(0, 90) : null };
-  });
+  const certDetail = certAll;
   // ② 설비 — 충전/제조/포장/부대. 본문·이미지 단서를 각각 확인해 신뢰도 부여
   const fillEquip = FILL_EQUIP.map((e) => {
     const inTextHit = e.text.test(T);
@@ -2278,6 +2317,39 @@ function renderHomepageInto(box, hp) {
   box.innerHTML = html;
 }
 
+// ── 공식 API와 홈페이지 주장 대조 ──
+// 홈페이지 문구는 회사가 스스로 쓴 것이라 사실 확인이 안 된다. 같은 항목을 공공 API가
+// 알고 있다면 그쪽이 정답이다. 특히 CGMP는 식약처 적합업소 명단이 유일한 근거인데,
+// 사이트 문구만 보고 인증으로 표시하면 미인증 업체가 인증 업체로 뒤바뀐다.
+function reconcileDeep(state, report) {
+  const d = state && state.data;
+  if (!d) return state;
+  const conflicts = [];
+  // 식약처 GMP 조회 결과 — src_status의 gmp 항목이 판정 근거
+  const gmpSrc = ((report.meta && report.meta.src_status) || []).find((x) => x.key === 'gmp');
+  const gmpListed = !!(gmpSrc && gmpSrc.ok && !gmpSrc.warn);
+  const gmpChecked = !!gmpSrc;
+  const claimsCgmp = (arr) => (arr || []).some((c) => /CGMP|우수화장품/i.test(typeof c === 'string' ? c : c.label));
+  if (gmpChecked && !gmpListed && (claimsCgmp(d.quality_certifications) || claimsCgmp(d.tabs && d.tabs.cert))) {
+    conflicts.push({
+      label: 'CGMP',
+      detail: '홈페이지에는 CGMP 관련 문구가 있으나 식약처 CGMP 적합업소 명단에는 없습니다. '
+        + '해외 cGMP·원료 인증·계획 단계를 가리키는 문구일 수 있습니다 — 방문 시 인증서 원본과 적용 범위를 확인하세요.',
+    });
+    // 사실 필드에서는 뺀다. 명단이 정답이고, 여기 남으면 미인증 업체가 인증 업체로 보인다.
+    if (d.quality_certifications) {
+      d.quality_certifications = d.quality_certifications.filter((c) => !/CGMP|우수화장품/i.test(c));
+      if (!d.quality_certifications.length) d.quality_certifications = null;
+    }
+    if (d.tabs && Array.isArray(d.tabs.cert)) {
+      d.tabs.cert = d.tabs.cert.map((c) => (/CGMP|우수화장품/i.test(c.label)
+        ? { ...c, level: 'conflict', why: '식약처 적합업소 명단에 없음' } : c));
+    }
+  }
+  state.conflicts = conflicts.length ? conflicts : null;
+  return state;
+}
+
 // ── 🔬 홈페이지 심층분석 — 실제 생산 CAPA·인증 구조화 추출 ──
 // 기본: 무료 키워드 휴리스틱(API키 불필요). 옵션: ANTHROPIC_API_KEY가 있으면 LLM 웹조사로 보강.
 async function siteDeepExtract(name, url) {
@@ -2363,6 +2435,17 @@ function renderSiteDeepInto(box, state) {
         '인증·주소·사업장 등 <b>사실 항목은 홈페이지 본문에서만</b> 추출합니다.'
       : '⚠ 페이지 본문이 적어 메타·이미지·임베드 데이터에서 보조 추출했습니다.'}</div>`;
   }
+  // 공식 API와 어긋나는 주장은 맨 위에 — 아래 목록만 보면 인증 보유로 오해한다
+  if (state.conflicts && state.conflicts.length) {
+    html += '<div class="sd-conflict">' + state.conflicts.map((c) =>
+      `<b>⚠ ${esc(c.label)} — 공식자료와 불일치</b><i>${esc(c.detail)}</i>`).join('') + '</div>';
+  }
+  // 수집 범위 — 몇 페이지를 봤는지 알아야 '없다'는 결과를 믿을 수 있다
+  if (Array.isArray(state.pages) && state.pages.length) {
+    html += `<div class="sd-scope">수집 ${state.pages.length}개 페이지`
+      + (hv && hv.chars ? ` · 본문 ${Math.round(hv.chars / 1000)}천자` : '')
+      + ` <em>이 범위 안에서 찾은 내용입니다</em></div>`;
+  }
   const tabs = d.tabs || {};
   const certs = tabs.cert || [];
   const certTerms = tabs.certTerms || [];
@@ -2406,7 +2489,9 @@ function renderSiteDeepInto(box, state) {
       certs.forEach((c) => { (byGrp[c.grp || '기타'] = byGrp[c.grp || '기타'] || []).push(c); });
       for (const [grp, list] of Object.entries(byGrp)) {
         html += `<div class="sd-sec">${esc(grp)}</div><ul class="cert-list">` + list.map((c) =>
-          `<li><span class="cert-b">${esc(c.label)}</span>` +
+          `<li class="cert-${esc(c.level || 'own')}"><span class="cert-b">${esc(c.label)}</span>` +
+          (c.level && c.level !== 'own' ? `<span class="cert-lv">${esc({ conflict: '⚠ 공식자료와 불일치', mention: '언급만 확인', weak: '근거 약함' }[c.level] || c.level)}</span>` : '') +
+          (c.why ? `<i class="cert-why">${esc(c.why)}</i>` : '') +
           (c.evidence ? `<em>${esc(c.evidence)}</em>` : '') + `</li>`).join('') + '</ul>';
       }
       // 사이트에 그대로 적혀 있던 품질시스템·밸리데이션·규제 용어
@@ -3018,7 +3103,8 @@ function render(report, opts = {}) {
       }
       siteDeepAnalyze(report.meta.vendor_name, hpUrl, seeds)
         .then((state) => {
-          report._siteDeep = state;
+          report._siteDeep = reconcileDeep(state, report);   // 공식 API와 대조해 모순을 표시
+
           paintDeep(report._siteDeep);
           refreshVisitChecklist(report); // 인증·제형·설비 확인항목을 체크리스트에 반영
           saveLastReport(report);
