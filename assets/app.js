@@ -2936,9 +2936,19 @@ function render(report, opts = {}) {
   const refName = (m && m.ref_point && m.ref_point.name) || '한국콜마';
   const coord = m && m.visit_coord;
   if (visitAddr) {
-    const mapBtn = el('button', 'act', '🗺 카카오맵에서 공장 위치');
-    mapBtn.title = `카카오맵에서 「${visitAddr}」 위치를 로드맵으로 표시`;
-    mapBtn.addEventListener('click', () => window.open(`https://map.kakao.com/?q=${encodeURIComponent(visitAddr)}`, '_blank', 'noopener'));
+    // 위치만 띄우면 '얼마나 먼지'를 다시 손으로 찍어봐야 한다. 기준점에서의 경로로 바로 연다.
+    // 기준점 주소가 없을 때만 단순 위치 검색으로 물러선다.
+    const refAddr = (m && m.ref_point && m.ref_point.addr) || '';
+    const dest = routeAddr || visitAddr;
+    const canRoute = !!refAddr;
+    const mapBtn = el('button', 'act', canRoute ? '🗺 카카오맵 경로' : '🗺 카카오맵에서 공장 위치');
+    mapBtn.title = canRoute
+      ? `${refName}(${refAddr}) → 「${dest}」 카카오맵 길찾기`
+      : `카카오맵에서 「${visitAddr}」 위치를 로드맵으로 표시`;
+    const mapUrl = canRoute
+      ? `https://map.kakao.com/?sName=${encodeURIComponent(refAddr)}&eName=${encodeURIComponent(dest)}`
+      : `https://map.kakao.com/?q=${encodeURIComponent(visitAddr)}`;
+    mapBtn.addEventListener('click', () => window.open(mapUrl, '_blank', 'noopener'));
     actions.appendChild(mapBtn);
   }
   // 🚗 티맵 길찾기 (앱 스킴) — 정확 좌표가 있을 때만. 모바일 티맵 앱에서 경로 안내.
