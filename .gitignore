@@ -1,0 +1,12 @@
+# API 키 — 절대 커밋 금지. 키는 Vercel 환경변수에만 두고,
+# 로컬 실행 시 `vercel env pull`로 받은 파일은 여기서 막는다.
+.env
+.env.*
+!.env.example
+
+# Vercel CLI 작업 폴더
+.vercel/
+
+node_modules/
+.DS_Store
+*.log
