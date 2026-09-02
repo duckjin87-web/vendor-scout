@@ -1682,14 +1682,17 @@ function extFinance(text, host, link) {
   const t = String(text || '').replace(/\s+/g, ' ');
   const out = [];
   for (const [key, re] of EXT_FIN_KEYS) {
-    // 라벨 뒤 40자 안에서 첫 금액을 찾는다. 표·목록 어느 형태든 라벨과 값은 붙어 있다.
-    const r = new RegExp(`${re.source}[^0-9\\-]{0,12}(-?[0-9,.]+\\s*(?:억|백만|원))`, 'i');
+    // 라벨과 값 사이에 표 구분자·단위 안내가 끼는 사이트가 많아 간격을 넉넉히 둔다.
+    // (인크루트 기업정보는 "매출액 (2024.12) 44억" 처럼 연도가 중간에 들어간다)
+    // 간격에서 숫자를 막으면 "매출액 (2024.12) 44억"처럼 연도가 끼는 표기를 놓친다.
+    // 아무 문자나 허용하되 최소 매칭으로 두어, 단위(억·백만·원)가 붙은 첫 금액을 잡는다.
+    const r = new RegExp(`${re.source}[\\s\\S]{0,30}?(-?[0-9,.]+\\s*(?:억|백만|원))`, 'i');
     const m = t.match(r);
     if (!m) continue;
     const eok = extAmountEok(m[m.length - 1]);
     if (eok == null || !isFinite(eok)) continue;
-    // 같은 문장 안의 연도(2024·'24년 등)를 기준연도로 본다 — 없으면 미상
-    const around = t.slice(Math.max(0, m.index - 60), m.index + 60);
+    // 값 주변의 연도를 기준연도로 본다 — 라벨 앞뒤 모두 살핀다(없으면 미상)
+    const around = t.slice(Math.max(0, m.index - 80), m.index + 80);
     const years = [...new Set((around.match(/20\d{2}/g) || []).map(Number)
       .filter((y) => y >= 2015 && y <= new Date().getFullYear()))].sort();
     out.push({ key, eok, years: years.length ? years : null, host, link });
@@ -1779,7 +1782,18 @@ async function hiringTrace(nm) {
       const tgt = posts.find((x) => x.link === pg.link);
       if (tgt && !tgt.dates.length) { tgt.dates = ds.slice(0, 3); tgt.dateFrom = 'page'; found.push(`날짜 ${ds[0]}`); }
     }
-    extDiag.push({ host: pg.host, kind: pg.kind, ok: true, chars: txt.length, found: found.length ? found.join('·') : '해당 정보 없음' });
+    // 재무 라벨은 있는데 값을 못 뽑았다면 원문 일부를 남긴다.
+    // 사이트마다 표기가 달라, 실제 문구를 봐야 패턴을 맞출 수 있다.
+    let sample = null;
+    if (!fin.length) {
+      const at = txt.search(/(매출액|매출|자본총계|당기순이익|재무정보)/);
+      if (at >= 0) sample = txt.slice(at, at + 160).replace(/\s+/g, ' ').trim();
+    }
+    extDiag.push({
+      host: pg.host, kind: pg.kind, ok: true, chars: txt.length,
+      found: found.length ? found.join('·') : '해당 정보 없음',
+      ...(sample ? { finSample: sample } : {}),
+    });
   });
   // 같은 항목이 여러 사이트에서 나오면 연도가 있는 쪽을 우선해 1건만 남긴다
   const finBest = new Map();
@@ -2156,7 +2170,15 @@ function financeBlock(report) {
   if (hist.length) {
     const years = hist.map((d) => d.year);
     const w = el('div', 'finwrap');
-    w.appendChild(el('div', 'finhead', `<span>재무 지표 ${years.length}개년 추이 (${years[0]}~${years[years.length - 1]}, 최신연도 기준)</span><span class="finnote">지표별 자기 스케일 — 추이 비교용</span>`));
+    // 외부사이트에서 채운 연도는 표시를 남긴다 — 공시와 같은 선에 그려지므로 구분이 없으면 오해한다
+    const extYears = hist.filter((d) => d.src === 'ext').map((d) => d.year);
+    const extHost = (hist.find((d) => d.src === 'ext') || {}).host;
+    w.appendChild(el('div', 'finhead',
+      `<span>재무 지표 ${years.length}개년 추이 (${years[0]}~${years[years.length - 1]}, 최신연도 기준)</span>`
+      + `<span class="finnote">지표별 자기 스케일 — 추이 비교용</span>`
+      + (extYears.length
+        ? `<span class="finext">${extYears.join('·')}년은 외부사이트자료${extHost ? `(${esc(extHost)})` : ''} — 공시 아님</span>`
+        : '')));
     const grid = el('div', 'sparkgrid');
     FIN_SERIES.forEach((s) => {
       grid.insertAdjacentHTML('beforeend', sparkCard({ name: s.name, unit: s.unit, color: s.color, invert: s.invert, vals: hist.map(s.g) }, years));

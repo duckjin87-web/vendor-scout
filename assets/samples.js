@@ -898,7 +898,7 @@ function assembleLiveReport(name, corp, res) {
   // (재무 조립보다 앞에 둔다 — 아래에서 외부사이트 재무를 붙일 때 필요하다)
   const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
   const hiring = hireRaw && typeof analyzeHiring === 'function'
-    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null)
+    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag)
     : null;
 
   const flAll = R.finance && R.finance.ok ? listOf(R.finance.data, ['response.body.items.item', 'body.items']) : [];
@@ -909,12 +909,35 @@ function assembleLiveReport(name, corp, res) {
     const prev = byYear.get(y);
     if (!prev || finScore(it) > finScore(prev)) byYear.set(y, it); // 매출·자산 등 값이 더 채워진 레코드 우선
   });
-  // 최신 6개년까지 표시(연도 누락이 있는 업체도 흐름이 보이도록)
-  const years = [...byYear.keys()].sort((a, b) => b - a).slice(0, 6).sort((a, b) => a - b);
+  // ── 채용사이트 재무를 연도 계열에 합친다 ──
+  // 금융위가 끊긴 뒤 연도를 채우는 건 이 값뿐이라, 추이 그래프에도 함께 올려야 흐름이 보인다.
+  // 다만 공시가 아니므로 연도에 표시를 남기고(src: 'ext') 공식 연도가 있으면 공식을 우선한다.
+  const extByYear = new Map();
+  ((hireRaw && hireRaw.extFin) || []).forEach((x) => {
+    (x.years || []).forEach((y) => {
+      const cur = extByYear.get(y) || { year: y, src: 'ext', host: String(x.host || '').replace(/^www\./, '') };
+      if (x.key === '매출액') cur.revenue = x.eok;
+      else if (x.key === '영업이익') cur.operatingProfit = x.eok;
+      else if (x.key === '자산총계') cur.assets = x.eok;
+      else if (x.key === '자본총계') cur.equity = x.eok;
+      else if (x.key === '당기순이익') cur.netIncome = x.eok;
+      extByYear.set(y, cur);
+    });
+  });
+  // 가장 최근 6개년 — 공식·외부를 합친 뒤 자른다(공시가 끊긴 업체도 최근 흐름이 보이게)
+  const years = [...new Set([...byYear.keys(), ...extByYear.keys()])]
+    .sort((a, b) => b - a).slice(0, 6).sort((a, b) => a - b);
   let finance, finance_history = [];
   if (years.length) {
-    finance_history = years.map((y) => { const it = byYear.get(y); return { year: y, revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft), assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt) }; });
-    const L = finance_history[finance_history.length - 1];
+    finance_history = years.map((y) => {
+      const it = byYear.get(y);
+      if (it) return { year: y, revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft), assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt), src: 'official' };
+      const e = extByYear.get(y) || {};
+      return { year: y, revenue: e.revenue ?? null, operatingProfit: e.operatingProfit ?? null, assets: e.assets ?? null, debt: null, capital: null, src: 'ext', host: e.host || null };
+    });
+    // 재무 '필드'(매출액·총자산 등)는 공식 자료 기준을 유지한다 — 외부값은 별도 행으로 이미 표시된다
+    const offRows = finance_history.filter((r) => r.src === 'official');
+    const L = (offRows.length ? offRows : finance_history)[(offRows.length ? offRows : finance_history).length - 1];
     const eok = (v) => (v != null ? `${v}억 원` : null);
     // ★ 재무는 회계연도 기준 — as_of를 '조회일'이 아니라 '해당 회계연도'로(옛 자료가 최신처럼 보이는 문제 방지).
     //   재무는 통상 1년 지연 → 최신연도가 (조회연도-2)보다 오래되면 'stale'로 표기하고 등급 강등.
