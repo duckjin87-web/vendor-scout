@@ -894,6 +894,13 @@ function assembleLiveReport(name, corp, res) {
   ];
 
   // 재무 — 연도별 '가장 완전한' 레코드 채택(같은 해 별도/연결 복수 제출 대비) 후 최신 5개년
+  // 채용공고 판정 — 공고 건수는 채용 인원이 아니고 마감분은 검색에서 사라지므로 전부 추정이다
+  // (재무 조립보다 앞에 둔다 — 아래에서 외부사이트 재무를 붙일 때 필요하다)
+  const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
+  const hiring = hireRaw && typeof analyzeHiring === 'function'
+    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null)
+    : null;
+
   const flAll = R.finance && R.finance.ok ? listOf(R.finance.data, ['response.body.items.item', 'body.items']) : [];
   const byYear = new Map();
   const finScore = (r) => (r.enpSaleAmt ? 1 : 0) + (r.enpTastAmt ? 1 : 0) + (r.enpCptlAmt ? 1 : 0) + (r.enpBzopPft ? 1 : 0);
@@ -940,18 +947,27 @@ function assembleLiveReport(name, corp, res) {
       f(k, null, 'D', '금융위 재무정보 API', null, why('finance', '금융위 재무 API 미수록 — 상장·공시대상 위주(비상장은 DART/신용조회로 확인)')));
   }
 
+  // ── 외부사이트 재무 보완 ──
+  // 금융위 재무가 몇 년 전에서 끊긴 업체는 그 이후를 알 방법이 없다. 채용 사이트 기업정보에
+  // 실린 매출·자본총계·순이익을 보태되, 공시가 아니므로 항목명에 '외부사이트자료'를 못 박아
+  // 공식 수치와 섞이지 않게 한다. 등급도 C(추정·프록시)로 둔다.
+  const extRows = ((hireRaw && hireRaw.extFin) || []).map((x) => {
+    const yrs = x.years && x.years.length ? `${x.years.map((y) => String(y).slice(2)).join('·')}년 ` : '';
+    const host = String(x.host || '').replace(/^www\./, '');
+    return f(`${x.key} — ${yrs}외부사이트자료`,
+      `${Number(x.eok).toLocaleString()}억 원`, 'C', `${host} 기업정보`, null,
+      `★ 공시자료가 아니라 채용 사이트가 자체 수집·표기한 값입니다(${host}). `
+      + '금융위 재무가 끊긴 이후를 가늠하는 참고치이며, 산출 기준과 시점이 공시와 다를 수 있습니다 — '
+      + '방문 전 최근 결산서로 반드시 대조하세요.');
+  });
+  if (extRows.length) finance = [...finance, ...extRows];
+
   const all = [...basic, ...capacity, ...finance];
   const order = { A: 0, B: 1, C: 2, D: 3 };
   const gs = all.filter((x) => !x.data_gap).map((x) => order[x.grade]).sort((a, b) => a - b);
   const overall = gs.length ? ['A', 'B', 'C', 'D'][gs[Math.floor(gs.length / 2)]] : 'D';
   const crosscheck = all.filter((x) => x.data_gap || x.grade === 'C')
     .map((x) => ({ key: x.key, expected: x.value, verified: null, match: null, src_type: x.source }));
-
-  // 채용공고 판정 — 공고 건수는 채용 인원이 아니고 마감분은 검색에서 사라지므로 전부 추정이다
-  const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
-  const hiring = hireRaw && typeof analyzeHiring === 'function'
-    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null)
-    : null;
 
   // 📡 소스별 조회 상태 — 왜 비었는지 화면에서 바로 보이게 (모바일에선 hover 불가)
   // key: 제외 토글용 소스 키(없으면 항상 포함). part: res 응답 키.

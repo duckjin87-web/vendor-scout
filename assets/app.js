@@ -1615,18 +1615,32 @@ function hireRole(text) {
   for (const [label, re] of HIRE_ROLES) if (re.test(s)) return label;
   return '기타·불명';
 }
-// 공고 텍스트에서 연·월을 뽑는다. 두 자리 연도는 오탐이 많아 쓰지 않는다.
+// 공고 텍스트에서 연·월을 뽑는다.
+// 채용 사이트 제목에는 "2026년 유스케어팜 채용", "2026년 진행 중인 공고 확인하기"처럼
+// 검색 노출용으로 '현재 연도'가 박혀 있다. 공고 시점이 아니라 페이지를 언제 보든 올해가 붙는다.
+// 유스케어팜 조회에서 10건 중 8건이 이 문구였고, 그 탓에 전부 최근 12개월로 집계돼
+// "최근 10건 vs 직전 0건 → 증설 급증"이라는 없는 신호가 만들어졌다.
+// 그래서 근거가 분명한 두 가지만 인정한다.
+//   ① 등록·게시·마감처럼 날짜 라벨이 붙은 것   ② 연·월·일이 모두 있는 완전한 날짜
+// 맨연도(2026년)는 버린다. 두 자리 연도도 오탐이 많아 쓰지 않는다.
+const HIRE_DATE_LABEL = /(등록|게시|작성|수정|마감|접수|모집|공고|시작|종료)\s*(?:일자|일|기간)?\s*[:：~\-]?\s*(20\d{2})\s*[.\-/년]\s*(\d{1,2})?/g;
+const HIRE_DATE_FULL = /(20\d{2})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})/g;
 function hireDates(text) {
   const out = new Set();
   const s = String(text || '');
-  const re = /(20\d{2})\s*[.\-/년]\s*(\d{1,2})?/g;
+  const maxY = new Date().getFullYear() + 1;
+  const take = (y, mo) => {
+    y = Number(y);
+    if (y < 2000 || y > maxY) return;                                // 사업자번호 등 숫자 오탐 차단
+    const m = mo ? Math.min(12, Math.max(1, Number(mo))) : null;
+    out.add(m ? `${y}-${String(m).padStart(2, '0')}` : String(y));
+  };
+  // 라벨형: (1)라벨 (2)연 (3)월  /  완전일자형: (1)연 (2)월 (3)일 — 그룹 위치가 달라 따로 읽는다
   let m;
-  while ((m = re.exec(s))) {
-    const y = Number(m[1]);
-    if (y < 2000 || y > new Date().getFullYear() + 1) continue;      // 사업자번호 등 숫자 오탐 차단
-    const mo = m[2] ? Math.min(12, Math.max(1, Number(m[2]))) : null;
-    out.add(mo ? `${y}-${String(mo).padStart(2, '0')}` : String(y));
-  }
+  const rl = new RegExp(HIRE_DATE_LABEL.source, 'g');
+  while ((m = rl.exec(s))) take(m[2], m[3]);
+  const rf = new RegExp(HIRE_DATE_FULL.source, 'g');
+  while ((m = rf.exec(s))) take(m[1], m[2]);
   return [...out];
 }
 
@@ -1640,6 +1654,47 @@ function hireHeadcount(text) {
   const n = Number(m[1].replace(/,/g, ''));
   if (!isFinite(n) || n <= 0 || n > 100000) return null;
   return { count: n, asOf: m[2] ? `${m[2]}${m[3] ? '-' + String(m[3]).padStart(2, '0') : ''}` : null };
+}
+
+// 채용 사이트 기업정보에는 매출·자본총계·순이익이 실려 있다(인크루트·잡코리아·캐치 등).
+// 금융위 재무가 몇 년 전에서 끊긴 업체의 '그 이후'를 가늠할 수 있는 몇 안 되는 무료 단서다.
+// 다만 공시가 아니라 사이트가 자체 수집·표기한 값이라 공식 자료와 같은 칸에 두면 안 된다.
+// 뽑아 오되 출처를 '외부사이트자료'로 못 박아 구분한다.
+const EXT_FIN_KEYS = [
+  ['매출액', /(매출액|매출)/],
+  ['영업이익', /영업\s*이익/],
+  ['당기순이익', /(?:당기\s*)?순이익/],
+  ['자본총계', /자본\s*총계/],
+  ['자산총계', /자산\s*총계/],
+];
+// "44억", "4,400백만", "4,400,000,000원" → 억 단위 숫자
+function extAmountEok(str) {
+  const s = String(str || '').replace(/\s/g, '');
+  let m = s.match(/^-?([\d,.]+)억/);
+  if (m) return Math.round(Number(m[1].replace(/,/g, '')) * (s.startsWith('-') ? -1 : 1));
+  m = s.match(/^-?([\d,]+)백만/);
+  if (m) return Math.round(Number(m[1].replace(/,/g, '')) / 100) * (s.startsWith('-') ? -1 : 1);
+  m = s.match(/^-?([\d,]{6,})원?/);
+  if (m) { const n = Number(m[1].replace(/,/g, '')); if (n >= 1e6) return Math.round(n / 1e8) * (s.startsWith('-') ? -1 : 1); }
+  return null;
+}
+function extFinance(text, host, link) {
+  const t = String(text || '').replace(/\s+/g, ' ');
+  const out = [];
+  for (const [key, re] of EXT_FIN_KEYS) {
+    // 라벨 뒤 40자 안에서 첫 금액을 찾는다. 표·목록 어느 형태든 라벨과 값은 붙어 있다.
+    const r = new RegExp(`${re.source}[^0-9\\-]{0,12}(-?[0-9,.]+\\s*(?:억|백만|원))`, 'i');
+    const m = t.match(r);
+    if (!m) continue;
+    const eok = extAmountEok(m[m.length - 1]);
+    if (eok == null || !isFinite(eok)) continue;
+    // 같은 문장 안의 연도(2024·'24년 등)를 기준연도로 본다 — 없으면 미상
+    const around = t.slice(Math.max(0, m.index - 60), m.index + 60);
+    const years = [...new Set((around.match(/20\d{2}/g) || []).map(Number)
+      .filter((y) => y >= 2015 && y <= new Date().getFullYear()))].sort();
+    out.push({ key, eok, years: years.length ? years : null, host, link });
+  }
+  return out;
 }
 
 async function hiringTrace(nm) {
@@ -1679,8 +1734,12 @@ async function hiringTrace(nm) {
   });
 
   // ③ 상위 채용 사이트 기업정보 페이지에서 사원수(기준일)를 확보 — 인력 증감의 두 번째 관측치
-  const headHosts = posts.filter((p) => /jobkorea|saramin|catch\.co\.kr/i.test(p.host)).slice(0, 3);
+  // 기업정보 페이지(공고 상세가 아닌 회사 페이지)를 골라 사원수·재무를 함께 뽑는다
+  const headHosts = posts.filter((p) => /jobkorea|saramin|catch\.co\.kr|incruit|jobplanet/i.test(p.host))
+    .sort((a, b) => (/\/companies\/\d+$|Co_Read|company/i.test(b.link) ? 1 : 0) - (/\/companies\/\d+$|Co_Read|company/i.test(a.link) ? 1 : 0))
+    .slice(0, 4);
   const heads = [];
+  const extFin = [];
   if (headHosts.length) {
     const pages = await mapLimit(headHosts, 2, async (p) => {
       try {
@@ -1690,11 +1749,21 @@ async function hiringTrace(nm) {
     });
     pages.forEach((pg) => {
       if (!pg || !pg.text) return;
-      const hc = hireHeadcount(htmlToText(pg.text));
+      const txt = htmlToText(pg.text);
+      const hc = hireHeadcount(txt);
       if (hc) heads.push({ ...hc, host: pg.host, link: pg.link });
+      extFin.push(...extFinance(txt, pg.host, pg.link));
     });
   }
-  return { posts, heads };
+  // 검색 스니펫에도 "매출 44억"처럼 실려 오는 경우가 있어 함께 훑는다(페이지 접속 실패 대비)
+  posts.forEach((p) => extFin.push(...extFinance(`${p.title} ${p.desc}`, p.host, p.link)));
+  // 같은 항목이 여러 사이트에서 나오면 연도가 있는 쪽을 우선해 1건만 남긴다
+  const finBest = new Map();
+  extFin.forEach((f) => {
+    const cur = finBest.get(f.key);
+    if (!cur || (!cur.years && f.years)) finBest.set(f.key, f);
+  });
+  return { posts, heads, extFin: [...finBest.values()] };
 }
 
 // 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
