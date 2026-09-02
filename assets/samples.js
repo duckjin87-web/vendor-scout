@@ -1027,8 +1027,11 @@ function assembleLiveReport(name, corp, res) {
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
     R.hiring ? (hiring && hiring.ok
       ? { key: 'hiring', name: '채용공고 추적', ok: true, warn: hiring.signals.some((x) => x.level === 'high'),
-          detail: `공고 ${hiring.posts.length}건${hiring.spanYears ? ` · ${hiring.spanYears}개년` : ''}`
-            + (hiring.signals.length ? ` · 신호 ${hiring.signals.length}건` : '') }
+          // '1개년'만 적으면 10건이 모두 그 해인 것처럼 읽힌다 — 날짜가 확인된 건수를 밝힌다
+          detail: `공고 ${hiring.posts.length}건 · 날짜확인 ${hiring.dated}건`
+            + (hiring.undated ? `(미상 ${hiring.undated})` : '')
+            + (hiring.signals.length ? ` · 신호 ${hiring.signals.length}건` : '')
+            + ((hiring.extDiag || []).some((d) => !d.ok) ? ' · 일부 페이지 접속 실패' : '') }
       : { key: 'hiring', name: '채용공고 추적', ok: false, warn: false, detail: (hiring && hiring.reason) || '공고 없음' }) : null,
     R.oemTrace ? { key: 'oem', name: '웹 언급 추적', ok: oem_trace.length > 0, warn: false,
       detail: oem_trace.length

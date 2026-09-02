@@ -1733,41 +1733,67 @@ async function hiringTrace(nm) {
     });
   });
 
-  // ③ 상위 채용 사이트 기업정보 페이지에서 사원수(기준일)를 확보 — 인력 증감의 두 번째 관측치
-  // 기업정보 페이지(공고 상세가 아닌 회사 페이지)를 골라 사원수·재무를 함께 뽑는다
-  const headHosts = posts.filter((p) => /jobkorea|saramin|catch\.co\.kr|incruit|jobplanet/i.test(p.host))
-    .sort((a, b) => (/\/companies\/\d+$|Co_Read|company/i.test(b.link) ? 1 : 0) - (/\/companies\/\d+$|Co_Read|company/i.test(a.link) ? 1 : 0))
-    .slice(0, 4);
+  // ③ 검색 스니펫 먼저 훑는다.
+  //    인크루트 스니펫에는 "사원수 8명 · 매출 44억"이 그대로 실려 오는데, 지금까지 재무만 보고
+  //    사원수는 페이지에서만 찾았다. 그래서 눈앞에 있는 값을 놓쳤다(heads가 빈 채로 나왔다).
   const heads = [];
   const extFin = [];
-  if (headHosts.length) {
-    const pages = await mapLimit(headHosts, 2, async (p) => {
-      try {
-        const r = await proxyOnlyGet('fetchPage', { url: p.link });
-        return { host: p.host, link: p.link, text: (r && r.text) || '' };
-      } catch { return null; }
-    });
-    pages.forEach((pg) => {
-      if (!pg || !pg.text) return;
-      const txt = htmlToText(pg.text);
-      const hc = hireHeadcount(txt);
-      if (hc) heads.push({ ...hc, host: pg.host, link: pg.link });
-      extFin.push(...extFinance(txt, pg.host, pg.link));
-    });
-  }
-  // 검색 스니펫에도 "매출 44억"처럼 실려 오는 경우가 있어 함께 훑는다(페이지 접속 실패 대비)
-  posts.forEach((p) => extFin.push(...extFinance(`${p.title} ${p.desc}`, p.host, p.link)));
+  posts.forEach((p) => {
+    const blob = `${p.title} ${p.desc}`;
+    const hc = hireHeadcount(blob);
+    if (hc) heads.push({ ...hc, host: p.host, link: p.link, from: 'snippet' });
+    extFin.push(...extFinance(blob, p.host, p.link));
+  });
+
+  // ④ 페이지를 직접 연다. 두 가지를 노린다.
+  //    (가) 기업정보 페이지 — 사원수·재무의 정확한 값과 기준연도
+  //    (나) 공고·공고목록 페이지 — 스니펫에 없는 등록일·수정일(연도 미상 공고를 되살린다)
+  const isCompanyPage = (u) => /\/companies\/\d+$|Co_Read|company-info|companies\/[^/]+$/i.test(u);
+  const targets = [];
+  const pushT = (p, kind) => { if (!targets.some((t) => t.link === p.link) && targets.length < 8) targets.push({ ...p, kind }); };
+  posts.filter((p) => isCompanyPage(p.link)).forEach((p) => pushT(p, 'company'));
+  posts.filter((p) => !p.dates.length && !isCompanyPage(p.link)).forEach((p) => pushT(p, 'post'));
+
+  // 접속 결과를 남긴다 — 지금까지 실패를 조용히 삼켜, 값이 안 나온 게 차단 때문인지
+  // 페이지에 정보가 없어서인지 구분할 수 없었다.
+  const extDiag = [];
+  const pages = await mapLimit(targets, 3, async (p) => {
+    try {
+      const r = await proxyOnlyGet('fetchPage', { url: p.link });
+      const text = (r && r.text) || '';
+      return { ...p, text, status: r && r.status };
+    } catch (e) { return { ...p, text: '', err: (e && e.message) || String(e) }; }
+  });
+  pages.forEach((pg) => {
+    if (!pg) return;
+    if (!pg.text) { extDiag.push({ host: pg.host, kind: pg.kind, ok: false, why: pg.err || `본문 없음(HTTP ${pg.status || '?'})` }); return; }
+    const txt = htmlToText(pg.text);
+    const found = [];
+    const hc = hireHeadcount(txt);
+    if (hc) { heads.push({ ...hc, host: pg.host, link: pg.link, from: 'page' }); found.push('사원수'); }
+    const fin = extFinance(txt, pg.host, pg.link);
+    if (fin.length) { extFin.push(...fin); found.push(`재무 ${fin.length}`); }
+    // 페이지에서 찾은 날짜를 해당 공고에 돌려준다 — 스니펫에 없던 등록일이 여기 있다
+    const ds = hireDates(txt);
+    if (ds.length) {
+      const tgt = posts.find((x) => x.link === pg.link);
+      if (tgt && !tgt.dates.length) { tgt.dates = ds.slice(0, 3); tgt.dateFrom = 'page'; found.push(`날짜 ${ds[0]}`); }
+    }
+    extDiag.push({ host: pg.host, kind: pg.kind, ok: true, chars: txt.length, found: found.length ? found.join('·') : '해당 정보 없음' });
+  });
   // 같은 항목이 여러 사이트에서 나오면 연도가 있는 쪽을 우선해 1건만 남긴다
   const finBest = new Map();
   extFin.forEach((f) => {
     const cur = finBest.get(f.key);
     if (!cur || (!cur.years && f.years)) finBest.set(f.key, f);
   });
-  return { posts, heads, extFin: [...finBest.values()] };
+  // 사원수는 기준일이 있는 값을 우선한다(페이지 > 스니펫)
+  heads.sort((a, b) => (b.asOf ? 1 : 0) - (a.asOf ? 1 : 0) || (b.from === 'page' ? 1 : 0) - (a.from === 'page' ? 1 : 0));
+  return { posts, heads, extFin: [...finBest.values()], extDiag };
 }
 
 // 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
-function analyzeHiring(posts, heads, npsCount, npsAsOf) {
+function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag) {
   if (!posts || !posts.length) return { ok: false, reason: '채용 사이트에서 이 업체 공고를 찾지 못했습니다', posts: [], heads: heads || [] };
   const now = new Date();
   const curY = now.getFullYear();
@@ -1847,17 +1873,22 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf) {
     const diff = emp - h.count;
     headTrend = { site: h, nps: { count: emp, asOf: npsAsOf || null }, diff };
     if (Math.abs(diff) >= Math.max(3, h.count * 0.1)) {
+      // 기준일이 없으면 언제 값인지 알 수 없어 증감으로 단정할 수 없다. 불일치로만 알린다.
+      const dated = !!h.asOf;
       signals.push({
-        kind: diff > 0 ? 'expand' : 'shrink', level: 'mid',
-        title: diff > 0 ? '인력 증가 확인' : '인력 감소 확인',
-        detail: `${h.host} 공시 사원수 ${h.count}명${h.asOf ? `(${h.asOf} 기준)` : ''} → 국민연금 가입자 ${emp}명${npsAsOf ? `(${npsAsOf} 기준)` : ''} · ${diff > 0 ? '+' : ''}${diff}명`,
-        ask: diff > 0 ? '증원 사유(수주 증가·증설)와 신규 인력의 배치 라인을 확인하세요.' : '감소 사유(수주 축소·자동화·외주 전환)를 확인하세요.',
+        kind: dated ? (diff > 0 ? 'expand' : 'shrink') : 'churn', level: 'mid',
+        title: dated ? (diff > 0 ? '인력 증가 확인' : '인력 감소 확인') : '인력 수치 불일치',
+        detail: `${h.host} 표기 사원수 ${h.count}명${h.asOf ? `(${h.asOf} 기준)` : '(기준일 미상)'} ↔ 국민연금 가입자 ${emp}명${npsAsOf ? `(${npsAsOf} 기준)` : ''} · 차이 ${diff > 0 ? '+' : ''}${diff}명`
+          + (dated ? '' : ' — 채용 사이트 값이 언제 것인지 표기돼 있지 않아 증감으로 볼 수 없습니다.'),
+        ask: dated
+          ? (diff > 0 ? '증원 사유(수주 증가·증설)와 신규 인력의 배치 라인을 확인하세요.' : '감소 사유(수주 축소·자동화·외주 전환)를 확인하세요.')
+          : '현재 상시 근무 인원을 직접 확인하세요. 국민연금 가입자수가 더 최신이며, 채용 사이트 표기는 갱신이 늦는 경우가 많습니다.',
       });
     }
   }
 
   return {
-    ok: true, posts, heads: heads || [], byYear, byRole,
+    ok: true, posts, heads: heads || [], extDiag: extDiag || null, byYear, byRole,
     dated: dated.length, undated: undated.length,
     recent, prior, spanYears, intensity, headTrend,
     signals: signals.sort((a, b) => (b.level === 'high' ? 1 : 0) - (a.level === 'high' ? 1 : 0)),
