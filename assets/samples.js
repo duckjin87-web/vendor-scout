@@ -984,10 +984,22 @@ function assembleLiveReport(name, corp, res) {
       : (x.agree
         ? `${srcs.length}개 사이트 값 일치(${hosts})`
         : `⚠ 사이트 간 값 불일치 — ${srcs.map((v) => `${v.host} ${v.eok}억`).join(' / ')}`);
+    // 같은 해 공시값이 있으면 함께 대조한다 — 사이트 값이 얼마나 믿을 만한지 바로 보인다
+    const OFF_KEY = { 매출액: 'revenue', 영업이익: 'operatingProfit', 자산총계: 'assets' };
+    const offRow = x.year ? finance_history.find((r) => r.year === x.year && r.src === 'official') : null;
+    const offVal = offRow && OFF_KEY[x.key] ? offRow[OFF_KEY[x.key]] : null;
+    let vsOff = '';
+    if (offVal != null) {
+      const gap = Number(x.eok) - offVal;
+      const pct = offVal ? Math.round(Math.abs(gap) / Math.abs(offVal) * 100) : null;
+      vsOff = gap === 0
+        ? ` 같은 해 공시값과 일치(${offVal}억).`
+        : ` ⚠ 같은 해 공시값 ${offVal}억과 ${gap > 0 ? '+' : ''}${gap}억 차이${pct != null ? `(${pct}%)` : ''} — 산출 기준이 다를 수 있습니다.`;
+    }
     return f(`${x.key} — ${yr}외부사이트자료`,
       `${Number(x.eok).toLocaleString()}억 원`, 'C',
       srcs.length > 1 ? `채용사이트 ${srcs.length}곳` : `${hosts} 기업정보`, x.year ? `${x.year}-12` : null,
-      `★ ${cross}. 공시자료가 아니라 채용 사이트가 자체 수집·표기한 값입니다. `
+      `★ ${cross}.${vsOff} 공시자료가 아니라 채용 사이트가 자체 수집·표기한 값입니다. `
       + '금융위 재무가 끊긴 이후를 가늠하는 참고치이며, 산출 기준과 시점이 공시와 다를 수 있습니다 — '
       + '방문 전 최근 결산서로 반드시 대조하세요.');
   });
@@ -1099,7 +1111,10 @@ function assembleLiveReport(name, corp, res) {
     if (c.label === '인력 정합성' && c.severe) risk_flags.push({ type: '인력 불일치', detail: `${c.detail}` });
   });
   // 재무 건전성 — 위험 등급이면 리스크로 승격
-  const finance_health = assessFinance(finance_history);
+  // 재무 건전성은 공시 연도로만 판정한다.
+  // 외부사이트 연도는 매출만 있고 부채·자본이 비어 있어, 그대로 넣으면 부채비율이 '—'가 되고
+  // 그 상태로 '양호'라는 결론이 나온다(한웅메디칼: 2026년 기준 debtRatio null · '양호').
+  const finance_health = assessFinance(finance_history.filter((r) => r.src !== 'ext'));
   if (finance_health && finance_health.level === '위험') {
     risk_flags.push({ type: '재무 위험', detail: `${finance_health.year}년 재무: ${finance_health.reasons.join(' · ')} — 거래 전 신용조회·선급금·담보 검토 권장` });
   }

@@ -1691,10 +1691,21 @@ function extFinance(text, host, link) {
     if (!m) continue;
     const eok = extAmountEok(m[m.length - 1]);
     if (eok == null || !isFinite(eok)) continue;
-    // 값 주변의 연도를 기준연도로 본다 — 라벨 앞뒤 모두 살핀다(없으면 미상)
-    const around = t.slice(Math.max(0, m.index - 80), m.index + 80);
-    const years = [...new Set((around.match(/20\d{2}/g) || []).map(Number)
-      .filter((y) => y >= 2015 && y <= new Date().getFullYear()))].sort();
+    // 값 주변에서 '결산 시점'으로 읽히는 표기만 연도로 인정한다.
+    // 맨연도(2026년)는 채용 사이트가 제목에 붙이는 현재 연도라, 그대로 쓰면 엉뚱한 해에 실린다.
+    // 실제로 캐치 스니펫 "한웅메디칼 채용 2026년 기업정보 … 최신 매출액 153억"에서
+    // 2026이 매출에 붙어 2026년 매출 153억이라는 없는 값이 만들어졌다.
+    const around = t.slice(Math.max(0, m.index - 60), m.index + 60);
+    const yset = new Set();
+    const nowY = new Date().getFullYear();
+    // 2024.12 / 2024-12 / 2024년 12월 / 2024년 기준 / 2024년말 — 결산을 가리키는 형태
+    const YR_FISCAL = /(20\d{2})\s*(?:[.\-/]\s*(?:0?[1-9]|1[0-2])\b|년\s*(?:0?[1-9]|1[0-2])\s*월|년\s*(?:기준|말|결산))/g;
+    let ym;
+    while ((ym = YR_FISCAL.exec(around))) {
+      const y = Number(ym[1]);
+      if (y >= 2015 && y <= nowY) yset.add(y);
+    }
+    const years = [...yset].sort();
     out.push({ key, eok, years: years.length ? years : null, host, link });
   }
   return out;
@@ -1703,6 +1714,29 @@ function extFinance(text, host, link) {
 // 여러 채용 사이트에서 나온 같은 항목을 대조한다.
 // 값이 같으면 신뢰도가 올라가고, 갈리면 그 사실 자체가 확인 필요 신호다.
 // 대표값은 '가장 많은 사이트가 같은 값을 말한 것'으로 정한다(동수면 페이지에서 읽은 쪽).
+// 채용 사이트는 재무를 별도 탭에 둔다. 기업정보 본문에는 '재무정보'라는 글자만 있고
+// 숫자는 다른 주소에 있다(한웅메디칼 조회에서 사람인 본문 3,148자를 받고도 재무가 0건이었다).
+// 회사 페이지 주소에서 재무 탭 주소를 만들어 함께 연다.
+function financeTabUrls(link) {
+  const u = String(link || '');
+  const out = [];
+  let m;
+  if ((m = u.match(/saramin\.co\.kr\/[^?]*(?:csn[=/])([^&/?#]+)/i))) {
+    out.push(`https://m.saramin.co.kr/job-search/company-info-view/finance?csn=${m[1]}`);
+    out.push(`https://www.saramin.co.kr/zf_user/company-info/view-financial-summary/csn/${m[1]}`);
+  }
+  if ((m = u.match(/jobkorea\.co\.kr\/company\/(\d+)/i))) {
+    out.push(`https://www.jobkorea.co.kr/company/${m[1]}/Finance`);
+  }
+  if ((m = u.match(/catch\.co\.kr\/Comp\/[A-Za-z]+\/(\d+)/i))) {
+    out.push(`https://www.catch.co.kr/Comp/CompFinance/${m[1]}`);
+  }
+  if ((m = u.match(/incruit\.com\/company\/(\d+)/i))) {
+    out.push(`https://www.incruit.com/company/${m[1]}/finance`);
+  }
+  return out;
+}
+
 function reconcileExtFin(rows) {
   const groups = new Map();
   (rows || []).forEach((r) => {
@@ -1787,10 +1821,17 @@ async function hiringTrace(nm) {
   // ④ 페이지를 직접 연다. 두 가지를 노린다.
   //    (가) 기업정보 페이지 — 사원수·재무의 정확한 값과 기준연도
   //    (나) 공고·공고목록 페이지 — 스니펫에 없는 등록일·수정일(연도 미상 공고를 되살린다)
-  const isCompanyPage = (u) => /\/companies\/\d+$|Co_Read|company-info|companies\/[^/]+$/i.test(u);
+  const isCompanyPage = (u) => /\/company\/\d+|\/companies\/\d+|Co_Read|company-info|Comp\/Comp|\/company\/[^/]+$/i.test(u);
   const targets = [];
-  const pushT = (p, kind) => { if (!targets.some((t) => t.link === p.link) && targets.length < 12) targets.push({ ...p, kind }); };
-  posts.filter((p) => isCompanyPage(p.link)).forEach((p) => pushT(p, 'company'));
+  const pushT = (p, kind) => { if (!targets.some((t) => t.link === p.link) && targets.length < 20) targets.push({ ...p, kind }); };
+  // 기업정보로 분류된 사이트는 재무 탭까지 모두 연다 — 숫자는 거기에만 있다
+  const compPosts = posts.filter((p) => isCompanyPage(p.link));
+  compPosts.forEach((p) => pushT(p, 'company'));
+  const finSeen = new Set();
+  compPosts.forEach((p) => financeTabUrls(p.link).forEach((u) => {
+    if (finSeen.has(u)) return; finSeen.add(u);
+    pushT({ ...p, link: u }, 'finance');
+  }));
   posts.filter((p) => !p.dates.length && !isCompanyPage(p.link)).forEach((p) => pushT(p, 'post'));
 
   // 접속 결과를 남긴다 — 지금까지 실패를 조용히 삼켜, 값이 안 나온 게 차단 때문인지
@@ -1915,17 +1956,28 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag) {
   }
   // ㉣ 사원수 관측치 대조 — 채용사이트 공시 사원수 vs 연금 가입자수
   let headTrend = null;
-  const h = (heads || []).filter((x) => x && x.count).sort((a, b) => String(b.asOf || '').localeCompare(String(a.asOf || '')))[0];
+  const hAll = (heads || []).filter((x) => x && x.count);
+  // 사이트마다 값이 다르다(한웅메디칼: 사람인 54 · 잡코리아 57 · 원티드 49).
+  // 한 곳만 쓰면 왜 그 값인지 알 수 없으므로 전부 남기고, 대표는 기준일 있는 값 우선.
+  const h = [...hAll].sort((a, b) => String(b.asOf || '').localeCompare(String(a.asOf || '')))[0];
   if (h && isFinite(emp) && emp > 0) {
+    const counts = hAll.map((x) => x.count);
     const diff = emp - h.count;
-    headTrend = { site: h, nps: { count: emp, asOf: npsAsOf || null }, diff };
+    headTrend = {
+      site: h, nps: { count: emp, asOf: npsAsOf || null }, diff,
+      sites: hAll.map((x) => ({ host: String(x.host || '').replace(/^www\./, ''), count: x.count, asOf: x.asOf || null })),
+      spread: counts.length > 1 ? { min: Math.min(...counts), max: Math.max(...counts) } : null,
+    };
     if (Math.abs(diff) >= Math.max(3, h.count * 0.1)) {
       // 기준일이 없으면 언제 값인지 알 수 없어 증감으로 단정할 수 없다. 불일치로만 알린다.
       const dated = !!h.asOf;
       signals.push({
         kind: dated ? (diff > 0 ? 'expand' : 'shrink') : 'churn', level: 'mid',
         title: dated ? (diff > 0 ? '인력 증가 확인' : '인력 감소 확인') : '인력 수치 불일치',
-        detail: `${h.host} 표기 사원수 ${h.count}명${h.asOf ? `(${h.asOf} 기준)` : '(기준일 미상)'} ↔ 국민연금 가입자 ${emp}명${npsAsOf ? `(${npsAsOf} 기준)` : ''} · 차이 ${diff > 0 ? '+' : ''}${diff}명`
+        detail: (hAll.length > 1
+          ? `채용사이트 ${hAll.length}곳 표기 — ${headTrend.sites.map((v) => `${v.host} ${v.count}명`).join(' / ')}`
+          : `${h.host} 표기 사원수 ${h.count}명${h.asOf ? `(${h.asOf} 기준)` : '(기준일 미상)'}`)
+          + ` ↔ 국민연금 가입자 ${emp}명${npsAsOf ? `(${npsAsOf} 기준)` : ''} · 차이 ${diff > 0 ? '+' : ''}${diff}명`
           + (dated ? '' : ' — 채용 사이트 값이 언제 것인지 표기돼 있지 않아 증감으로 볼 수 없습니다.'),
         ask: dated
           ? (diff > 0 ? '증원 사유(수주 증가·증설)와 신규 인력의 배치 라인을 확인하세요.' : '감소 사유(수주 축소·자동화·외주 전환)를 확인하세요.')
