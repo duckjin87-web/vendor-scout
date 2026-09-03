@@ -914,15 +914,15 @@ function assembleLiveReport(name, corp, res) {
   // 다만 공시가 아니므로 연도에 표시를 남기고(src: 'ext') 공식 연도가 있으면 공식을 우선한다.
   const extByYear = new Map();
   ((hireRaw && hireRaw.extFin) || []).forEach((x) => {
-    (x.years || []).forEach((y) => {
-      const cur = extByYear.get(y) || { year: y, src: 'ext', host: String(x.host || '').replace(/^www\./, '') };
-      if (x.key === '매출액') cur.revenue = x.eok;
-      else if (x.key === '영업이익') cur.operatingProfit = x.eok;
-      else if (x.key === '자산총계') cur.assets = x.eok;
-      else if (x.key === '자본총계') cur.equity = x.eok;
-      else if (x.key === '당기순이익') cur.netIncome = x.eok;
-      extByYear.set(y, cur);
-    });
+    if (!x.year) return;                       // 연도 없는 값은 계열에 올리지 않는다(연도를 지어내지 않는다)
+    const hosts = (x.sources || []).map((v) => v.host).join('·');
+    const cur = extByYear.get(x.year) || { year: x.year, src: 'ext', host: hosts };
+    if (x.key === '매출액') cur.revenue = x.eok;
+    else if (x.key === '영업이익') cur.operatingProfit = x.eok;
+    else if (x.key === '자산총계') cur.assets = x.eok;
+    else if (x.key === '자본총계') cur.equity = x.eok;
+    else if (x.key === '당기순이익') cur.netIncome = x.eok;
+    extByYear.set(x.year, cur);
   });
   // 가장 최근 6개년 — 공식·외부를 합친 뒤 자른다(공시가 끊긴 업체도 최근 흐름이 보이게)
   const years = [...new Set([...byYear.keys(), ...extByYear.keys()])]
@@ -975,11 +975,19 @@ function assembleLiveReport(name, corp, res) {
   // 실린 매출·자본총계·순이익을 보태되, 공시가 아니므로 항목명에 '외부사이트자료'를 못 박아
   // 공식 수치와 섞이지 않게 한다. 등급도 C(추정·프록시)로 둔다.
   const extRows = ((hireRaw && hireRaw.extFin) || []).map((x) => {
-    const yrs = x.years && x.years.length ? `${x.years.map((y) => String(y).slice(2)).join('·')}년 ` : '';
-    const host = String(x.host || '').replace(/^www\./, '');
-    return f(`${x.key} — ${yrs}외부사이트자료`,
-      `${Number(x.eok).toLocaleString()}억 원`, 'C', `${host} 기업정보`, null,
-      `★ 공시자료가 아니라 채용 사이트가 자체 수집·표기한 값입니다(${host}). `
+    const yr = x.year ? `${String(x.year).slice(2)}년 ` : '';
+    const srcs = x.sources || [];
+    const hosts = srcs.map((v) => v.host).join(' · ');
+    // 여러 사이트가 같은 값을 말하면 근거가 강해지고, 갈리면 그 자체가 확인 대상이다
+    const cross = srcs.length < 2
+      ? `${hosts || '외부사이트'} 1곳 확인`
+      : (x.agree
+        ? `${srcs.length}개 사이트 값 일치(${hosts})`
+        : `⚠ 사이트 간 값 불일치 — ${srcs.map((v) => `${v.host} ${v.eok}억`).join(' / ')}`);
+    return f(`${x.key} — ${yr}외부사이트자료`,
+      `${Number(x.eok).toLocaleString()}억 원`, 'C',
+      srcs.length > 1 ? `채용사이트 ${srcs.length}곳` : `${hosts} 기업정보`, x.year ? `${x.year}-12` : null,
+      `★ ${cross}. 공시자료가 아니라 채용 사이트가 자체 수집·표기한 값입니다. `
       + '금융위 재무가 끊긴 이후를 가늠하는 참고치이며, 산출 기준과 시점이 공시와 다를 수 있습니다 — '
       + '방문 전 최근 결산서로 반드시 대조하세요.');
   });

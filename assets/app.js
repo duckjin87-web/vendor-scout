@@ -1700,6 +1700,42 @@ function extFinance(text, host, link) {
   return out;
 }
 
+// 여러 채용 사이트에서 나온 같은 항목을 대조한다.
+// 값이 같으면 신뢰도가 올라가고, 갈리면 그 사실 자체가 확인 필요 신호다.
+// 대표값은 '가장 많은 사이트가 같은 값을 말한 것'으로 정한다(동수면 페이지에서 읽은 쪽).
+function reconcileExtFin(rows) {
+  const groups = new Map();
+  (rows || []).forEach((r) => {
+    const ys = (r.years && r.years.length) ? r.years : [null];
+    ys.forEach((y) => {
+      const k = `${r.key}|${y || ''}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push({ ...r, year: y });
+    });
+  });
+  const out = [];
+  for (const [, list] of groups) {
+    // 같은 사이트가 여러 번 잡히면 1건으로
+    const perHost = new Map();
+    list.forEach((r) => { if (!perHost.has(r.host) || r.from === 'page') perHost.set(r.host, r); });
+    const uniq = [...perHost.values()];
+    // 값별 득표
+    const votes = new Map();
+    uniq.forEach((r) => { votes.set(r.eok, (votes.get(r.eok) || 0) + 1); });
+    const best = [...votes.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0];
+    const vals = uniq.map((r) => r.eok);
+    const min = Math.min(...vals), max = Math.max(...vals);
+    out.push({
+      key: uniq[0].key, year: uniq[0].year, eok: best,
+      sources: uniq.map((r) => ({ host: String(r.host || '').replace(/^www\./, ''), eok: r.eok, link: r.link })),
+      agree: min === max,
+      spread: min === max ? null : { min, max },
+    });
+  }
+  // 연도 있는 것 먼저, 그 안에서 최신순
+  return out.sort((a, b) => (b.year || 0) - (a.year || 0) || a.key.localeCompare(b.key));
+}
+
 async function hiringTrace(nm) {
   if (!getProxy() || !nm) return null;
   // ① 다각도 검색 — 한 질의로는 사이트별로 누락이 커서 여러 각도로 훑는다.
@@ -1753,7 +1789,7 @@ async function hiringTrace(nm) {
   //    (나) 공고·공고목록 페이지 — 스니펫에 없는 등록일·수정일(연도 미상 공고를 되살린다)
   const isCompanyPage = (u) => /\/companies\/\d+$|Co_Read|company-info|companies\/[^/]+$/i.test(u);
   const targets = [];
-  const pushT = (p, kind) => { if (!targets.some((t) => t.link === p.link) && targets.length < 8) targets.push({ ...p, kind }); };
+  const pushT = (p, kind) => { if (!targets.some((t) => t.link === p.link) && targets.length < 12) targets.push({ ...p, kind }); };
   posts.filter((p) => isCompanyPage(p.link)).forEach((p) => pushT(p, 'company'));
   posts.filter((p) => !p.dates.length && !isCompanyPage(p.link)).forEach((p) => pushT(p, 'post'));
 
@@ -1795,15 +1831,12 @@ async function hiringTrace(nm) {
       ...(sample ? { finSample: sample } : {}),
     });
   });
-  // 같은 항목이 여러 사이트에서 나오면 연도가 있는 쪽을 우선해 1건만 남긴다
-  const finBest = new Map();
-  extFin.forEach((f) => {
-    const cur = finBest.get(f.key);
-    if (!cur || (!cur.years && f.years)) finBest.set(f.key, f);
-  });
+  // 사이트마다 수집 시점과 출처가 달라 같은 항목도 값이 갈린다. 한 곳만 남기고 버리면
+  // 어느 값이 맞는지 판단할 근거가 사라진다. 항목·연도별로 모아 서로 대조한다.
+  const finRows = reconcileExtFin(extFin);
   // 사원수는 기준일이 있는 값을 우선한다(페이지 > 스니펫)
   heads.sort((a, b) => (b.asOf ? 1 : 0) - (a.asOf ? 1 : 0) || (b.from === 'page' ? 1 : 0) - (a.from === 'page' ? 1 : 0));
-  return { posts, heads, extFin: [...finBest.values()], extDiag };
+  return { posts, heads, extFin: finRows, extDiag };
 }
 
 // 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
