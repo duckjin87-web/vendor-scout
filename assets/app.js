@@ -1398,8 +1398,79 @@ async function liveLookup(name) {
   if (mfdsC.length >= 2) return { candidates: mfdsC, name, source: 'mfds' };
   if (mfdsC.length === 1) return { report: await finishLiveMfds(name, mfdsC[0]) };
 
+  // ── 유사 상호 추천 ──
+  // 정확히 같은 이름이 없다고 바로 포기하지 않는다. 표기를 조금 다르게 쳤을 뿐인 경우가 많다.
+  // 앞 두세 글자로 후보를 넓게 받아, 표기 흔들림을 접은 유사도로 골라 제시한다.
+  const core = stripCorp(name).replace(/\s/g, '');
+  if (core.length >= 3) {
+    const pool = new Map();
+    const seeds = [...new Set([core.slice(0, 2), core.slice(0, 3), core.slice(0, 4)])].filter((x) => x.length >= 2);
+    const got = await mapLimit(seeds, 3, (q) => tryCorp(q));
+    got.forEach((list) => (list || []).forEach((c) => {
+      const k = String(c.crno || c.bzno || c.corpNm);
+      if (!pool.has(k)) pool.set(k, c);
+    }));
+    const near = [...pool.values()]
+      .map((c) => ({ ...c, _sim: nameSimilarity(core, c.corpNm || '') }))
+      .filter((c) => c._sim >= 0.8)                       // 표기 흔들림 수준까지만 — 다른 회사는 배제
+      .sort((a, b) => b._sim - a._sim)
+      .slice(0, 8);
+    if (near.length === 1 && near[0]._sim >= 0.95) {
+      return { report: await finishLive(near[0].corpNm, near[0]), similarUsed: { typed: name, picked: near[0].corpNm } };
+    }
+    if (near.length) return { candidates: near, name, source: 'fsc', similar: true };
+  }
+
   // 식약처에도 후보 없음 → 상호명 기반으로 나머지 소스 최대한 조회
   return { report: await finishLive(name, { corpNm: name }) };
+}
+
+// ── 상호 유사도 ──
+// 같은 회사를 사람마다 다르게 적는다. (주)다산씨엔텍을 다산씨앤텍·다산씨엔택으로 치는 식이다.
+// 대부분 한글 표기 흔들림이라, 자모로 분해해 헷갈리는 소리끼리 같은 값으로 접은 뒤 비교한다.
+//   모음  ㅐ·ㅒ·ㅔ·ㅖ → 하나로 (씨엔텍 = 씨앤텍, 텍 = 택)
+//         ㅙ·ㅚ·ㅞ → 하나로 (왜·외·웨)
+//         ㅢ → ㅣ (의 = 이)
+//   초성  된소리를 예사소리로 (ㅆ→ㅅ 씨 = 시, ㄲ→ㄱ, ㄸ→ㄷ, ㅃ→ㅂ, ㅉ→ㅈ)
+//   받침  ㄲ·ㅋ → ㄱ, ㅆ → ㅅ
+const V_FOLD = { 3: 1, 5: 1, 7: 1, 10: 11, 15: 11, 19: 20 };
+const C_FOLD = { 1: 0, 4: 3, 8: 7, 10: 9, 13: 12 };
+const T_FOLD = { 2: 1, 24: 1, 20: 19 };
+function hangulFold(str) {
+  let out = '';
+  for (const ch of String(str || '').toLowerCase()) {
+    const c = ch.charCodeAt(0) - 0xac00;
+    if (c >= 0 && c < 11172) {
+      let cho = Math.floor(c / 588), jung = Math.floor((c % 588) / 28), jong = c % 28;
+      cho = C_FOLD[cho] ?? cho; jung = V_FOLD[jung] ?? jung; jong = T_FOLD[jong] ?? jong;
+      out += `${cho},${jung},${jong}|`;
+    } else if (/[a-z0-9]/.test(ch)) {
+      out += `${ch}|`;
+    }
+    // 공백·기호는 버린다 — 띄어쓰기 차이로 다른 회사가 되지 않게
+  }
+  return out;
+}
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+// 0~1. 1이면 표기 흔들림까지 감안해 같은 이름.
+function nameSimilarity(a, b) {
+  const A = hangulFold(stripCorp(a)).split('|').filter(Boolean);
+  const B = hangulFold(stripCorp(b)).split('|').filter(Boolean);
+  if (!A.length || !B.length) return 0;
+  const d = levenshtein(A, B);
+  return 1 - d / Math.max(A.length, B.length);
 }
 
 // 법인 접두/접미어 제거 — 식약처/국민연금은 순수 상호로 조회해야 매칭됨
@@ -2077,16 +2148,20 @@ async function finishLive(name, corp) {
 }
 
 // 동명업체 선택 UI — source: 'fsc'(금융위 법인) | 'mfds'(식약처 등록업체 기준)
-function renderCandidates(name, cands, source) {
+function renderCandidates(name, cands, source, similar) {
   const root = $('#report');
   root.classList.remove('hidden');
   root.innerHTML = '';
   const isMfds = source === 'mfds';
   const box = el('div', 'candbox');
   const headSrc = isMfds ? '식약처 화장품제조업 등록업체 기준' : '금융위 법인 기준';
+  // 유사 추천은 '같은 이름을 못 찾았다'는 사실을 먼저 알려야 한다 — 정확 일치로 오해하면 안 된다
   box.appendChild(el('div', 'candhead',
-    `「${esc(name)}」 ${isMfds ? '식약처 등록업체' : '동명·유사 업체'} <b>${cands.length}건</b> — 조회할 업체를 선택하세요` +
-    `<span class="candsub">${esc(headSrc)}${isMfds ? ' · 금융위 법인 미검색이라 식약처 등록명으로 추천' : ''}</span>`));
+    similar
+      ? `「${esc(name)}」와 <b>정확히 같은 상호를 찾지 못했습니다</b> — 표기가 비슷한 업체 <b>${cands.length}건</b>`
+        + `<span class="candsub">${esc(headSrc)} · 한글 표기 차이(ㅐ↔ㅔ, 된소리, 띄어쓰기)를 감안해 골랐습니다. 대표자·주소로 같은 회사인지 확인하세요</span>`
+      : `「${esc(name)}」 ${isMfds ? '식약처 등록업체' : '동명·유사 업체'} <b>${cands.length}건</b> — 조회할 업체를 선택하세요`
+        + `<span class="candsub">${esc(headSrc)}${isMfds ? ' · 금융위 법인 미검색이라 식약처 등록명으로 추천' : ''}</span>`));
   cands.forEach((c) => {
     const card = el('button', 'cand');
     const meta = [
@@ -2095,7 +2170,8 @@ function renderCandidates(name, cands, source) {
       c.lcns ? '허가 ' + esc(c.lcns) : '',
       c.addr ? esc(c.addr) : '',
     ].filter(Boolean).join(' · ');
-    const tag = c.mfds ? '<span class="cand-tag">식약처 등록</span>' : '';
+    const tag = (c.mfds ? '<span class="cand-tag">식약처 등록</span>' : '')
+      + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
     card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
     card.addEventListener('click', async () => {
       root.innerHTML = `<div class="empty">「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…</div>`;
@@ -3475,7 +3551,7 @@ function lookup(name, bno) {
     // 업체명 + 사업자번호 병기 → liveLookup이 사업자번호 일치 법인만 선별(교집합)
     const liveQuery = [nm, bz].filter(Boolean).join(' ');
     liveLookup(liveQuery)
-      .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates, res.source); else render(res.report); })
+      .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates, res.source, res.similar); else render(res.report); })
       .catch((e) => {
         root.innerHTML =
           `<div class="empty">실데이터 조회 실패: ${esc(e.message)}<br>` +
