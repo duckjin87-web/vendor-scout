@@ -380,11 +380,18 @@ function extractLinks(html, baseUrl) {
 // 생산능력 관련 문장 발췌 (키워드 + 숫자가 함께 있는 짧은 구절)
 function extractCapaSnippets(text) {
   const parts = String(text).split(/\n+|[.。!?]\s|\s{3,}/).map((s) => s.trim()).filter(Boolean);
-  const KEY = /(생산\s*능력|생산량|월\s*생산|연간?\s*생산|일\s*생산|생산\s*라인|자동화\s*라인|충전\s*라인|생산\s*설비|생산\s*시설|공장\s*면적|연면적|부지|대지\s*면적|생산\s*규모|생산\s*capa|capacity|㎡|평)/i;
+  // '평'을 맨글자로 두면 '구매평'이 면적 단위로 잡힌다. 씨앤티드림 조회에서 생산능력 6줄이
+  // 전부 네이버 페이 구매평이었다("씌우기 너무 어려웠지만 바꿔서 좋아요"). 면적의 '평'은
+  // 반드시 숫자 뒤에 온다 — 3,000평. 숫자를 앞에 붙여 단위일 때만 인정한다.
+  const KEY = /(생산\s*능력|생산량|월\s*생산|연간?\s*생산|일\s*생산|생산\s*라인|자동화\s*라인|충전\s*라인|생산\s*설비|생산\s*시설|공장\s*면적|연면적|부지|대지\s*면적|생산\s*규모|생산\s*capa|capacity|[\d,]\s*(?:㎡|평)\b)/i;
+  // 쇼핑몰 홈페이지는 구매평·배송안내가 본문의 대부분이다. 숫자가 있다고 생산능력이 아니다.
+  const NOISE = /(구매평|구매\s*후기|사용\s*후기|상품\s*평|리뷰|평점|별점|배송|반품|교환|환불|적립금|쿠폰|장바구니|주문|결제|회원|로그인|문의|댓글|공지사항|이벤트)/;
   const NUM = /\d/;
   const out = [];
   for (const p of parts) {
     if (p.length < 5 || p.length > 140) continue;
+    if (NOISE.test(p)) continue;
+    if (/\d{4}[-.]\d{2}[-.]\d{2}\s+\d{2}:\d{2}/.test(p)) continue;   // 작성일시가 박힌 줄 = 게시물
     if (KEY.test(p) && NUM.test(p)) { const s = p.replace(/\s{2,}/g, ' ').trim(); if (!out.includes(s)) out.push(s); }
     if (out.length >= 6) break;
   }
@@ -2397,10 +2404,15 @@ function checklistHtml(list) {
 }
 
 // 3열 압축 행: [등급+항목] | [값] | [출처(우측 소형)]
+// 설명문을 읽기 좋게 자른다. 원문은 '★ 핵심 … ※ 단서 … ▣ 보완' 식으로 여러 문단이 한 줄에
+// 이어 붙어 있어, 통째로 뿌리면 문단이 흐른다. 표식 앞에서 끊어 줄로 나눈다.
+function noteLines(note) {
+  return String(note || '').split(/\s*(?=[★※▣])/).map((s) => s.trim()).filter(Boolean);
+}
+// 3열 압축 행: [등급+항목] | [값] | [출처(우측 소형)]
 function fieldRow(fld) {
   const isGap = fld.data_gap || fld.value == null;
   const row = el('div', 'field' + (isCgmpField(fld) ? ' cgmp' : ''));
-  if (fld.note) row.title = fld.note;
 
   const k = el('div', 'k');
   k.appendChild(el('span', 'gdot g' + fld.grade, esc(fld.grade)));
@@ -2408,7 +2420,9 @@ function fieldRow(fld) {
   row.appendChild(k);
 
   const stale = fld.fresh === false ? ' <span class="stale">⚠기간초과</span>' : '';
-  const info = fld.note ? ` <span class="ninfo" title="${esc(fld.note)}">ⓘ</span>` : '';
+  // 설명은 예전에 title 툴팁이었다. 네 문장짜리 주석이 마우스만 올려도 화면을 덮었고,
+  // 휴대폰에서는 아예 볼 방법이 없었다. 눌러서 펴는 방식으로 바꾼다.
+  const info = fld.note ? ` <button type="button" class="ninfo" aria-expanded="false" aria-label="설명 보기">ⓘ</button>` : '';
   const valHtml = Array.isArray(fld.checklist)
     ? checklistHtml(fld.checklist) + info
     : (isGap ? '해당 없음' : esc(fld.value)) + stale + info;
@@ -2417,15 +2431,36 @@ function fieldRow(fld) {
   const src = el('div', 'src');
   src.innerHTML = esc(fld.source || '—') + (fld.as_of ? `<br><span class="asof">${esc(fld.as_of)}</span>` : '');
   row.appendChild(src);
+
+  if (fld.note) {
+    const nt = el('div', 'fnote', noteLines(fld.note).map((s) => `<p>${esc(s)}</p>`).join(''));
+    nt.hidden = true;
+    row.appendChild(nt);
+    row.querySelector('.ninfo').addEventListener('click', (e) => {
+      e.preventDefault();
+      nt.hidden = !nt.hidden;
+      e.currentTarget.setAttribute('aria-expanded', String(!nt.hidden));
+    });
+  }
   return row;
 }
 
 function block(title, icon, fields) {
   const b = el('div', 'block');
-  const gapCount = fields.filter((f) => f.data_gap).length;
-  const h = el('h3', null, `<span class="ic">${icon}</span>${esc(title)}<span class="cnt">${fields.length}개 필드${gapCount ? ' · 공백 ' + gapCount : ''}</span>`);
-  b.appendChild(h);
-  fields.forEach((f) => b.appendChild(fieldRow(f)));
+  // 값이 없는 항목은 접어 둔다. 씨앤티드림 조회에서 '생산역량·인원' 9개 중 4개가 빈칸이었고
+  // 각각 긴 설명까지 달려 블록의 절반을 먹었다. 없다는 사실은 한 줄이면 충분하다.
+  const gaps = fields.filter((f) => f.data_gap || f.value == null);
+  const filled = fields.filter((f) => !(f.data_gap || f.value == null));
+  b.appendChild(el('h3', null, `<span class="ic">${icon}</span>${esc(title)}`
+    + `<span class="cnt">${fields.length}개 필드${gaps.length ? ' · 공백 ' + gaps.length : ''}</span>`));
+  filled.forEach((f) => b.appendChild(fieldRow(f)));
+  if (gaps.length) {
+    const d = el('details', 'gapfold');
+    d.appendChild(el('summary', null, `확인 안 됨 ${gaps.length}건`
+      + `<em>${esc(gaps.map((g) => g.key).join(' · '))}</em>`));
+    gaps.forEach((f) => d.appendChild(fieldRow(f)));
+    b.appendChild(d);
+  }
   return b;
 }
 
@@ -3287,6 +3322,20 @@ function renderVisitChecklist(report) {
     });
   } else {
     html += '<div class="vc-empty">자동 도출된 항목이 없습니다 — 자료를 보다가 확인할 것이 생기면 아래에서 추가하세요.</div>';
+  }
+
+  // ── 현장 대조표 ──
+  // report.crosscheck는 지금까지 리포트에 담기기만 하고 화면에 나온 적이 없다. 방문해서
+  // 맞춰 볼 값을 모아 둔 것인데 정작 방문할 때 볼 수가 없었다. 값이 있는 줄만 여기 싣는다
+  // (값이 null인 줄은 위 체크리스트 항목과 같은 내용이라 두 번 적을 이유가 없다).
+  const xc = (report.crosscheck || []).filter((x) => x && x.expected != null && x.expected !== '');
+  if (xc.length) {
+    html += `<div class="vc-gh">현장 대조<span>${xc.length}</span></div>`
+      + `<div class="vc-xc"><div class="xc-h"><i>항목</i><i>우리가 확보한 값</i><i>현장 확인</i></div>`
+      + xc.map((x) => `<div class="xc-r"><i>${esc(x.key)}</i>`
+        + `<b>${esc(x.expected)}<small>${esc(x.src_type || '')}</small></b>`
+        + `<u></u></div>`).join('')
+      + `</div><div class="vc-foot">※ 위 값은 공개 자료에서 확보한 것입니다. 현장에서 들은 값이 다르면 그 차이가 확인 대상입니다 — 인쇄해서 오른쪽 칸에 적으세요.</div>`;
   }
 
   // ── 직접 추가 ──
