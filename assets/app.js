@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 120;
+const BUILD = 121;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1832,8 +1832,10 @@ function extAmountEok(str) {
   const neg = NEG_HEAD.test(raw);
   const s = raw.replace(/^[-−–—△▲▽▼(]+/, '').replace(/\)+$/, '');
   const sign = neg ? -1 : 1;
+  // 억은 소수 한 자리까지 살린다. 사람인은 '68.1억 / 100.7억'처럼 적는데 정수로 반올림하면
+  // 매출 100.7억이 101억이 되고, 외감 기준선(100억)을 넘었는지 같은 판단이 흐려진다.
   let m = s.match(/^([\d,.]+)억/);
-  if (m) return Math.round(Number(m[1].replace(/,/g, '')) * sign);
+  if (m) return Math.round(Number(m[1].replace(/,/g, '')) * 10) / 10 * sign;
   m = s.match(/^([\d,]+)백만/);
   if (m) return Math.round(Number(m[1].replace(/,/g, '')) / 100) * sign;
   m = s.match(/^([\d,]{6,})원?/);
@@ -1860,6 +1862,11 @@ function financeSections(t) {
 function extFinance(text, host, link) {
   const full = String(text || '').replace(/\s+/g, ' ');
   const out = [];
+  // 같은 항목 라벨이 한 페이지에 여러 번 나온다. 사람인 재무 탭은 페이지 제목에도
+  // '매출액 68억 1,834만원 영업이익, 자본금 …'이 있어, 첫 출현에서 멈추면 연도 없는 값
+  // 하나만 얻고 정작 아래의 4개년 표를 못 본다. 모든 출현을 훑어 후보로 모은 뒤,
+  // 연도가 붙은 후보가 하나라도 있으면 그쪽만 채택한다.
+  const cands = [];
   const nowY = new Date().getFullYear();
   const inRange = (y) => y >= 2010 && y <= nowY;
   // 음수 표기(△·▲·괄호)까지 포함해 금액을 잡는다
@@ -1913,26 +1920,43 @@ function extFinance(text, host, link) {
         // 사람인 재무 탭은 머리글 없이 '매출액 2025.12 68억 2024.12 55억 …' 식으로 늘어놓는다.
         // 연도가 라벨 뒤에 오기 때문에 머리글로 인정되지 않아, 지금까지 첫 해 하나만 읽고
         // 나머지 연도를 통째로 잃었다(다산씨엔텍: 22~25년 표에서 25년 한 해만 실렸다).
-        const YRT = /(20\d{2})\s*[.\-/년]\s*(?:0?[1-9]|1[0-2])?\b/g;
-        const yts = [...win.matchAll(YRT)].map((m) => ({ y: Number(m[1]), at: m.index, end: m.index + m[0].length }))
+        // 연도는 '2025년 기준'처럼 붙기도 하고 '2022 97.6억'처럼 맨숫자로만 오기도 한다.
+        // 사람인 재무 탭 원문이 정확히 후자였다 —
+        //   "2025년 기준 68.1억 동종업계 상위 20% 2022 97.6억 2023 99.4억 2024 100.7억"
+        // 점이나 '년'을 요구하는 바람에 맨연도 세 해를 통째로 놓쳤다. 맨연도도 받되,
+        // 금액·비율·인원 단위가 바로 뒤에 붙은 숫자(2022억, 20%)는 연도가 아니므로 뺀다.
+        const YRT = /(?:^|[^\d,.])(20\d{2})(?:\s*[.\-/년]\s*(?:0?[1-9]|1[0-2])?)?(?![\d,.])(?!\s*(?:억|원|백만|만|%|명|건|위|개|배))/g;
+        const yts = [...win.matchAll(YRT)]
+          .map((m) => ({ y: Number(m[1]), at: m.index + m[0].indexOf(m[1]), end: m.index + m[0].length }))
           .filter((x) => inRange(x.y));
         const ats = [...win.matchAll(AMT)].map((m) => ({ s: m[1], at: m.index, end: m.index + m[0].length }));
         let paired = 0;
         if (yts.length && ats.length) {
           const usedY = new Set();
           ats.forEach((am) => {
-            // 금액에서 가장 가까운 연도 — 붙어 있는 것만 짝으로 본다
+            // 연도는 값 '앞'에 온다 — "2025년 기준 3.2억 2022 5.1억 2023 4.8억".
+            // 거리만 재면 3.2억이 바로 뒤의 2022에 붙어 표 전체가 한 칸씩 밀린다(실제로
+            // 영업이익이 그렇게 어긋났다). 앞에 있는 연도를 먼저 찾고, 없을 때만 뒤를 본다
+            // ('매출액 68억 (2025.12)'처럼 뒤에 붙는 표기도 있기 때문).
             let best = null, bd = Infinity;
             yts.forEach((yt, i) => {
-              const d = am.at >= yt.end ? am.at - yt.end : yt.at - am.end;
-              if (d >= 0 && d < bd && d <= 25) { bd = d; best = i; }
+              if (yt.end > am.at) return;                 // 값보다 뒤에 있는 연도는 이번엔 제외
+              const d = am.at - yt.end;
+              if (d >= 0 && d < bd && d <= 30) { bd = d; best = i; }
             });
+            if (best == null) {
+              yts.forEach((yt, i) => {
+                if (yt.at < am.end) return;
+                const d = yt.at - am.end;
+                if (d >= 0 && d < bd && d <= 25) { bd = d; best = i; }
+              });
+            }
             if (best == null || usedY.has(best)) return;
             const eok = extAmountEok(am.s);
             if (eok == null || !isFinite(eok)) return;
             if (key === '매출액' && eok < 0) return;
             usedY.add(best);
-            out.push({ key, eok, years: [yts[best].y], host, link });
+            cands.push({ key, eok, years: [yts[best].y], host, link });
             paired++;
           });
         }
@@ -1954,18 +1978,25 @@ function extFinance(text, host, link) {
             const at = after + am.at;
             const from = Math.max(0, at - 60);
             const around = t.slice(from, at + 60);
-            const cands = [...around.matchAll(/(20\d{2})\s*(?:[.\-/]\s*(?:0?[1-9]|1[0-2])\b|년\s*(?:0?[1-9]|1[0-2])\s*월|년\s*(?:기준|말|결산))/g)]
+            const yrCands = [...around.matchAll(/(20\d{2})\s*(?:[.\-/]\s*(?:0?[1-9]|1[0-2])\b|년\s*(?:0?[1-9]|1[0-2])\s*월|년\s*(?:기준|말|결산))/g)]
               .map((m) => ({ y: Number(m[1]), at: from + m.index, lead: around.slice(Math.max(0, m.index - 14), m.index) }))
               // 설립일·사원수 기준일·공고 등록일에 붙은 연도는 결산 연도가 아니다
               .filter((c) => inRange(c.y) && !/(설립|창립|사원수|직원수|종업원수|임직원수|기준|등록|작성|수정|마감|입사|가입)/.test(c.lead));
-            cands.sort((a2, b2) => Math.abs(a2.at - at) - Math.abs(b2.at - at));
-            years = cands.length ? [cands[0].y] : null;
+            yrCands.sort((a2, b2) => Math.abs(a2.at - at) - Math.abs(b2.at - at));
+            years = yrCands.length ? [yrCands[0].y] : null;
           }
-          out.push({ key, eok, years, host, link });
+          cands.push({ key, eok, years, host, link });
         });
-        if (!useHead) break;                              // 머리글 없으면 항목당 1건이면 충분
       }
     }
+  }
+  // 항목별로 연도가 붙은 후보가 있으면 그것만 쓴다. 연도 없는 값은 공시와 대조도,
+  // 추이 반영도 안 되므로 다른 후보가 있는 한 굳이 남길 이유가 없다.
+  for (const [key] of EXT_FIN_KEYS) {
+    const mine = cands.filter((c) => c.key === key);
+    if (!mine.length) continue;
+    const dated = mine.filter((c) => c.years && c.years.length);
+    out.push(...(dated.length ? dated : [mine[0]]));
   }
   // 같은 구간이 여러 앵커에 걸쳐 두 번 읽힐 수 있다 — 항목·연도·값이 같으면 1건으로
   const seen = new Set();

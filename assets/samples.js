@@ -941,7 +941,10 @@ function assembleLiveReport(name, corp, res) {
     // 공시가 없는 해를 채용사이트 재무탭으로 메웠다면 그 사실을 재무 설명에 남긴다.
     // 같은 해가 양쪽에 다 있으면 공시를 그대로 두므로, 여기 적히는 연도는 '메운 해'뿐이다.
     const filledYears = finance_history.filter((r) => r.src === 'ext').map((r) => r.year);
-    const filledHosts = [...new Set(finance_history.filter((r) => r.src === 'ext').map((r) => r.host).filter(Boolean))];
+    // host는 'saramin.co.kr·jobkorea.co.kr'처럼 합쳐진 문자열로 올 수 있어, 그대로 Set에
+    // 넣으면 'jobkorea.co.kr·saramin.co.kr·jobkorea.co.kr'같이 같은 이름이 두 번 적힌다.
+    const filledHosts = [...new Set(finance_history.filter((r) => r.src === 'ext')
+      .flatMap((r) => String(r.host || '').split('·')).map((h) => h.trim()).filter(Boolean))];
     // 재무 '필드'(매출액·총자산 등)는 공식 자료 기준을 유지한다 — 외부값은 별도 행으로 이미 표시된다
     const offRows = finance_history.filter((r) => r.src === 'official');
     // 공시가 한 건도 없으면 채용사이트 값으로 칸을 채우게 되는데, 그때도 등급 A에 출처를
@@ -969,20 +972,21 @@ function assembleLiveReport(name, corp, res) {
     const baseNote = (usingExt
       ? `★ 금융위 재무 API에 이 업체의 재무 레코드가 없습니다. 이 API는 외부감사·상장 공시분만 `
         + `수록하므로, 외감 대상이 아닌 법인은 매출 규모와 무관하게 조회되지 않습니다. `
-        + `따라서 위 수치는 공시가 아니라 채용사이트 기업정보(${L.host || '외부사이트'})의 ${L.year}년 표기값이며 `
+        + `따라서 위 수치는 공시가 아니라 채용사이트 기업정보(${filledHosts.join('·') || '외부사이트'})의 `
+        + `${filledYears.length > 1 ? `${filledYears[0]}~${filledYears[filledYears.length - 1]}년` : `${L.year}년`} 표기값이며 `
         + `등급도 C(참고치)입니다 — 방문 전 최근 결산서·표준재무제표증명(국세청 발급)을 반드시 요청하세요.`
       : stale
       ? `★ 금융위(DART 공시 기반) API가 제공하는 가장 최신 회계연도는 ${L.year}년입니다(약 ${lag}년 전). ` +
         `이 API는 상장·외부감사 공시분만 수록해 최근 자료가 없을 수 있습니다 — ` +
         `NICE·KED 등 신용조회에는 더 최근 재무가 있을 수 있으니 방문 전 최근 결산서를 요청하세요.`
       : `★ ${L.year} 회계연도 확정 실적(금융위 제출 최신). 재무는 통상 1년 지연 공시.`)
-      + (breakNote ? ` ${breakNote}` : '')
-      + (filledYears.length
-        ? ` ▣ 공시가 없는 ${filledYears.join('·')}년은 채용사이트 기업정보의 재무 탭`
+      + (usingExt ? '' : (breakNote ? ` ${breakNote}` : ''))
+      + (usingExt || !filledYears.length ? ''
+        : ''
+        + ` ▣ 공시가 없는 ${filledYears.join('·')}년은 채용사이트 기업정보의 재무 탭`
           + `${filledHosts.length ? `(${filledHosts.join('·')})` : ''}에서 가져와 채웠습니다. `
           + '같은 해가 공시에도 있으면 공시값을 그대로 두었고, 비어 있던 해만 대체했습니다. '
-          + '공시가 아니므로 추이 그래프에서도 해당 연도는 외부자료로 표시됩니다.'
-        : '');
+          + '공시가 아니므로 추이 그래프에서도 해당 연도는 외부자료로 표시됩니다.');
     finance = [
       f('매출액', eok(L.revenue), grade, src, asOf, baseNote, !stale),
       f('영업이익', eok(L.operatingProfit), grade, src, asOf, null, !stale),
@@ -1001,8 +1005,22 @@ function assembleLiveReport(name, corp, res) {
   // 공식 수치와 섞이지 않게 한다. 등급도 C(추정·프록시)로 둔다.
   // 연도를 모르는 값은 아예 싣지 않는다. '영업이익 — 외부사이트자료 1억'처럼 어느 해 것인지
   // 알 수 없는 줄은 공시와 대조할 수도, 추이에 올릴 수도 없어 화면만 늘린다.
-  const extRows = ((hireRaw && hireRaw.extFin) || []).filter((x) => x.year).map((x) => {
+  const allExt = (hireRaw && hireRaw.extFin) || [];
+  const extRows = allExt.filter((x) => x.year).map((x) => {
     const yr = `${String(x.year).slice(2)}년 `;
+    // 같은 해 영업이익보다 당기순이익이 훨씬 크면 그대로 믿기 어렵다. 영업외수익이 컸을 수도
+    // 있지만, 채용사이트 표가 열이 어긋나 자본총계 같은 값을 순이익 칸에 넣은 경우도 많다.
+    // 다산씨엔텍에서 영업이익 3억 · 당기순이익 20억으로 나왔다 — 어느 쪽인지는 결산서로만
+    // 가린다. 값을 버리지 않고 확인하라고 적어 둔다.
+    let odd = '';
+    if (x.key === '당기순이익' && x.eok > 0) {
+      const op = allExt.find((v) => v.key === '영업이익' && v.year === x.year);
+      if (op && op.eok > 0 && x.eok > op.eok * 3) {
+        odd = ` ⚠ 같은 해 영업이익 ${op.eok}억의 ${Math.round(x.eok / op.eok)}배입니다 — `
+          + '영업외수익이 컸을 수도, 사이트 표의 열이 어긋나 다른 항목(자본총계 등)이 실렸을 수도 '
+          + '있습니다. 손익계산서로 확인하세요.';
+      }
+    }
     const srcs = x.sources || [];
     const hosts = srcs.map((v) => v.host).join(' · ');
     // 여러 사이트가 같은 값을 말하면 근거가 강해지고, 갈리면 그 자체가 확인 대상이다
@@ -1026,7 +1044,7 @@ function assembleLiveReport(name, corp, res) {
     return f(`${x.key} — ${yr}외부사이트자료`,
       `${Number(x.eok).toLocaleString()}억 원`, 'C',
       srcs.length > 1 ? `채용사이트 ${srcs.length}곳` : `${hosts} 기업정보`, x.year ? `${x.year}-12` : null,
-      `★ ${cross}.${vsOff} 공시자료가 아니라 채용 사이트가 자체 수집·표기한 값입니다. `
+      `★ ${cross}.${vsOff}${odd} 공시자료가 아니라 채용 사이트가 자체 수집·표기한 값입니다. `
       + '금융위 재무가 끊긴 이후를 가늠하는 참고치이며, 산출 기준과 시점이 공시와 다를 수 있습니다 — '
       + '방문 전 최근 결산서로 반드시 대조하세요.');
   });
