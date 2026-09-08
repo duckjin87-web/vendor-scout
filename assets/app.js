@@ -1811,9 +1811,14 @@ const EXT_FIN_KEYS = [
   ['매출액', /(매출액|매출)/],
   ['영업이익', /영업\s*이익/],
   ['당기순이익', /(?:당기\s*)?순이익/],
+  ['자본금', /자본금/],
   ['자본총계', /자본\s*총계/],
   ['자산총계', /자산\s*총계/],
 ];
+// 어느 항목 라벨이든 하나 — 한 항목의 값 구간이 다음 항목까지 넘어가지 않게 경계로 쓴다.
+// 다산씨엔텍에서 당기순이익이 20억으로 나왔는데 매출 68억·영업이익 3억짜리 회사에서
+// 순이익률 29%는 나올 수 없다. 순이익 칸이 비어 있어 그 다음 항목(자본금)의 값을 끌어온 것이다.
+const FIN_LABEL_ANY = new RegExp(EXT_FIN_KEYS.map(([, re]) => `(?:${re.source})`).join('|'), 'g');
 // "44억", "4,400백만", "4,400,000,000원" → 억 단위 숫자
 // 음수 표기가 사이트마다 다르다. 이시스코스메틱 조회에서 사람인은 107억, 잡코리아는 -107억으로
 // 같은 값의 부호가 갈렸다. 사람인이 마이너스를 '△'로 쓰는데 우리가 '-'만 봤기 때문이다.
@@ -1891,30 +1896,66 @@ function extFinance(text, host, link) {
       const lab = new RegExp(re.source, 'gi');
       let lm;
       while ((lm = lab.exec(t))) {
-        // 머리글은 표의 맨 윗줄이다. 라벨보다 뒤에 있으면 이 항목의 머리글이 아니다.
+        // ── 이 항목의 값 구간 ──
+        // 다음 재무 항목 라벨이 나오면 거기서 끊는다. 넘어가면 옆 항목 값을 제 것으로 읽는다.
+        const after = lm.index + lm[0].length;
+        let end = Math.min(t.length, after + 220);
+        FIN_LABEL_ANY.lastIndex = after;
+        const nx = FIN_LABEL_ANY.exec(t);
+        if (nx && nx.index > after && nx.index < end) end = nx.index;
+        const win = t.slice(after, end);
+        if (!win) continue;
+
+        // ── ① 연도와 금액이 번갈아 나오는 표 ──
+        // 사람인 재무 탭은 머리글 없이 '매출액 2025.12 68억 2024.12 55억 …' 식으로 늘어놓는다.
+        // 연도가 라벨 뒤에 오기 때문에 머리글로 인정되지 않아, 지금까지 첫 해 하나만 읽고
+        // 나머지 연도를 통째로 잃었다(다산씨엔텍: 22~25년 표에서 25년 한 해만 실렸다).
+        const YRT = /(20\d{2})\s*[.\-/년]\s*(?:0?[1-9]|1[0-2])?\b/g;
+        const yts = [...win.matchAll(YRT)].map((m) => ({ y: Number(m[1]), at: m.index, end: m.index + m[0].length }))
+          .filter((x) => inRange(x.y));
+        const ats = [...win.matchAll(AMT)].map((m) => ({ s: m[1], at: m.index, end: m.index + m[0].length }));
+        let paired = 0;
+        if (yts.length && ats.length) {
+          const usedY = new Set();
+          ats.forEach((am) => {
+            // 금액에서 가장 가까운 연도 — 붙어 있는 것만 짝으로 본다
+            let best = null, bd = Infinity;
+            yts.forEach((yt, i) => {
+              const d = am.at >= yt.end ? am.at - yt.end : yt.at - am.end;
+              if (d >= 0 && d < bd && d <= 25) { bd = d; best = i; }
+            });
+            if (best == null || usedY.has(best)) return;
+            const eok = extAmountEok(am.s);
+            if (eok == null || !isFinite(eok)) return;
+            if (key === '매출액' && eok < 0) return;
+            usedY.add(best);
+            out.push({ key, eok, years: [yts[best].y], host, link });
+            paired++;
+          });
+        }
+        if (paired) continue;                              // 짝이 맞았으면 여기서 끝
+
+        // ── ② 머리글이 위에 따로 있는 표 ──
         const useHead = headYears && headAt < lm.index;
-        const want = useHead ? headYears.length : 1;
-        const seg = t.slice(lm.index + lm[0].length, lm.index + lm[0].length + (useHead ? 160 : 40));
-        const amts = [...seg.matchAll(AMT)].slice(0, want);
+        const amts = ats.slice(0, useHead ? headYears.length : 1);
         if (!amts.length) continue;
         amts.forEach((am, idx) => {
-          const eok = extAmountEok(am[1]);
+          const eok = extAmountEok(am.s);
           if (eok == null || !isFinite(eok)) return;
           if (key === '매출액' && eok < 0) return;          // 매출이 음수인 회사는 없다 — 열이 어긋난 것
           let years = null;
           if (useHead && amts.length === headYears.length) years = [headYears[idx]];
           else {
-            // 머리글이 없으면 값 주변의 결산 표기만 인정한다(제목의 SEO 연도는 배제).
+            // ── ③ 값 주변의 결산 표기 하나 ──
             // 한 금액이 여러 해에 동시에 속할 수는 없으므로 후보 중 '가장 가까운' 하나만 쓴다.
-            // 지금까지 주변 연도를 전부 달아, 44억 한 건이 2024·2023·2022 세 해에 똑같이 실렸다.
-            const at = lm.index + lm[0].length + am.index;
+            const at = after + am.at;
             const from = Math.max(0, at - 60);
             const around = t.slice(from, at + 60);
             const cands = [...around.matchAll(/(20\d{2})\s*(?:[.\-/]\s*(?:0?[1-9]|1[0-2])\b|년\s*(?:0?[1-9]|1[0-2])\s*월|년\s*(?:기준|말|결산))/g)]
               .map((m) => ({ y: Number(m[1]), at: from + m.index, lead: around.slice(Math.max(0, m.index - 14), m.index) }))
               // 설립일·사원수 기준일·공고 등록일에 붙은 연도는 결산 연도가 아니다
               .filter((c) => inRange(c.y) && !/(설립|창립|사원수|직원수|종업원수|임직원수|기준|등록|작성|수정|마감|입사|가입)/.test(c.lead));
-            cands.sort((a, b) => Math.abs(a.at - at) - Math.abs(b.at - at));
+            cands.sort((a2, b2) => Math.abs(a2.at - at) - Math.abs(b2.at - at));
             years = cands.length ? [cands[0].y] : null;
           }
           out.push({ key, eok, years, host, link });
@@ -1940,9 +1981,18 @@ function financeTabUrls(link) {
   const u = String(link || '');
   const out = [];
   let m;
-  if ((m = u.match(/saramin\.co\.kr\/[^?]*(?:csn[=/])([^&/?#]+)/i))) {
-    out.push(`https://m.saramin.co.kr/job-search/company-info-view/finance?csn=${m[1]}`);
-    out.push(`https://www.saramin.co.kr/zf_user/company-info/view-financial-summary/csn/${m[1]}`);
+  // csn은 경로(/csn/XXX)로도 쿼리(?csn=XXX)로도 온다. 앞의 [^?]*가 물음표를 못 넘어가
+  // '?csn=' 형태에서는 재무 탭 주소가 아예 만들어지지 않았다 — 사람인 기업정보 대표 주소가
+  // 바로 그 형태다(zf_user/company-info/view?csn=…). 다산씨엔텍에서 재무 탭이 열린 건
+  // 우연히 다른 경로형 주소가 같이 잡혔기 때문이고, 그 주소가 없는 업체는 통째로 놓쳤다.
+  // 쿼리형은 &·# 앞까지, 경로형은 다음 / 앞까지가 csn이다. 한 규칙으로 묶으면 경로형에서
+  // 뒤 세그먼트(/company_nm/…)까지 csn에 딸려 들어간다. base64라 '/'가 값에 들어갈 수 있어
+  // 두 형태를 따로 읽는다.
+  const csn = (u.match(/saramin\.co\.kr\/\S*?[?&]csn=([^&#\s]+)/i)
+    || u.match(/saramin\.co\.kr\/\S*?\/csn\/([^/?#\s]+)/i) || [])[1];
+  if (csn) {
+    out.push(`https://m.saramin.co.kr/job-search/company-info-view/finance?csn=${csn}`);
+    out.push(`https://www.saramin.co.kr/zf_user/company-info/view-financial-summary/csn/${csn}`);
   }
   if ((m = u.match(/jobkorea\.co\.kr\/company\/(\d+)/i))) {
     out.push(`https://www.jobkorea.co.kr/company/${m[1]}/Finance`);
@@ -2057,8 +2107,12 @@ async function hiringTrace(nm) {
     perHost.set(k, n + 1);
     targets.push({ ...p, kind });
   };
-  // 재무 탭을 먼저 넣는다 — 숫자는 거기에만 있다
-  const compPosts = posts.filter((p) => isCompanyPage(p.link));
+  // 재무 탭을 먼저 넣는다 — 숫자는 거기에만 있다.
+  // 그중에서도 사람인을 맨 앞에 둔다. 여러 업체를 돌려 보면 매출·영업이익·당기순이익·자본금을
+  // 연도별로 다 주는 곳은 사람인 재무 탭이 사실상 유일하다. 20칸이 다른 사이트로 차서
+  // 사람인이 뒤로 밀리면 재무를 통째로 못 얻는다.
+  const compPosts = posts.filter((p) => isCompanyPage(p.link))
+    .sort((a, b) => (/saramin/i.test(b.link) ? 1 : 0) - (/saramin/i.test(a.link) ? 1 : 0));
   const finSeen = new Set();
   compPosts.forEach((p) => financeTabUrls(p.link).forEach((u) => {
     if (finSeen.has(u)) return; finSeen.add(u);
@@ -2104,12 +2158,13 @@ async function hiringTrace(nm) {
         if (tgt && !tgt.dates.length) { tgt.dates = ds.slice(0, 3); tgt.dateFrom = 'page'; found.push(`날짜 ${ds[0]}`); }
       }
     }
-    // 재무 라벨은 있는데 값을 못 뽑았다면 원문 일부를 남긴다.
-    // 사이트마다 표기가 달라, 실제 문구를 봐야 패턴을 맞출 수 있다.
+    // 재무 탭 원문은 값을 뽑았든 못 뽑았든 남긴다.
+    // 사이트마다 표기가 달라 실제 문구를 봐야 패턴을 맞출 수 있는데, 지금까지 '0건일 때만'
+    // 남기다 보니 일부만 뽑힌 경우(다산씨엔텍: 4개년 표에서 1개년만)는 원인을 볼 수가 없었다.
     let sample = null;
-    if (!fin.length) {
-      const at = txt.search(/(매출액|매출|자본총계|당기순이익|재무정보)/);
-      if (at >= 0) sample = txt.slice(at, at + 160).replace(/\s+/g, ' ').trim();
+    if (!fin.length || pg.kind === 'finance') {
+      const at = txt.search(/(매출액|매출|자본금|자본총계|당기순이익|재무정보)/);
+      if (at >= 0) sample = txt.slice(at, at + (pg.kind === 'finance' ? 420 : 160)).replace(/\s+/g, ' ').trim();
     }
     extDiag.push({
       host: pg.host, kind: pg.kind, ok: true, chars: txt.length,

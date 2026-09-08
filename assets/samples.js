@@ -921,6 +921,7 @@ function assembleLiveReport(name, corp, res) {
     else if (x.key === '영업이익') cur.operatingProfit = x.eok;
     else if (x.key === '자산총계') cur.assets = x.eok;
     else if (x.key === '자본총계') cur.equity = x.eok;
+    else if (x.key === '자본금') cur.capital = x.eok;
     else if (x.key === '당기순이익') cur.netIncome = x.eok;
     extByYear.set(x.year, cur);
   });
@@ -933,7 +934,9 @@ function assembleLiveReport(name, corp, res) {
       const it = byYear.get(y);
       if (it) return { year: y, revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft), assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt), src: 'official' };
       const e = extByYear.get(y) || {};
-      return { year: y, revenue: e.revenue ?? null, operatingProfit: e.operatingProfit ?? null, assets: e.assets ?? null, debt: null, capital: null, src: 'ext', host: e.host || null };
+      // 자본금·순이익도 사이트가 주면 함께 싣는다 — 지금까지 뽑아 놓고 계열에 올리지 않아
+      // '자본금 = 해당 없음'으로 비어 있었다(사람인 재무 탭은 자본금을 준다).
+      return { year: y, revenue: e.revenue ?? null, operatingProfit: e.operatingProfit ?? null, assets: e.assets ?? null, debt: null, capital: e.capital ?? null, netIncome: e.netIncome ?? null, src: 'ext', host: e.host || null };
     });
     // 공시가 없는 해를 채용사이트 재무탭으로 메웠다면 그 사실을 재무 설명에 남긴다.
     // 같은 해가 양쪽에 다 있으면 공시를 그대로 두므로, 여기 적히는 연도는 '메운 해'뿐이다.
@@ -941,6 +944,11 @@ function assembleLiveReport(name, corp, res) {
     const filledHosts = [...new Set(finance_history.filter((r) => r.src === 'ext').map((r) => r.host).filter(Boolean))];
     // 재무 '필드'(매출액·총자산 등)는 공식 자료 기준을 유지한다 — 외부값은 별도 행으로 이미 표시된다
     const offRows = finance_history.filter((r) => r.src === 'official');
+    // 공시가 한 건도 없으면 채용사이트 값으로 칸을 채우게 되는데, 그때도 등급 A에 출처를
+    // '금융위 재무정보 API'로 찍고 있었다. 다산씨엔텍 조회에서 금융위는 '재무 레코드 없음'인데
+    // 매출액 68억이 A등급 공시로 표시됐다 — 사람인에서 긁어 온 값이다. 공시가 아니면 공시라고
+    // 하면 안 된다. 출처와 등급을 값의 출처대로 되돌린다.
+    const usingExt = !offRows.length;
     const L = (offRows.length ? offRows : finance_history)[(offRows.length ? offRows : finance_history).length - 1];
     const eok = (v) => (v != null ? `${v}억 원` : null);
     // ★ 재무는 회계연도 기준 — as_of를 '조회일'이 아니라 '해당 회계연도'로(옛 자료가 최신처럼 보이는 문제 방지).
@@ -949,14 +957,21 @@ function assembleLiveReport(name, corp, res) {
     const lag = curYear - L.year;
     const stale = lag >= 3;
     const asOf = `${L.year}-12`;
-    const grade = stale ? 'C' : 'A';
+    const grade = usingExt ? 'C' : (stale ? 'C' : 'A');
     // 요약재무제표에 없어 계정과목(재무상태표·손익계산서)에서 보완한 연도는 출처를 구분 표기
     const viaAccounts = !!(byYear.get(L.year) || {})._fromAccounts;
-    const src = `금융위 재무정보 API (${L.year} 회계연도${viaAccounts ? ' · 계정과목 보완' : ''})`;
+    const src = usingExt
+      ? `${L.host || '채용사이트'} 기업정보 (외부사이트자료 · 공시 아님)`
+      : `금융위 재무정보 API (${L.year} 회계연도${viaAccounts ? ' · 계정과목 보완' : ''})`;
     // 계열이 끊겼거나 중간에 빠진 해가 있으면 그 사유를 추정해 덧붙인다
     // (끊긴 사실만 보이면 폐업·부실로 오해하기 쉬움 — financeBreakNote 주석 참고)
     const breakNote = financeBreakNote(finance_history, curYear, empVal, bSttVal);
-    const baseNote = (stale
+    const baseNote = (usingExt
+      ? `★ 금융위 재무 API에 이 업체의 재무 레코드가 없습니다. 이 API는 외부감사·상장 공시분만 `
+        + `수록하므로, 외감 대상이 아닌 법인은 매출 규모와 무관하게 조회되지 않습니다. `
+        + `따라서 위 수치는 공시가 아니라 채용사이트 기업정보(${L.host || '외부사이트'})의 ${L.year}년 표기값이며 `
+        + `등급도 C(참고치)입니다 — 방문 전 최근 결산서·표준재무제표증명(국세청 발급)을 반드시 요청하세요.`
+      : stale
       ? `★ 금융위(DART 공시 기반) API가 제공하는 가장 최신 회계연도는 ${L.year}년입니다(약 ${lag}년 전). ` +
         `이 API는 상장·외부감사 공시분만 수록해 최근 자료가 없을 수 있습니다 — ` +
         `NICE·KED 등 신용조회에는 더 최근 재무가 있을 수 있으니 방문 전 최근 결산서를 요청하세요.`
