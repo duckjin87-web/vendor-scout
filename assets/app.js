@@ -1727,6 +1727,104 @@ function hireHeadcount(text) {
   return { count: n, asOf: m[2] ? `${m[2]}${m[3] ? '-' + String(m[3]).padStart(2, '0') : ''}` : null };
 }
 
+// ── 채용 사이트 '기업정보'에서 공통으로 뽑히는 항목들 ──
+// 두 업체(이시스코스메틱·씨앤티드림)의 수집 원문을 실제로 훑어 보니, 재무 말고도 어느 사이트에나
+// 거의 같은 이름으로 실려 있는 값들이 있었다. 평균연봉·업력·기업형태·업종·설립년도·리뷰 평점처럼
+// 공시로는 절대 안 나오는 것들이고, 영세 제조업체 검증에서는 이쪽이 오히려 실질 정보다.
+// 항목을 카테고리로 묶어 한 번에 훑고, 사이트별 값을 나란히 남겨 서로 대조할 수 있게 한다.
+// 값은 전부 사이트가 자체 수집한 것이므로 공식 자료와 같은 칸에 두지 않는다.
+// 공고 표의 값은 '생산·제조'처럼 가운뎃점을 품고 있는데, 항목 사이도 ' · '로 나눈다.
+// 붙여 쓴 점은 값의 일부, 띄어 쓴 점은 구분자다. 그 차이를 무시하고 자르면 '생산·제조'가
+// '생산'으로 잘린다. 값 끝은 ①문서 끝 ②' | ' ③' · ' ④다음 항목 라벨, 이 넷으로만 본다.
+const PF_TAIL = '\\s*(?:$|\\|\\s|[·,]\\s|(?=\\s(?:모집|고용|급여|임금|근무|마감|접수|경력|학력|복리|우대|자격|전형|담당|직무|기타)))';
+function pfRe(label, max) {
+  return new RegExp(`${label}\\s*:?\\s*([^|]{2,${max}}?)${PF_TAIL}`);
+}
+const EXT_PROFILE_FIELDS = [
+  // [카테고리, 항목, 정규식(1그룹=값), 읽을 페이지 성격(null=전부)]
+  ['인력·급여', '사원수', /(?:사원수|직원수|종업원수|임직원수)\s*:?\s*([0-9,]{1,7}\s*명)/, 'company'],
+  ['인력·급여', '평균연봉', /평균\s*연봉\s*:?\s*([0-9,]{2,9}\s*(?:만원|만|원))/, 'company'],
+  ['인력·급여', '신입초봉', /(?:신입\s*)?초봉\s*:?\s*([0-9,]{2,9}\s*(?:만원|만|원))/, 'company'],
+  ['인력·급여', '평균근속', /평균\s*근속(?:연수|년수)?\s*:?\s*([0-9.]{1,4}\s*년)/, 'company'],
+  ['기업개요', '설립', /(?:설립일|설립년월|설립연월|창립일|설립)\s*:?\s*((?:19|20)\d{2}\s*[.\-/년]\s*(?:\d{1,2})?)/, 'company'],
+  ['기업개요', '업력', /업력\s*:?\s*([0-9]{1,3}\s*년(?:차)?)/, 'company'],
+  ['기업개요', '기업형태', /기업\s*(?:형태|구분|규모)\s*:?\s*([가-힣A-Za-z·\/()]{2,16})/, 'company'],
+  ['기업개요', '업종', /업종\s*:?\s*([가-힣A-Za-z0-9·,\/()\s]{2,30}?)\s*(?:$|[|·]|사원수|매출|설립|대표|주소|홈페이지)/, 'company'],
+  ['기업개요', '대표자', /대표(?:자|이사)?\s*(?:명|자명)?\s*:?\s*([가-힣]{2,6})(?![가-힣])/, 'company'],
+  ['기업개요', '자본금', /자본금\s*:?\s*([0-9,.]{1,12}\s*(?:억|백만|만)?\s*원?)/, 'company'],
+  ['기업개요', '주소', /(?:기업\s*주소|회사\s*주소|소재지|주소)\s*:?\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^|·]{4,50}?)\s*(?:$|[|·]|지도|홈페이지|사원수|설립)/, 'company'],
+  ['기업개요', '홈페이지', /홈페이지\s*:?\s*((?:https?:\/\/)?[a-z0-9][a-z0-9.\-]{3,50}\.[a-z]{2,6}(?:\/[^\s|·]{0,30})?)/i, 'company'],
+  ['평판', '리뷰평점', /(?:기업\s*)?(?:리뷰\s*)?(?:평점|총점|만족도)\s*:?\s*([0-5](?:\.[0-9])?)\s*(?:\/\s*5|점)?/, 'company'],
+  ['평판', '리뷰수', /리뷰\s*:?\s*([0-9,]{1,6}\s*(?:건|개))/, 'company'],
+  ['평판', '면접난이도', /면접\s*난이도\s*:?\s*([가-힣0-9.\s]{2,12}?)\s*(?:$|[|·])/, 'company'],
+  ['채용조건', '모집분야', pfRe('모집\\s*(?:분야|부문|직종)', 28), 'post'],
+  ['채용조건', '모집인원', /모집\s*인원\s*:?\s*([0-9,]{1,5}\s*명|[가-힣]{1,6}\s*명)/, 'post'],
+  ['채용조건', '고용형태', pfRe('(?:고용\\s*형태|근무\\s*형태)', 20), 'post'],
+  ['채용조건', '경력', /경력\s*:?\s*(신입|경력\s*무관|무관|경력\s*[0-9]{1,2}\s*년\s*이상)/, 'post'],
+  ['채용조건', '학력', /학력\s*:?\s*([가-힣]{2,8}(?:\s*이상)?)/, 'post'],
+  ['채용조건', '급여', pfRe('(?:급여|임금)', 26), 'post'],
+  ['채용조건', '근무시간', pfRe('근무\\s*(?:시간|요일\\s*\\/?\\s*시간)', 26), 'post'],
+  ['채용조건', '근무지', pfRe('근무\\s*(?:지역|지|장소)', 40), 'post'],
+  ['채용조건', '마감일', /(?:접수\s*)?마감(?:일|일자)?\s*:?\s*((?:20\d{2}\s*[.\-/년]\s*)?\d{1,2}\s*[.\-/월]\s*\d{1,2}\s*일?|상시\s*채용|수시\s*채용|채용\s*시\s*마감)/, 'post'],
+];
+// 값이 라벨만 다시 잡히거나 통째로 문장이 딸려 오는 걸 막는다
+const PROFILE_JUNK = /(로그인|회원가입|채용정보|더보기|검색|바로가기|자세히|https?:\/\/[^\s]*(?:jobkorea|saramin|incruit|catch)|^[.\-·,\s]*$)/;
+// 값 앞에 딸려 오는 부스러기를 떼어 낸다.
+// 실제 수집분에서 근무지가 '주소 : 경기 부천시', 급여가 '조건 : 월급 250만원'으로 나왔다 —
+// 사이트가 라벨을 두 겹으로 쓴 것이라 앞의 '○○ :'는 값이 아니다.
+function cleanProfileValue(v, atEnd) {
+  let s = String(v).replace(/\s+/g, ' ')
+    .replace(/^[\s.,\-·|;:]+/, '')
+    .replace(/^[가-힣]{1,4}\s*[:：]\s*/, '')
+    .replace(/[\s.,\-·|;:]+$/, '')
+    .trim();
+  // 검색 스니펫은 문장 중간에서 잘린다. 끝이 한 글자짜리 토막이면 잘린 조각이라 보고 버린다
+  // ('경기 부천시 수…' → '경기 부천시').
+  if (atEnd) s = s.replace(/\s[가-힣]$/, '');
+  return s.trim();
+}
+function extProfile(text, host, link, kind) {
+  const t = String(text || '').replace(/\s+/g, ' ');
+  const out = [];
+  for (const [cat, key, re, want] of EXT_PROFILE_FIELDS) {
+    // 공고 페이지의 '모집인원'을 사원수로 오해하는 식의 혼선을 막으려고 페이지 성격을 가린다
+    if (want && kind && want !== kind) continue;
+    const m = t.match(re);
+    if (!m || !m[1]) continue;
+    const v = cleanProfileValue(m[1], m.index + m[0].length >= t.length - 1);
+    if (!v || v.length < 1 || v.length > 50 || PROFILE_JUNK.test(v)) continue;
+    out.push({ cat, key, value: v, host, link });
+  }
+  return out;
+}
+// 같은 항목을 여러 사이트가 다르게 적는다. 하나만 남기지 않고 전부 보여 준다 — 어긋난다는 사실
+// 자체가 확인해야 할 항목이기 때문이다. 대표값은 최다 득표로 고른다.
+function reconcileProfile(rows) {
+  const groups = new Map();
+  (rows || []).forEach((r) => {
+    const k = `${r.cat}|${r.key}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  });
+  const order = ['인력·급여', '기업개요', '평판', '채용조건'];
+  const out = [];
+  for (const [, list] of groups) {
+    const perHost = new Map();
+    list.forEach((r) => { if (!perHost.has(r.host)) perHost.set(r.host, r); });
+    const uniq = [...perHost.values()];
+    const votes = new Map();
+    uniq.forEach((r) => votes.set(r.value, (votes.get(r.value) || 0) + 1));
+    const best = [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    out.push({
+      cat: uniq[0].cat, key: uniq[0].key, value: best,
+      sources: uniq.map((r) => ({ host: String(r.host || '').replace(/^www\./, ''), value: r.value, link: r.link })),
+      agree: votes.size === 1,
+    });
+  }
+  return out.sort((a, b) => order.indexOf(a.cat) - order.indexOf(b.cat)
+    || EXT_PROFILE_FIELDS.findIndex((f) => f[1] === a.key) - EXT_PROFILE_FIELDS.findIndex((f) => f[1] === b.key));
+}
+
 // 채용 사이트 기업정보에는 매출·자본총계·순이익이 실려 있다(인크루트·잡코리아·캐치 등).
 // 금융위 재무가 몇 년 전에서 끊긴 업체의 '그 이후'를 가늠할 수 있는 몇 안 되는 무료 단서다.
 // 다만 공시가 아니라 사이트가 자체 수집·표기한 값이라 공식 자료와 같은 칸에 두면 안 된다.
@@ -1739,66 +1837,122 @@ const EXT_FIN_KEYS = [
   ['자산총계', /자산\s*총계/],
 ];
 // "44억", "4,400백만", "4,400,000,000원" → 억 단위 숫자
+// 음수 표기가 사이트마다 다르다. 이시스코스메틱 조회에서 사람인은 107억, 잡코리아는 -107억으로
+// 같은 값의 부호가 갈렸다. 사람인이 마이너스를 '△'로 쓰는데 우리가 '-'만 봤기 때문이다.
+// 회계 표기에서 음수는 -, △, ▲, ▽, ( ) 다섯 가지로 나타난다. 전부 음수로 읽는다.
+const NEG_HEAD = /^[-−–—△▲▽▼(]/;
 function extAmountEok(str) {
-  const s = String(str || '').replace(/\s/g, '');
-  let m = s.match(/^-?([\d,.]+)억/);
-  if (m) return Math.round(Number(m[1].replace(/,/g, '')) * (s.startsWith('-') ? -1 : 1));
-  m = s.match(/^-?([\d,]+)백만/);
-  if (m) return Math.round(Number(m[1].replace(/,/g, '')) / 100) * (s.startsWith('-') ? -1 : 1);
-  m = s.match(/^-?([\d,]{6,})원?/);
-  if (m) { const n = Number(m[1].replace(/,/g, '')); if (n >= 1e6) return Math.round(n / 1e8) * (s.startsWith('-') ? -1 : 1); }
+  const raw = String(str || '').replace(/\s/g, '');
+  const neg = NEG_HEAD.test(raw);
+  const s = raw.replace(/^[-−–—△▲▽▼(]+/, '').replace(/\)+$/, '');
+  const sign = neg ? -1 : 1;
+  let m = s.match(/^([\d,.]+)억/);
+  if (m) return Math.round(Number(m[1].replace(/,/g, '')) * sign);
+  m = s.match(/^([\d,]+)백만/);
+  if (m) return Math.round(Number(m[1].replace(/,/g, '')) / 100) * sign;
+  m = s.match(/^([\d,]{6,})원?/);
+  if (m) { const n = Number(m[1].replace(/,/g, '')); if (n >= 1e6) return Math.round(n / 1e8) * sign; }
   return null;
 }
+// 페이지 안에서 '재무표가 있을 법한 구간'만 잘라 낸다.
+// 기업정보 페이지에는 설립일·사원수 기준일·리뷰 작성일처럼 연·월이 붙은 숫자가 곳곳에 있다.
+// 페이지 전체를 훑으면 그런 날짜가 결산 머리글로 오인된다(씨앤티드림: 사원수 기준일 2017.04과
+// 설립일 2011.09가 머리글로 잡혀 매출액에 -1억이 실렸다). 재무 문맥 안에서만 읽는다.
+const FIN_ANCHOR = /(재무\s*(?:정보|현황|제표|지표|상태)|매출액|영업\s*이익|자산\s*총계|자본\s*총계|손익\s*계산)/g;
+function financeSections(t) {
+  const spans = [];
+  let m;
+  const re = new RegExp(FIN_ANCHOR.source, 'g');
+  while ((m = re.exec(t))) {
+    const s = Math.max(0, m.index - 120), e = Math.min(t.length, m.index + 600);
+    const last = spans[spans.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);   // 겹치면 합친다
+    else spans.push([s, e]);
+  }
+  return spans;
+}
 function extFinance(text, host, link) {
-  const t = String(text || '').replace(/\s+/g, ' ');
+  const full = String(text || '').replace(/\s+/g, ' ');
   const out = [];
   const nowY = new Date().getFullYear();
   const inRange = (y) => y >= 2010 && y <= nowY;
+  // 음수 표기(△·▲·괄호)까지 포함해 금액을 잡는다
+  const AMT = /((?:[-−–—△▲▽▼(])?[0-9][0-9,.]*\s*(?:억|백만|원)\)?)/g;
 
-  // ── 결산 연도 머리글 찾기 ──
-  // 채용 사이트 재무표는 "2025.12 2024.12 2023.12" 처럼 연도를 한 줄에 늘어놓고
-  // 그 아래 항목별로 값을 나열한다. 지금까지 항목당 첫 값 하나만 읽어, 3개년 표에서
-  // 한 해만 가져오고 나머지 연도는 통째로 잃었다(이시스코스메틱: 잡코리아가 2023~2025를
-  // 주는데 2025 매출 하나만 실렸다). 머리글을 먼저 찾아 값과 순서대로 짝지운다.
-  const YR = /(20\d{2})\s*[.\-/년]\s*(?:0?[1-9]|1[0-2])\b/g;
-  const yrHits = [...t.matchAll(YR)].map((m) => ({ y: Number(m[1]), at: m.index })).filter((x) => inRange(x.y));
-  let header = [];
-  for (let a = 0; a < yrHits.length; a++) {
-    const run = [yrHits[a]];
-    for (let b = a + 1; b < yrHits.length && yrHits[b].at - run[run.length - 1].at < 40; b++) run.push(yrHits[b]);
-    if (run.length > header.length) header = run;         // 가장 긴 연속열 = 표 머리글
-  }
-  const headYears = header.length >= 2 ? header.map((x) => x.y) : null;
+  for (const [s0, e0] of financeSections(full)) {
+    const t = full.slice(s0, e0);
 
-  const AMT = /(-?[0-9][0-9,.]*\s*(?:억|백만|원))/g;
-  for (const [key, re] of EXT_FIN_KEYS) {
-    const lab = new RegExp(re.source, 'gi');
-    let lm;
-    while ((lm = lab.exec(t))) {
-      // 라벨 뒤 구간에서 금액을 순서대로 모은다. 머리글이 있으면 연도 수만큼, 없으면 1개.
-      const want = headYears ? headYears.length : 1;
-      const seg = t.slice(lm.index + lm[0].length, lm.index + lm[0].length + (headYears ? 160 : 40));
-      const amts = [...seg.matchAll(AMT)].slice(0, want);
-      if (!amts.length) continue;
-      amts.forEach((am, idx) => {
-        const eok = extAmountEok(am[1]);
-        if (eok == null || !isFinite(eok)) return;
-        let years = null;
-        if (headYears && amts.length === headYears.length) years = [headYears[idx]];
-        else {
-          // 머리글이 없으면 값 주변의 결산 표기만 인정한다(제목의 SEO 연도는 배제)
-          const at = lm.index + lm[0].length + am.index;
-          const around = t.slice(Math.max(0, at - 60), at + 60);
-          const ys = [...new Set([...around.matchAll(/(20\d{2})\s*(?:[.\-/]\s*(?:0?[1-9]|1[0-2])\b|년\s*(?:0?[1-9]|1[0-2])\s*월|년\s*(?:기준|말|결산))/g)]
-            .map((m) => Number(m[1])).filter(inRange))];
-          years = ys.length ? ys : null;
-        }
-        out.push({ key, eok, years, host, link });
-      });
-      if (!headYears) break;                              // 머리글 없으면 항목당 1건이면 충분
+    // ── 결산 연도 머리글 찾기 ──
+    // 채용 사이트 재무표는 "2025.12 2024.12 2023.12" 처럼 연도를 한 줄에 늘어놓고
+    // 그 아래 항목별로 값을 나열한다. 머리글을 찾아 값과 순서대로 짝지운다.
+    // 단, 결산 머리글은 반드시 '연속된 연도'이고 한 방향으로만 간다. 2017·2011·2025처럼
+    // 띄엄띄엄하거나 오르내리는 조합은 표 머리글이 아니라 딴 날짜가 섞인 것이므로 버린다.
+    const YR = /(20\d{2})\s*[.\-/년]\s*(?:0?[1-9]|1[0-2])\b/g;
+    const yrHits = [...t.matchAll(YR)].map((m) => ({ y: Number(m[1]), at: m.index })).filter((x) => inRange(x.y));
+    let header = [];
+    for (let a = 0; a < yrHits.length; a++) {
+      const run = [yrHits[a]];
+      for (let b = a + 1; b < yrHits.length && yrHits[b].at - run[run.length - 1].at < 40; b++) run.push(yrHits[b]);
+      // 뒤에서부터 줄여 가며 '연속·단조'를 만족하는 가장 긴 조각을 취한다
+      for (let len = run.length; len >= 2; len--) {
+        const ys = run.slice(0, len).map((x) => x.y);
+        const uniq = new Set(ys);
+        if (uniq.size !== len) continue;                                   // 같은 해 중복 = 머리글 아님
+        if (Math.max(...ys) - Math.min(...ys) !== len - 1) continue;        // 연속이어야 한다
+        const asc = ys.every((v, i) => i === 0 || v > ys[i - 1]);
+        const desc = ys.every((v, i) => i === 0 || v < ys[i - 1]);
+        if (!asc && !desc) continue;                                        // 오르내리면 머리글 아님
+        if (len > header.length) header = run.slice(0, len);
+        break;
+      }
+    }
+    const headYears = header.length >= 2 ? header.map((x) => x.y) : null;
+    const headAt = header.length ? header[0].at : -1;
+
+    for (const [key, re] of EXT_FIN_KEYS) {
+      const lab = new RegExp(re.source, 'gi');
+      let lm;
+      while ((lm = lab.exec(t))) {
+        // 머리글은 표의 맨 윗줄이다. 라벨보다 뒤에 있으면 이 항목의 머리글이 아니다.
+        const useHead = headYears && headAt < lm.index;
+        const want = useHead ? headYears.length : 1;
+        const seg = t.slice(lm.index + lm[0].length, lm.index + lm[0].length + (useHead ? 160 : 40));
+        const amts = [...seg.matchAll(AMT)].slice(0, want);
+        if (!amts.length) continue;
+        amts.forEach((am, idx) => {
+          const eok = extAmountEok(am[1]);
+          if (eok == null || !isFinite(eok)) return;
+          if (key === '매출액' && eok < 0) return;          // 매출이 음수인 회사는 없다 — 열이 어긋난 것
+          let years = null;
+          if (useHead && amts.length === headYears.length) years = [headYears[idx]];
+          else {
+            // 머리글이 없으면 값 주변의 결산 표기만 인정한다(제목의 SEO 연도는 배제).
+            // 한 금액이 여러 해에 동시에 속할 수는 없으므로 후보 중 '가장 가까운' 하나만 쓴다.
+            // 지금까지 주변 연도를 전부 달아, 44억 한 건이 2024·2023·2022 세 해에 똑같이 실렸다.
+            const at = lm.index + lm[0].length + am.index;
+            const from = Math.max(0, at - 60);
+            const around = t.slice(from, at + 60);
+            const cands = [...around.matchAll(/(20\d{2})\s*(?:[.\-/]\s*(?:0?[1-9]|1[0-2])\b|년\s*(?:0?[1-9]|1[0-2])\s*월|년\s*(?:기준|말|결산))/g)]
+              .map((m) => ({ y: Number(m[1]), at: from + m.index, lead: around.slice(Math.max(0, m.index - 14), m.index) }))
+              // 설립일·사원수 기준일·공고 등록일에 붙은 연도는 결산 연도가 아니다
+              .filter((c) => inRange(c.y) && !/(설립|창립|사원수|직원수|종업원수|임직원수|기준|등록|작성|수정|마감|입사|가입)/.test(c.lead));
+            cands.sort((a, b) => Math.abs(a.at - at) - Math.abs(b.at - at));
+            years = cands.length ? [cands[0].y] : null;
+          }
+          out.push({ key, eok, years, host, link });
+        });
+        if (!useHead) break;                              // 머리글 없으면 항목당 1건이면 충분
+      }
     }
   }
-  return out;
+  // 같은 구간이 여러 앵커에 걸쳐 두 번 읽힐 수 있다 — 항목·연도·값이 같으면 1건으로
+  const seen = new Set();
+  return out.filter((r) => {
+    const k = `${r.key}|${(r.years || []).join(',')}|${r.eok}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 // 채용 사이트는 재무를 별도 탭에 둔다. 기업정보 본문에는 '재무정보'라는 글자만 있고
@@ -1898,11 +2052,13 @@ async function hiringTrace(nm) {
   //    사원수는 페이지에서만 찾았다. 그래서 눈앞에 있는 값을 놓쳤다(heads가 빈 채로 나왔다).
   const heads = [];
   const extFin = [];
+  const extProf = [];
   posts.forEach((p) => {
     const blob = `${p.title} ${p.desc}`;
     const hc = hireHeadcount(blob);
     if (hc) heads.push({ ...hc, host: p.host, link: p.link, from: 'snippet' });
     extFin.push(...extFinance(blob, p.host, p.link));
+    extProf.push(...extProfile(blob, p.host, p.link, null));
   });
 
   // ④ 페이지를 직접 연다. 두 가지를 노린다.
@@ -1948,10 +2104,17 @@ async function hiringTrace(nm) {
     if (!pg.text) { extDiag.push({ host: pg.host, kind: pg.kind, ok: false, why: pg.err || `본문 없음(HTTP ${pg.status || '?'})` }); return; }
     const txt = htmlToText(pg.text);
     const found = [];
-    const hc = hireHeadcount(txt);
-    if (hc) { heads.push({ ...hc, host: pg.host, link: pg.link, from: 'page' }); found.push('사원수'); }
+    // 사원수는 기업정보·재무 탭에서만 읽는다. 공고 페이지에도 '50명'처럼 숫자가 있지만 그건
+    // 모집인원이다. 이시스코스메틱 조회에서 공고 페이지의 50명이 실제 사원수 19명과 맞서
+    // '인력 수치 불일치' 경고를 만들어 냈다 — 애초에 같은 항목이 아니었다.
+    if (pg.kind === 'company' || pg.kind === 'finance') {
+      const hc = hireHeadcount(txt);
+      if (hc) { heads.push({ ...hc, host: pg.host, link: pg.link, from: 'page' }); found.push('사원수'); }
+    }
     const fin = extFinance(txt, pg.host, pg.link);
     if (fin.length) { extFin.push(...fin); found.push(`재무 ${fin.length}`); }
+    const prof = extProfile(txt, pg.host, pg.link, pg.kind === 'finance' ? 'company' : pg.kind);
+    if (prof.length) { extProf.push(...prof); found.push(`정보 ${prof.length}`); }
     // 페이지에서 찾은 날짜를 해당 공고에 돌려준다 — 스니펫에 없던 등록일이 여기 있다
     const ds = hireDates(txt);
     if (ds.length) {
@@ -1976,12 +2139,12 @@ async function hiringTrace(nm) {
   const finRows = reconcileExtFin(extFin);
   // 사원수는 기준일이 있는 값을 우선한다(페이지 > 스니펫)
   heads.sort((a, b) => (b.asOf ? 1 : 0) - (a.asOf ? 1 : 0) || (b.from === 'page' ? 1 : 0) - (a.from === 'page' ? 1 : 0));
-  return { posts, heads, extFin: finRows, extDiag };
+  return { posts, heads, extFin: finRows, extProfile: reconcileProfile(extProf), extDiag };
 }
 
 // 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
-function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag) {
-  if (!posts || !posts.length) return { ok: false, reason: '채용 사이트에서 이 업체 공고를 찾지 못했습니다', posts: [], heads: heads || [] };
+function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile) {
+  if (!posts || !posts.length) return { ok: false, reason: '채용 사이트에서 이 업체 공고를 찾지 못했습니다', posts: [], heads: heads || [], extProfile: extProfile || [] };
   const now = new Date();
   const curY = now.getFullYear();
   const ym = (s) => (String(s).length >= 7 ? String(s) : `${s}-06`);          // 연도만 있으면 연중으로 근사
@@ -2086,7 +2249,7 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag) {
   }
 
   return {
-    ok: true, posts, heads: heads || [], extDiag: extDiag || null, byYear, byRole,
+    ok: true, posts, heads: heads || [], extDiag: extDiag || null, extProfile: extProfile || [], byYear, byRole,
     dated: dated.length, undated: undated.length,
     recent, prior, spanYears, intensity, headTrend,
     signals: signals.sort((a, b) => (b.level === 'high' ? 1 : 0) - (a.level === 'high' ? 1 : 0)),
@@ -2572,6 +2735,28 @@ function renderHiring(h) {
     html += `<div class="hire-sec">채용 강도 <em>회전율 대용치</em></div>`
       + `<div class="hire-int">재직자 ${i.emp}명 대비 연평균 공고 <b>${i.perYear}건</b> = <b>${i.ratio}%</b> · ${esc(i.band)}</div>`;
   }
+  // 기업정보 추출 — 공시에는 없고 채용 사이트에만 있는 값들. 카테고리로 묶어 한눈에 본다.
+  // 사이트마다 값이 다르면 감추지 않고 나란히 적는다 — 어긋난다는 사실이 곧 확인할 항목이다.
+  const prof = h.extProfile || [];
+  if (prof.length) {
+    const cats = [];
+    prof.forEach((r) => {
+      let c = cats.find((x) => x.cat === r.cat);
+      if (!c) { c = { cat: r.cat, rows: [] }; cats.push(c); }
+      c.rows.push(r);
+    });
+    html += `<div class="hire-sec">기업정보 추출 <em>채용사이트 게재값 · 공시 아님</em></div><div class="hire-prof">`
+      + cats.map((c) => `<div class="pf-cat"><i>${esc(c.cat)}</i><div class="pf-kv">`
+        + c.rows.map((r) => {
+          const hosts = r.sources.map((s) => s.host).join(', ');
+          const alt = r.agree ? '' : ` <u title="사이트별 값이 다릅니다">${esc(r.sources.map((s) => `${s.host} ${s.value}`).join(' / '))}</u>`;
+          return `<div class="pf-k">${esc(r.key)}</div>`
+            + `<div class="pf-v${r.agree ? '' : ' dis'}">${esc(r.value)}<small>${esc(hosts)}</small>${alt}</div>`;
+        }).join('')
+        + '</div></div>').join('')
+      + `</div><div class="hire-warn">※ 위 값은 채용 사이트가 자체 수집해 게재한 것으로 공시가 아닙니다. 갱신 시점이 사이트마다 달라 실제와 차이가 날 수 있으니 방문 시 확인하세요.</div>`;
+  }
+
   // 근거 원문 — 추정의 출처를 사용자가 직접 열어볼 수 있어야 한다
   const show = h.posts.slice(0, 6);
   html += `<div class="hire-sec">공고 원문 <em>클릭 시 해당 사이트</em></div><ul class="hire-list">`

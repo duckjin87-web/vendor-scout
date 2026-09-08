@@ -898,7 +898,7 @@ function assembleLiveReport(name, corp, res) {
   // (재무 조립보다 앞에 둔다 — 아래에서 외부사이트 재무를 붙일 때 필요하다)
   const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
   const hiring = hireRaw && typeof analyzeHiring === 'function'
-    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag)
+    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile)
     : null;
 
   const flAll = R.finance && R.finance.ok ? listOf(R.finance.data, ['response.body.items.item', 'body.items']) : [];
