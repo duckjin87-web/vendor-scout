@@ -984,8 +984,10 @@ function assembleLiveReport(name, corp, res) {
   // 금융위 재무가 몇 년 전에서 끊긴 업체는 그 이후를 알 방법이 없다. 채용 사이트 기업정보에
   // 실린 매출·자본총계·순이익을 보태되, 공시가 아니므로 항목명에 '외부사이트자료'를 못 박아
   // 공식 수치와 섞이지 않게 한다. 등급도 C(추정·프록시)로 둔다.
-  const extRows = ((hireRaw && hireRaw.extFin) || []).map((x) => {
-    const yr = x.year ? `${String(x.year).slice(2)}년 ` : '';
+  // 연도를 모르는 값은 아예 싣지 않는다. '영업이익 — 외부사이트자료 1억'처럼 어느 해 것인지
+  // 알 수 없는 줄은 공시와 대조할 수도, 추이에 올릴 수도 없어 화면만 늘린다.
+  const extRows = ((hireRaw && hireRaw.extFin) || []).filter((x) => x.year).map((x) => {
+    const yr = `${String(x.year).slice(2)}년 `;
     const srcs = x.sources || [];
     const hosts = srcs.map((v) => v.host).join(' · ');
     // 여러 사이트가 같은 값을 말하면 근거가 강해지고, 갈리면 그 자체가 확인 대상이다

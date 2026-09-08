@@ -1727,45 +1727,18 @@ function hireHeadcount(text) {
   return { count: n, asOf: m[2] ? `${m[2]}${m[3] ? '-' + String(m[3]).padStart(2, '0') : ''}` : null };
 }
 
-// ── 채용 사이트 '기업정보'에서 공통으로 뽑히는 항목들 ──
-// 두 업체(이시스코스메틱·씨앤티드림)의 수집 원문을 실제로 훑어 보니, 재무 말고도 어느 사이트에나
-// 거의 같은 이름으로 실려 있는 값들이 있었다. 평균연봉·업력·기업형태·업종·설립년도·리뷰 평점처럼
-// 공시로는 절대 안 나오는 것들이고, 영세 제조업체 검증에서는 이쪽이 오히려 실질 정보다.
-// 항목을 카테고리로 묶어 한 번에 훑고, 사이트별 값을 나란히 남겨 서로 대조할 수 있게 한다.
-// 값은 전부 사이트가 자체 수집한 것이므로 공식 자료와 같은 칸에 두지 않는다.
-// 공고 표의 값은 '생산·제조'처럼 가운뎃점을 품고 있는데, 항목 사이도 ' · '로 나눈다.
-// 붙여 쓴 점은 값의 일부, 띄어 쓴 점은 구분자다. 그 차이를 무시하고 자르면 '생산·제조'가
-// '생산'으로 잘린다. 값 끝은 ①문서 끝 ②' | ' ③' · ' ④다음 항목 라벨, 이 넷으로만 본다.
-const PF_TAIL = '\\s*(?:$|\\|\\s|[·,]\\s|(?=\\s(?:모집|고용|급여|임금|근무|마감|접수|경력|학력|복리|우대|자격|전형|담당|직무|기타)))';
-function pfRe(label, max) {
-  return new RegExp(`${label}\\s*:?\\s*([^|]{2,${max}}?)${PF_TAIL}`);
-}
+// ── 채용 사이트 '기업정보'에서 뽑을 항목 ──
+// 처음에는 기업개요·평판·채용조건까지 넓게 뽑았는데, 실제 결과를 보니 대부분 쓸모가 없었다.
+//   · 설립일·대표자·주소·업종은 이미 금융위·국세청에서 A등급으로 받는다. 채용 사이트 값은
+//     같은 걸 더 낮은 신뢰도로 한 번 더 적을 뿐이고, 자본금은 5,000만원 vs 공시 1억으로 갈렸다.
+//   · 리뷰 1건짜리 평점, 모집분야·급여·마감일은 공고 1건의 조건이지 업체의 속성이 아니다.
+// 남기는 건 공시에 없으면서 업체 규모를 가늠하게 해 주는 인력·급여뿐이다. 재무는 extFinance가
+// 따로 다룬다. 값은 사이트가 자체 수집한 것이므로 공식 자료와 같은 칸에 두지 않는다.
 const EXT_PROFILE_FIELDS = [
   // [카테고리, 항목, 정규식(1그룹=값), 읽을 페이지 성격(null=전부)]
-  ['인력·급여', '사원수', /(?:사원수|직원수|종업원수|임직원수)\s*:?\s*([0-9,]{1,7}\s*명)/, 'company'],
   ['인력·급여', '평균연봉', /평균\s*연봉\s*:?\s*([0-9,]{2,9}\s*(?:만원|만|원))/, 'company'],
   ['인력·급여', '신입초봉', /(?:신입\s*)?초봉\s*:?\s*([0-9,]{2,9}\s*(?:만원|만|원))/, 'company'],
   ['인력·급여', '평균근속', /평균\s*근속(?:연수|년수)?\s*:?\s*([0-9.]{1,4}\s*년)/, 'company'],
-  ['기업개요', '설립', /(?:설립일|설립년월|설립연월|창립일|설립)\s*:?\s*((?:19|20)\d{2}\s*[.\-/년]\s*(?:\d{1,2})?)/, 'company'],
-  ['기업개요', '업력', /업력\s*:?\s*([0-9]{1,3}\s*년(?:차)?)/, 'company'],
-  ['기업개요', '기업형태', /기업\s*(?:형태|구분|규모)\s*:?\s*([가-힣A-Za-z·\/()]{2,16})/, 'company'],
-  ['기업개요', '업종', /업종\s*:?\s*([가-힣A-Za-z0-9·,\/()\s]{2,30}?)\s*(?:$|[|·]|사원수|매출|설립|대표|주소|홈페이지)/, 'company'],
-  ['기업개요', '대표자', /대표(?:자|이사)?\s*(?:명|자명)?\s*:?\s*([가-힣]{2,6})(?![가-힣])/, 'company'],
-  ['기업개요', '자본금', /자본금\s*:?\s*([0-9,.]{1,12}\s*(?:억|백만|만)?\s*원?)/, 'company'],
-  ['기업개요', '주소', /(?:기업\s*주소|회사\s*주소|소재지|주소)\s*:?\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^|·]{4,50}?)\s*(?:$|[|·]|지도|홈페이지|사원수|설립)/, 'company'],
-  ['기업개요', '홈페이지', /홈페이지\s*:?\s*((?:https?:\/\/)?[a-z0-9][a-z0-9.\-]{3,50}\.[a-z]{2,6}(?:\/[^\s|·]{0,30})?)/i, 'company'],
-  ['평판', '리뷰평점', /(?:기업\s*)?(?:리뷰\s*)?(?:평점|총점|만족도)\s*:?\s*([0-5](?:\.[0-9])?)\s*(?:\/\s*5|점)?/, 'company'],
-  ['평판', '리뷰수', /리뷰\s*:?\s*([0-9,]{1,6}\s*(?:건|개))/, 'company'],
-  ['평판', '면접난이도', /면접\s*난이도\s*:?\s*([가-힣0-9.\s]{2,12}?)\s*(?:$|[|·])/, 'company'],
-  ['채용조건', '모집분야', pfRe('모집\\s*(?:분야|부문|직종)', 28), 'post'],
-  ['채용조건', '모집인원', /모집\s*인원\s*:?\s*([0-9,]{1,5}\s*명|[가-힣]{1,6}\s*명)/, 'post'],
-  ['채용조건', '고용형태', pfRe('(?:고용\\s*형태|근무\\s*형태)', 20), 'post'],
-  ['채용조건', '경력', /경력\s*:?\s*(신입|경력\s*무관|무관|경력\s*[0-9]{1,2}\s*년\s*이상)/, 'post'],
-  ['채용조건', '학력', /학력\s*:?\s*([가-힣]{2,8}(?:\s*이상)?)/, 'post'],
-  ['채용조건', '급여', pfRe('(?:급여|임금)', 26), 'post'],
-  ['채용조건', '근무시간', pfRe('근무\\s*(?:시간|요일\\s*\\/?\\s*시간)', 26), 'post'],
-  ['채용조건', '근무지', pfRe('근무\\s*(?:지역|지|장소)', 40), 'post'],
-  ['채용조건', '마감일', /(?:접수\s*)?마감(?:일|일자)?\s*:?\s*((?:20\d{2}\s*[.\-/년]\s*)?\d{1,2}\s*[.\-/월]\s*\d{1,2}\s*일?|상시\s*채용|수시\s*채용|채용\s*시\s*마감)/, 'post'],
 ];
 // 값이 라벨만 다시 잡히거나 통째로 문장이 딸려 오는 걸 막는다
 const PROFILE_JUNK = /(로그인|회원가입|채용정보|더보기|검색|바로가기|자세히|https?:\/\/[^\s]*(?:jobkorea|saramin|incruit|catch)|^[.\-·,\s]*$)/;
@@ -1806,7 +1779,6 @@ function reconcileProfile(rows) {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(r);
   });
-  const order = ['인력·급여', '기업개요', '평판', '채용조건'];
   const out = [];
   for (const [, list] of groups) {
     const perHost = new Map();
@@ -1821,8 +1793,7 @@ function reconcileProfile(rows) {
       agree: votes.size === 1,
     });
   }
-  return out.sort((a, b) => order.indexOf(a.cat) - order.indexOf(b.cat)
-    || EXT_PROFILE_FIELDS.findIndex((f) => f[1] === a.key) - EXT_PROFILE_FIELDS.findIndex((f) => f[1] === b.key));
+  return out.sort((a, b) => EXT_PROFILE_FIELDS.findIndex((f) => f[1] === a.key) - EXT_PROFILE_FIELDS.findIndex((f) => f[1] === b.key));
 }
 
 // 채용 사이트 기업정보에는 매출·자본총계·순이익이 실려 있다(인크루트·잡코리아·캐치 등).
@@ -2115,11 +2086,16 @@ async function hiringTrace(nm) {
     if (fin.length) { extFin.push(...fin); found.push(`재무 ${fin.length}`); }
     const prof = extProfile(txt, pg.host, pg.link, pg.kind === 'finance' ? 'company' : pg.kind);
     if (prof.length) { extProf.push(...prof); found.push(`정보 ${prof.length}`); }
-    // 페이지에서 찾은 날짜를 해당 공고에 돌려준다 — 스니펫에 없던 등록일이 여기 있다
-    const ds = hireDates(txt);
-    if (ds.length) {
-      const tgt = posts.find((x) => x.link === pg.link);
-      if (tgt && !tgt.dates.length) { tgt.dates = ds.slice(0, 3); tgt.dateFrom = 'page'; found.push(`날짜 ${ds[0]}`); }
+    // 페이지에서 찾은 날짜를 해당 공고에 돌려준다 — 스니펫에 없던 등록일이 여기 있다.
+    // 단 기업정보 페이지는 공고가 아니다. 거기 있는 날짜는 설립일·사원수 기준일이라
+    // 공고 시점으로 세면 안 된다(씨앤티드림: 설립 2011.09과 기준일 2017.04이 공고 날짜로
+    // 들어가 없는 연도 분포를 만들었다). 공고 페이지에서만 가져온다.
+    if (pg.kind === 'post') {
+      const ds = hireDates(txt);
+      if (ds.length) {
+        const tgt = posts.find((x) => x.link === pg.link);
+        if (tgt && !tgt.dates.length) { tgt.dates = ds.slice(0, 3); tgt.dateFrom = 'page'; found.push(`날짜 ${ds[0]}`); }
+      }
     }
     // 재무 라벨은 있는데 값을 못 뽑았다면 원문 일부를 남긴다.
     // 사이트마다 표기가 달라, 실제 문구를 봐야 패턴을 맞출 수 있다.
@@ -2232,18 +2208,30 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile) {
     };
     if (Math.abs(diff) >= Math.max(3, h.count * 0.1)) {
       // 기준일이 없으면 언제 값인지 알 수 없어 증감으로 단정할 수 없다. 불일치로만 알린다.
-      const dated = !!h.asOf;
+      // 증감이라고 말하려면 두 값이 '언제 것인지' 알아야 하고, 서로 견줄 만큼 가까워야 한다.
+      // 씨앤티드림에서 잡코리아의 2017년 19명과 2025년 연금 14명을 비교해 '인력 감소 확인'을
+      // 냈는데, 8년 차이 나는 두 시점이라 감소인지 알 수 없다. 게다가 잡플래닛은 6명이었다.
+      // 기준일이 3년 넘게 지났거나 사이트끼리 2배 이상 벌어지면 불일치로만 알린다.
+      const ageY = h.asOf ? (curY - Number(String(h.asOf).slice(0, 4))) : null;
+      const stale = ageY == null || ageY > 3;
+      const cs = headTrend.sites.map((v) => v.count);
+      const wide = cs.length > 1 && Math.max(...cs) >= Math.min(...cs) * 2;
+      const solid = !stale && !wide;
+      const why = stale
+        ? (h.asOf ? ` — 채용 사이트 값이 ${h.asOf} 기준이라 연금 시점과 ${ageY}년 차이가 납니다. 증감으로 볼 수 없습니다.`
+          : ' — 채용 사이트 값이 언제 것인지 표기돼 있지 않아 증감으로 볼 수 없습니다.')
+        : wide ? ` — 사이트끼리 ${Math.min(...cs)}~${Math.max(...cs)}명으로 벌어져 어느 값이 맞는지 알 수 없습니다.` : '';
       signals.push({
-        kind: dated ? (diff > 0 ? 'expand' : 'shrink') : 'churn', level: 'mid',
-        title: dated ? (diff > 0 ? '인력 증가 확인' : '인력 감소 확인') : '인력 수치 불일치',
+        kind: solid ? (diff > 0 ? 'expand' : 'shrink') : 'churn', level: solid ? 'mid' : 'low',
+        title: solid ? (diff > 0 ? '인력 증가 확인' : '인력 감소 확인') : '인력 수치 불일치',
         detail: (hAll.length > 1
-          ? `채용사이트 ${hAll.length}곳 표기 — ${headTrend.sites.map((v) => `${v.host} ${v.count}명`).join(' / ')}`
+          ? `채용사이트 ${hAll.length}곳 표기 — ${headTrend.sites.map((v) => `${v.host} ${v.count}명${v.asOf ? `(${v.asOf})` : ''}`).join(' / ')}`
           : `${h.host} 표기 사원수 ${h.count}명${h.asOf ? `(${h.asOf} 기준)` : '(기준일 미상)'}`)
           + ` ↔ 국민연금 가입자 ${emp}명${npsAsOf ? `(${npsAsOf} 기준)` : ''} · 차이 ${diff > 0 ? '+' : ''}${diff}명`
-          + (dated ? '' : ' — 채용 사이트 값이 언제 것인지 표기돼 있지 않아 증감으로 볼 수 없습니다.'),
-        ask: dated
+          + why,
+        ask: solid
           ? (diff > 0 ? '증원 사유(수주 증가·증설)와 신규 인력의 배치 라인을 확인하세요.' : '감소 사유(수주 축소·자동화·외주 전환)를 확인하세요.')
-          : '현재 상시 근무 인원을 직접 확인하세요. 국민연금 가입자수가 더 최신이며, 채용 사이트 표기는 갱신이 늦는 경우가 많습니다.',
+          : '현재 상시 근무 인원을 직접 확인하세요. 국민연금 가입자수가 가장 최신이며, 채용 사이트 표기는 갱신이 늦거나 오래된 신고값 그대로인 경우가 많습니다.',
       });
     }
   }
@@ -2735,26 +2723,18 @@ function renderHiring(h) {
     html += `<div class="hire-sec">채용 강도 <em>회전율 대용치</em></div>`
       + `<div class="hire-int">재직자 ${i.emp}명 대비 연평균 공고 <b>${i.perYear}건</b> = <b>${i.ratio}%</b> · ${esc(i.band)}</div>`;
   }
-  // 기업정보 추출 — 공시에는 없고 채용 사이트에만 있는 값들. 카테고리로 묶어 한눈에 본다.
-  // 사이트마다 값이 다르면 감추지 않고 나란히 적는다 — 어긋난다는 사실이 곧 확인할 항목이다.
+  // 급여 수준 — 공시에는 없고 채용 사이트에만 있는 몇 안 되는 실질 정보.
+  // 인력 관측치 바로 아래에 붙인다(같은 '사람' 이야기라 떨어뜨려 놓을 이유가 없다).
   const prof = h.extProfile || [];
   if (prof.length) {
-    const cats = [];
-    prof.forEach((r) => {
-      let c = cats.find((x) => x.cat === r.cat);
-      if (!c) { c = { cat: r.cat, rows: [] }; cats.push(c); }
-      c.rows.push(r);
-    });
-    html += `<div class="hire-sec">기업정보 추출 <em>채용사이트 게재값 · 공시 아님</em></div><div class="hire-prof">`
-      + cats.map((c) => `<div class="pf-cat"><i>${esc(c.cat)}</i><div class="pf-kv">`
-        + c.rows.map((r) => {
-          const hosts = r.sources.map((s) => s.host).join(', ');
-          const alt = r.agree ? '' : ` <u title="사이트별 값이 다릅니다">${esc(r.sources.map((s) => `${s.host} ${s.value}`).join(' / '))}</u>`;
-          return `<div class="pf-k">${esc(r.key)}</div>`
-            + `<div class="pf-v${r.agree ? '' : ' dis'}">${esc(r.value)}<small>${esc(hosts)}</small>${alt}</div>`;
-        }).join('')
-        + '</div></div>').join('')
-      + `</div><div class="hire-warn">※ 위 값은 채용 사이트가 자체 수집해 게재한 것으로 공시가 아닙니다. 갱신 시점이 사이트마다 달라 실제와 차이가 날 수 있으니 방문 시 확인하세요.</div>`;
+    html += `<div class="hire-sec">급여 수준 <em>채용사이트 게재값 · 공시 아님</em></div><div class="pf-kv">`
+      + prof.map((r) => {
+        const alt = r.agree ? '' : `<u>${esc(r.sources.map((s) => `${s.host} ${s.value}`).join(' / '))}</u>`;
+        return `<div class="pf-k">${esc(r.key)}</div>`
+          + `<div class="pf-v${r.agree ? '' : ' dis'}">${esc(r.value)}`
+          + `<small>${esc(r.sources.map((s) => s.host).join(', '))}</small>${alt}</div>`;
+      }).join('')
+      + '</div>';
   }
 
   // 근거 원문 — 추정의 출처를 사용자가 직접 열어볼 수 있어야 한다

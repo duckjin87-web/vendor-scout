@@ -776,6 +776,8 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .hire-sig .hs { border: 1px solid var(--border); border-radius: 11px; padding: 10px 12px; background: var(--panel-2); border-left: 3px solid var(--gD); }
 .hire-sig .hs.high { border-left-color: var(--risk); background: var(--risk-bg); }
 .hire-sig .hs.mid { border-left-color: var(--gC); background: var(--gC-bg); }
+/* 판단을 못 내린 신호 — 경고색을 주면 없는 위험처럼 읽힌다. 회색으로 가라앉힌다. */
+.hire-sig .hs.low { border-left-color: var(--gD); background: var(--panel-2); }
 .hire-sig .hs b { display: block; font-size: 13px; font-weight: 800; margin-bottom: 3px; }
 .hire-sig .hs i { font-style: normal; display: block; font-size: 12.5px; line-height: 1.5; }
 .hire-sig .hs em { font-style: normal; display: block; font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
@@ -805,10 +807,7 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .hdt { color: var(--faint); font-variant-numeric: tabular-nums; flex: 0 0 56px; font-size: 11.5px; }
 .hrl { margin-left: auto; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
 .hire-warn { margin-top: 11px; font-size: 11px; color: var(--faint); line-height: 1.55; }
-/* 채용사이트 기업정보 추출 — 카테고리별 항목/값. 값이 사이트마다 갈리면 나란히 보여 준다. */
-.hire-prof { display: grid; gap: 8px; }
-.pf-cat { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--panel-2); }
-.pf-cat > i { display: block; font-style: normal; font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 5px; }
+/* 채용사이트 급여 수준 — 항목/값 두 칸. 값이 사이트마다 갈리면 아래에 나란히 보여 준다. */
 .pf-kv { display: grid; grid-template-columns: 84px 1fr; gap: 3px 8px; align-items: baseline; }
 .pf-k { font-size: 11.5px; color: var(--faint); min-width: 0; }
 .pf-v { font-size: 12px; color: var(--text); min-width: 0; word-break: break-all; }
