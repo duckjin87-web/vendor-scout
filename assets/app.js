@@ -8,6 +8,9 @@ const el = (tag, cls, html) => {
   if (html != null) n.innerHTML = html;
   return n;
 };
+// 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
+// (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
+const BUILD = 120;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3917,12 +3920,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 실행 중인 스크립트 빌드를 화면에 남긴다 — 배포했는데 브라우저가 옛 캐시를 쓰는 경우를
   // 눈으로 구분하지 못해 원인 추적이 여러 번 헛돌았다. 자기 <script src>에서 버전을 읽는다.
+  // 지금까지는 <script src>의 ?v=를 읽어 찍었다. 그런데 그 번호는 '요청한 주소'일 뿐,
+  // 돌고 있는 코드가 아니다. 이 파일 안에 박은 상수라야 실제로 실행 중인 코드를 가리킨다.
   const stamp = $('#buildStamp');
-  if (stamp) {
-    const me = document.querySelector('script[src*="app.js"]');
-    const v = me ? (me.getAttribute('src').match(/[?&]v=(\d+)/) || [])[1] : null;
-    stamp.textContent = `build v${v || '?'}`;
-  }
+  if (stamp) stamp.textContent = `build v${BUILD}`;
+
+  // ── 옛 코드가 도는지 스스로 확인한다 ──
+  // 캐시 사슬이 이렇게 이어진다: 브라우저에 index.html이 남아 있으면 그 안의 옛 주소
+  // (app.js?v=118)를 다시 요청하고, 그 주소는 7일 캐시라 옛 파일이 그대로 나온다. 배포는
+  // 됐는데 화면만 예전인 상태가 되고, 겉으로는 구분이 안 된다 — 실제로 v119를 올린 뒤
+  // 4시간 반이 지난 조회에서도 v118 결과가 나왔다. index.html만 캐시 없이 다시 받아
+  // 배포된 번호와 대조하면 이 상태를 잡아낼 수 있다.
+  (async () => {
+    try {
+      const r = await fetch(`index.html?_=${Date.now()}`, { cache: 'no-store' });
+      if (!r.ok) return;
+      const live = Number((((await r.text()).match(/app\.js\?v=(\d+)/)) || [])[1]);
+      if (!isFinite(live) || live <= BUILD) return;
+      const bar = el('div', 'stalebar',
+        `<b>옛 버전으로 실행 중입니다</b> 화면은 v${BUILD}, 배포된 최신은 v${live}입니다. `
+        + `브라우저가 예전 스크립트를 캐시에서 쓰고 있습니다.`
+        + `<button type="button" id="stReload">최신으로 새로고침</button>`);
+      document.body.appendChild(bar);
+      // 주소에 값을 붙여 index.html을 새로 받게 하면, 그 안의 새 ?v= 주소는 캐시에 없어
+      // 스크립트도 새로 받는다. 강제 새로고침(Ctrl+F5)을 손으로 하지 않아도 된다.
+      bar.querySelector('#stReload').addEventListener('click', () => {
+        location.replace(`${location.pathname}?r=${Date.now()}`);
+      });
+    } catch { /* file:// 로 열었거나 오프라인 — 확인할 방법이 없으니 조용히 넘어간다 */ }
+  })();
 
   // 마지막 조회 리포트 복원 — 새로고침·탭 복귀·재방문 시 그대로 표시(새 업체 조회 시 교체)
   const last = loadLastReport();

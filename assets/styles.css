@@ -949,3 +949,20 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .cert-why { display: block; font-style: normal; font-size: 10.5px; color: var(--faint); margin-top: 2px; }
 .finext { font-size: 10.5px; font-weight: 700; color: var(--gC); background: var(--gC-bg); border-radius: 999px; padding: 2px 9px; }
 .cand-sim { font-size: 10.5px; font-weight: 700; color: var(--gC); background: var(--gC-bg); border-radius: 999px; padding: 1px 8px; margin-left: 6px; white-space: nowrap; }
+
+/* 옛 코드가 캐시에서 돌고 있을 때의 경고 — 화면 아래 고정.
+   이 상태는 겉으로 구분이 안 돼 잘못된 결과를 최신인 줄 알고 보게 된다. 눈에 띄어야 한다. */
+.stalebar {
+  position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 9999;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 10px 14px; border-radius: 11px; font-size: 12.5px; line-height: 1.5;
+  background: var(--risk-bg); color: var(--text); border: 1px solid var(--risk);
+  box-shadow: var(--shadow);
+}
+.stalebar b { color: var(--risk); }
+.stalebar button {
+  margin-left: auto; border: 0; border-radius: 8px; padding: 7px 13px; cursor: pointer;
+  font-size: 12.5px; font-weight: 700; background: var(--risk); color: #fff;
+}
+.stalebar button:hover { filter: brightness(1.08); }
+@media print { .stalebar { display: none !important; } }
