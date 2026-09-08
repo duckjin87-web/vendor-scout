@@ -1752,39 +1752,55 @@ function extAmountEok(str) {
 function extFinance(text, host, link) {
   const t = String(text || '').replace(/\s+/g, ' ');
   const out = [];
+  const nowY = new Date().getFullYear();
+  const inRange = (y) => y >= 2010 && y <= nowY;
+
+  // ── 결산 연도 머리글 찾기 ──
+  // 채용 사이트 재무표는 "2025.12 2024.12 2023.12" 처럼 연도를 한 줄에 늘어놓고
+  // 그 아래 항목별로 값을 나열한다. 지금까지 항목당 첫 값 하나만 읽어, 3개년 표에서
+  // 한 해만 가져오고 나머지 연도는 통째로 잃었다(이시스코스메틱: 잡코리아가 2023~2025를
+  // 주는데 2025 매출 하나만 실렸다). 머리글을 먼저 찾아 값과 순서대로 짝지운다.
+  const YR = /(20\d{2})\s*[.\-/년]\s*(?:0?[1-9]|1[0-2])\b/g;
+  const yrHits = [...t.matchAll(YR)].map((m) => ({ y: Number(m[1]), at: m.index })).filter((x) => inRange(x.y));
+  let header = [];
+  for (let a = 0; a < yrHits.length; a++) {
+    const run = [yrHits[a]];
+    for (let b = a + 1; b < yrHits.length && yrHits[b].at - run[run.length - 1].at < 40; b++) run.push(yrHits[b]);
+    if (run.length > header.length) header = run;         // 가장 긴 연속열 = 표 머리글
+  }
+  const headYears = header.length >= 2 ? header.map((x) => x.y) : null;
+
+  const AMT = /(-?[0-9][0-9,.]*\s*(?:억|백만|원))/g;
   for (const [key, re] of EXT_FIN_KEYS) {
-    // 라벨과 값 사이에 표 구분자·단위 안내가 끼는 사이트가 많아 간격을 넉넉히 둔다.
-    // (인크루트 기업정보는 "매출액 (2024.12) 44억" 처럼 연도가 중간에 들어간다)
-    // 간격에서 숫자를 막으면 "매출액 (2024.12) 44억"처럼 연도가 끼는 표기를 놓친다.
-    // 아무 문자나 허용하되 최소 매칭으로 두어, 단위(억·백만·원)가 붙은 첫 금액을 잡는다.
-    const r = new RegExp(`${re.source}[\\s\\S]{0,30}?(-?[0-9,.]+\\s*(?:억|백만|원))`, 'i');
-    const m = t.match(r);
-    if (!m) continue;
-    const eok = extAmountEok(m[m.length - 1]);
-    if (eok == null || !isFinite(eok)) continue;
-    // 값 주변에서 '결산 시점'으로 읽히는 표기만 연도로 인정한다.
-    // 맨연도(2026년)는 채용 사이트가 제목에 붙이는 현재 연도라, 그대로 쓰면 엉뚱한 해에 실린다.
-    // 실제로 캐치 스니펫 "한웅메디칼 채용 2026년 기업정보 … 최신 매출액 153억"에서
-    // 2026이 매출에 붙어 2026년 매출 153억이라는 없는 값이 만들어졌다.
-    const around = t.slice(Math.max(0, m.index - 60), m.index + 60);
-    const yset = new Set();
-    const nowY = new Date().getFullYear();
-    // 2024.12 / 2024-12 / 2024년 12월 / 2024년 기준 / 2024년말 — 결산을 가리키는 형태
-    const YR_FISCAL = /(20\d{2})\s*(?:[.\-/]\s*(?:0?[1-9]|1[0-2])\b|년\s*(?:0?[1-9]|1[0-2])\s*월|년\s*(?:기준|말|결산))/g;
-    let ym;
-    while ((ym = YR_FISCAL.exec(around))) {
-      const y = Number(ym[1]);
-      if (y >= 2015 && y <= nowY) yset.add(y);
+    const lab = new RegExp(re.source, 'gi');
+    let lm;
+    while ((lm = lab.exec(t))) {
+      // 라벨 뒤 구간에서 금액을 순서대로 모은다. 머리글이 있으면 연도 수만큼, 없으면 1개.
+      const want = headYears ? headYears.length : 1;
+      const seg = t.slice(lm.index + lm[0].length, lm.index + lm[0].length + (headYears ? 160 : 40));
+      const amts = [...seg.matchAll(AMT)].slice(0, want);
+      if (!amts.length) continue;
+      amts.forEach((am, idx) => {
+        const eok = extAmountEok(am[1]);
+        if (eok == null || !isFinite(eok)) return;
+        let years = null;
+        if (headYears && amts.length === headYears.length) years = [headYears[idx]];
+        else {
+          // 머리글이 없으면 값 주변의 결산 표기만 인정한다(제목의 SEO 연도는 배제)
+          const at = lm.index + lm[0].length + am.index;
+          const around = t.slice(Math.max(0, at - 60), at + 60);
+          const ys = [...new Set([...around.matchAll(/(20\d{2})\s*(?:[.\-/]\s*(?:0?[1-9]|1[0-2])\b|년\s*(?:0?[1-9]|1[0-2])\s*월|년\s*(?:기준|말|결산))/g)]
+            .map((m) => Number(m[1])).filter(inRange))];
+          years = ys.length ? ys : null;
+        }
+        out.push({ key, eok, years, host, link });
+      });
+      if (!headYears) break;                              // 머리글 없으면 항목당 1건이면 충분
     }
-    const years = [...yset].sort();
-    out.push({ key, eok, years: years.length ? years : null, host, link });
   }
   return out;
 }
 
-// 여러 채용 사이트에서 나온 같은 항목을 대조한다.
-// 값이 같으면 신뢰도가 올라가고, 갈리면 그 사실 자체가 확인 필요 신호다.
-// 대표값은 '가장 많은 사이트가 같은 값을 말한 것'으로 정한다(동수면 페이지에서 읽은 쪽).
 // 채용 사이트는 재무를 별도 탭에 둔다. 기업정보 본문에는 '재무정보'라는 글자만 있고
 // 숫자는 다른 주소에 있다(한웅메디칼 조회에서 사람인 본문 3,148자를 받고도 재무가 0건이었다).
 // 회사 페이지 주소에서 재무 탭 주소를 만들어 함께 연다.
@@ -1894,15 +1910,27 @@ async function hiringTrace(nm) {
   //    (나) 공고·공고목록 페이지 — 스니펫에 없는 등록일·수정일(연도 미상 공고를 되살린다)
   const isCompanyPage = (u) => /\/company\/\d+|\/companies\/\d+|Co_Read|company-info|Comp\/Comp|\/company\/[^/]+$/i.test(u);
   const targets = [];
-  const pushT = (p, kind) => { if (!targets.some((t) => t.link === p.link) && targets.length < 20) targets.push({ ...p, kind }); };
-  // 기업정보로 분류된 사이트는 재무 탭까지 모두 연다 — 숫자는 거기에만 있다
+  // 같은 사이트의 같은 성격 페이지를 여러 번 여는 건 낭비다. 이시스코스메틱 조회에서
+  // 20칸 중 16칸을 중복이 먹었다(사람인 7회 전부 타임아웃, 잡플래닛 5회 모두 빈 응답 58자).
+  // 그 바람에 정작 숫자가 있는 재무 탭이 뒤로 밀렸다. 호스트·성격별로 상한을 둔다.
+  const perHost = new Map();
+  const pushT = (p, kind) => {
+    if (targets.length >= 20) return;
+    if (targets.some((t) => t.link === p.link)) return;
+    const k = `${p.host}|${kind}`;
+    const n = perHost.get(k) || 0;
+    if (n >= (kind === 'finance' ? 2 : 1)) return;      // 회사·공고는 호스트당 1개, 재무 탭은 2개까지
+    perHost.set(k, n + 1);
+    targets.push({ ...p, kind });
+  };
+  // 재무 탭을 먼저 넣는다 — 숫자는 거기에만 있다
   const compPosts = posts.filter((p) => isCompanyPage(p.link));
-  compPosts.forEach((p) => pushT(p, 'company'));
   const finSeen = new Set();
   compPosts.forEach((p) => financeTabUrls(p.link).forEach((u) => {
     if (finSeen.has(u)) return; finSeen.add(u);
     pushT({ ...p, link: u }, 'finance');
   }));
+  compPosts.forEach((p) => pushT(p, 'company'));
   posts.filter((p) => !p.dates.length && !isCompanyPage(p.link)).forEach((p) => pushT(p, 'post'));
 
   // 접속 결과를 남긴다 — 지금까지 실패를 조용히 삼켜, 값이 안 나온 게 차단 때문인지

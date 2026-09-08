@@ -125,7 +125,8 @@ async function handleFetchPage(url) {
     return jsonRes({ error: '내부 호스트 접근 불가' }, 400);
   }
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 12000);
+  // 12초로는 사람인 기업정보가 매번 중간에 끊겼다(호출 7회 전부 aborted). 조금 더 기다린다.
+  const timer = setTimeout(() => ctrl.abort(), 20000);
   let up;
   try {
     up = await fetch(target, { redirect: 'follow', signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (vendor-scout)' } });

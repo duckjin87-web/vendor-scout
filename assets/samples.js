@@ -935,6 +935,10 @@ function assembleLiveReport(name, corp, res) {
       const e = extByYear.get(y) || {};
       return { year: y, revenue: e.revenue ?? null, operatingProfit: e.operatingProfit ?? null, assets: e.assets ?? null, debt: null, capital: null, src: 'ext', host: e.host || null };
     });
+    // 공시가 없는 해를 채용사이트 재무탭으로 메웠다면 그 사실을 재무 설명에 남긴다.
+    // 같은 해가 양쪽에 다 있으면 공시를 그대로 두므로, 여기 적히는 연도는 '메운 해'뿐이다.
+    const filledYears = finance_history.filter((r) => r.src === 'ext').map((r) => r.year);
+    const filledHosts = [...new Set(finance_history.filter((r) => r.src === 'ext').map((r) => r.host).filter(Boolean))];
     // 재무 '필드'(매출액·총자산 등)는 공식 자료 기준을 유지한다 — 외부값은 별도 행으로 이미 표시된다
     const offRows = finance_history.filter((r) => r.src === 'official');
     const L = (offRows.length ? offRows : finance_history)[(offRows.length ? offRows : finance_history).length - 1];
@@ -957,7 +961,13 @@ function assembleLiveReport(name, corp, res) {
         `이 API는 상장·외부감사 공시분만 수록해 최근 자료가 없을 수 있습니다 — ` +
         `NICE·KED 등 신용조회에는 더 최근 재무가 있을 수 있으니 방문 전 최근 결산서를 요청하세요.`
       : `★ ${L.year} 회계연도 확정 실적(금융위 제출 최신). 재무는 통상 1년 지연 공시.`)
-      + (breakNote ? ` ${breakNote}` : '');
+      + (breakNote ? ` ${breakNote}` : '')
+      + (filledYears.length
+        ? ` ▣ 공시가 없는 ${filledYears.join('·')}년은 채용사이트 기업정보의 재무 탭`
+          + `${filledHosts.length ? `(${filledHosts.join('·')})` : ''}에서 가져와 채웠습니다. `
+          + '같은 해가 공시에도 있으면 공시값을 그대로 두었고, 비어 있던 해만 대체했습니다. '
+          + '공시가 아니므로 추이 그래프에서도 해당 연도는 외부자료로 표시됩니다.'
+        : '');
     finance = [
       f('매출액', eok(L.revenue), grade, src, asOf, baseNote, !stale),
       f('영업이익', eok(L.operatingProfit), grade, src, asOf, null, !stale),
