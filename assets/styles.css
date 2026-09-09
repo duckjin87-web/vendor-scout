@@ -498,7 +498,10 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .gapfold > *:not(summary) { display: none !important; }
   .gapfold > summary { white-space: normal; }
   .gapfold > summary em { overflow: visible; white-space: normal; }
-  /* 현장 대조표는 방문 때 손으로 적는 표라 반드시 인쇄되어야 한다 */
+  /* 현장 대조표는 방문 때 손으로 적는 표라, 화면에서 접혀 있어도 인쇄에는 펼쳐 낸다 */
+  .vc-xcfold > *:not(summary) { display: revert !important; content-visibility: visible !important; }
+  .vc-xcfold::details-content { content-visibility: visible !important; }
+  .vc-xcfold > summary::before { content: none; }
   .vc-xc { break-inside: avoid; }
   .vc-xc .xc-r u { border-bottom: 1px solid #999; min-height: 13px; }
 
@@ -656,6 +659,22 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .vc-list input:checked ~ label .vc-txt { text-decoration: line-through; color: var(--faint); }
 .vc-list li.vc-high .vc-txt { font-weight: 600; }
 .vc-foot { margin-top: 11px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+/* 현장 대조표는 평소엔 접어 둔다 — 방문해서 맞춰 볼 표라 화면에서는 자리만 차지한다.
+   머리글은 다른 그룹 제목(.vc-gh)과 같은 모양으로 두되 여닫이 표시만 붙인다. */
+.vc-xcfold { margin-top: 12px; }
+.vc-xcfold > summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; gap: 6px; margin: 0 0 4px;
+  font-size: 11.5px; font-weight: 800; color: var(--muted); letter-spacing: .01em;
+}
+.vc-xcfold > summary::-webkit-details-marker { display: none; }
+.vc-xcfold > summary::before { content: '▸'; font-size: 10px; color: var(--faint); transition: transform .15s; }
+.vc-xcfold[open] > summary::before { transform: rotate(90deg); }
+.vc-xcfold > summary:hover { color: var(--text); }
+.vc-xcfold > summary span {
+  font-size: 10px; font-weight: 700; color: var(--faint);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px;
+}
 /* 현장 대조표 — 확보한 값 옆에 손으로 적을 칸을 비워 둔다(인쇄 전제) */
 .vc-xc { border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
 .vc-xc .xc-h, .vc-xc .xc-r { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 0.9fr); gap: 10px; padding: 6px 10px; align-items: baseline; }
