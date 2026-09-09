@@ -930,20 +930,39 @@ function assembleLiveReport(name, corp, res) {
     .sort((a, b) => b - a).slice(0, 6).sort((a, b) => a - b);
   let finance, finance_history = [];
   if (years.length) {
+    // ── 공시 우선, 빈 칸만 채용사이트로 ──
+    // 여태는 '연도 단위'로 통째 골랐다. 그래서 공시가 있는 해는 총자산·자본금이 비어 있어도
+    // 채용사이트에 그 값이 있는 걸 못 썼고, 공시가 없는 해는 전부 외부값이 됐다.
+    // 항목 단위로 바꾼다 — 같은 해에 공시값이 있으면 그걸 쓰고, 없는 항목만 외부에서 채운다.
+    const FIN_F = [
+      ['revenue', 'enpSaleAmt', '매출액'], ['operatingProfit', 'enpBzopPft', '영업이익'],
+      ['netIncome', 'enpCrtmNpf', '당기순이익'], ['assets', 'enpTastAmt', '자산총계'],
+      ['debt', 'enpTdbtAmt', '부채총계'], ['capital', 'enpCptlAmt', '자본금'],
+    ];
     finance_history = years.map((y) => {
       const it = byYear.get(y);
-      if (it) return { year: y, revenue: won2eok(it.enpSaleAmt), operatingProfit: won2eok(it.enpBzopPft), assets: won2eok(it.enpTastAmt), debt: won2eok(it.enpTdbtAmt), capital: won2eok(it.enpCptlAmt), src: 'official' };
       const e = extByYear.get(y) || {};
-      // 자본금·순이익도 사이트가 주면 함께 싣는다 — 지금까지 뽑아 놓고 계열에 올리지 않아
-      // '자본금 = 해당 없음'으로 비어 있었다(사람인 재무 탭은 자본금을 준다).
-      return { year: y, revenue: e.revenue ?? null, operatingProfit: e.operatingProfit ?? null, assets: e.assets ?? null, debt: null, capital: e.capital ?? null, netIncome: e.netIncome ?? null, src: 'ext', host: e.host || null };
+      const row = { year: y, srcOf: {} };
+      let anyOff = false, anyExt = false;
+      FIN_F.forEach(([f, apiKey]) => {
+        const off = it ? won2eok(it[apiKey]) : null;
+        if (off != null) { row[f] = off; row.srcOf[f] = 'official'; anyOff = true; return; }
+        // 부채총계는 채용사이트가 주지 않아 외부 보완 대상이 아니다
+        const ex = e[f] != null ? e[f] : null;
+        if (ex != null) { row[f] = ex; row.srcOf[f] = 'ext'; anyExt = true; return; }
+        row[f] = null;
+      });
+      row.src = anyOff ? 'official' : 'ext';
+      row.mixed = anyOff && anyExt;                       // 한 해 안에서 공시+외부가 섞인 경우
+      row.host = anyExt ? (e.host || null) : null;
+      return row;
     });
     // 공시가 없는 해를 채용사이트 재무탭으로 메웠다면 그 사실을 재무 설명에 남긴다.
     // 같은 해가 양쪽에 다 있으면 공시를 그대로 두므로, 여기 적히는 연도는 '메운 해'뿐이다.
-    const filledYears = finance_history.filter((r) => r.src === 'ext').map((r) => r.year);
+    const filledYears = finance_history.filter((r) => Object.values(r.srcOf).includes('ext')).map((r) => r.year);
     // host는 'saramin.co.kr·jobkorea.co.kr'처럼 합쳐진 문자열로 올 수 있어, 그대로 Set에
     // 넣으면 'jobkorea.co.kr·saramin.co.kr·jobkorea.co.kr'같이 같은 이름이 두 번 적힌다.
-    const filledHosts = [...new Set(finance_history.filter((r) => r.src === 'ext')
+    const filledHosts = [...new Set(finance_history.filter((r) => r.host)
       .flatMap((r) => String(r.host || '').split('·')).map((h) => h.trim()).filter(Boolean))];
     // 재무 '필드'(매출액·총자산 등)는 공식 자료 기준을 유지한다 — 외부값은 별도 행으로 이미 표시된다
     const offRows = finance_history.filter((r) => r.src === 'official');
@@ -987,15 +1006,39 @@ function assembleLiveReport(name, corp, res) {
           + `${filledHosts.length ? `(${filledHosts.join('·')})` : ''}에서 가져와 채웠습니다. `
           + '같은 해가 공시에도 있으면 공시값을 그대로 두었고, 비어 있던 해만 대체했습니다. '
           + '공시가 아니므로 추이 그래프에서도 해당 연도는 외부자료로 표시됩니다.');
+    // 항목마다 '값이 있는 가장 최근 해'를 쓴다. 최신 연도 한 줄만 보면, 그 해에 비어 있는
+    // 항목(총자산·자본금 등)이 통째로 '해당 없음'이 된다 — 바로 아래 해에 값이 있어도.
+    // 공시가 있으면 공시를 먼저 쓰고, 없을 때만 채용사이트 값으로 채운다.
+    const pickLatest = (k) => {
+      for (let i = finance_history.length - 1; i >= 0; i--) {
+        const r = finance_history[i];
+        if (r[k] != null) return { v: r[k], year: r.year, from: r.srcOf[k], host: r.host };
+      }
+      return null;
+    };
+    const finRow = (label, k, note) => {
+      const p = pickLatest(k);
+      if (!p) return f(label, null, 'D', src, null, note || why('finance', '공개 자료에서 확인되지 않음'));
+      const isExt = p.from === 'ext';
+      const old3 = curYear - p.year >= 3;
+      return f(label, eok(p.v), isExt ? 'C' : (old3 ? 'C' : 'A'),
+        isExt ? `${p.host || '채용사이트'} 기업정보 (외부사이트자료 · 공시 아님)`
+          : `금융위 재무정보 API (${p.year} 회계연도${(byYear.get(p.year) || {})._fromAccounts ? ' · 계정과목 보완' : ''})`,
+        `${p.year}-12`,
+        (note ? note + ' ' : '')
+          + (isExt ? '※ 이 항목은 공시에 없어 채용사이트 기업정보의 재무 탭 값으로 채웠습니다 — 참고치입니다.' : ''),
+        !old3);
+    };
     finance = [
-      f('매출액', eok(L.revenue), grade, src, asOf, baseNote, !stale),
-      f('영업이익', eok(L.operatingProfit), grade, src, asOf, null, !stale),
-      f('총자산', eok(L.assets), grade, src, asOf, null, !stale),
-      f('총부채', eok(L.debt), grade, src, asOf, null, !stale),
-      f('자본금', eok(L.capital), grade, src, asOf, null, !stale),
+      finRow('매출액', 'revenue', baseNote),
+      finRow('영업이익', 'operatingProfit'),
+      finRow('당기순이익', 'netIncome'),
+      finRow('총자산', 'assets'),
+      finRow('총부채', 'debt'),
+      finRow('자본금', 'capital'),
     ];
   } else {
-    finance = ['매출액', '영업이익', '총자산', '총부채', '자본금'].map((k) =>
+    finance = ['매출액', '영업이익', '당기순이익', '총자산', '총부채', '자본금'].map((k) =>
       f(k, null, 'D', '금융위 재무정보 API', null, why('finance', '금융위 재무 API 미수록 — 상장·공시대상 위주(비상장은 DART/신용조회로 확인)')));
   }
 

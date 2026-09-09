@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 121;
+const BUILD = 122;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1632,6 +1632,9 @@ async function financeLookup(crno) {
         else if (/^자산총계$/.test(n) && rec.enpTastAmt == null) rec.enpTastAmt = amt;
         else if (/^부채총계$/.test(n) && rec.enpTdbtAmt == null) rec.enpTdbtAmt = amt;
         else if (/^자본금$/.test(n) && rec.enpCptlAmt == null) rec.enpCptlAmt = amt;
+        // 당기순이익도 계정과목에 있다. 여태 안 읽어서, 공시가 있는 업체인데도 순이익만은
+        // 채용사이트 값(등급 C)으로 표시됐다.
+        else if (/^당기순이익/.test(n) && rec.enpCrtmNpf == null) rec.enpCrtmNpf = amt;
       }
       byYear.set(y, rec);
     });
@@ -2534,8 +2537,8 @@ function fieldRow(fld) {
   return row;
 }
 
-function block(title, icon, fields) {
-  const b = el('div', 'block');
+function block(title, icon, fields, cat) {
+  const b = el('div', 'block' + (cat ? ' cat-' + cat : ''));
   // 값이 없는 항목은 접어 둔다. 씨앤티드림 조회에서 '생산역량·인원' 9개 중 4개가 빈칸이었고
   // 각각 긴 설명까지 달려 블록의 절반을 먹었다. 없다는 사실은 한 줄이면 충분하다.
   const gaps = fields.filter((f) => f.data_gap || f.value == null);
@@ -2615,7 +2618,7 @@ function sparkCard(se, years) {
 function financeBlock(report) {
   const fields = report.finance;
   const hist = report.finance_history || [];
-  const b = el('div', 'block full');
+  const b = el('div', 'block full cat-fin');
   const chartN = hist.length ? '그래프 6지표 · 표 자본금' : `${fields.length}개 필드`;
   b.appendChild(el('h3', null, `<span class="ic">💰</span>재무 (금융위)<span class="cnt">${chartN}</span>`));
 
@@ -3188,6 +3191,113 @@ function visitAddress(report) {
 }
 
 // ★ 핵심 요약 밴드 — 방문 판단에 가장 중요한 사실을 큰 타일로 최상단 노출
+// ── 종합판정 카드 ──
+// 등급 글자 하나만 크게 띄우던 자리다. 'B'만 봐서는 무엇을 하라는 건지 알 수 없어서,
+// 판정 문구와 근거 한 줄을 함께 낸다. 그리고 종합판정(업체를 방문할 만한가)과
+// 데이터 등급(그 숫자를 얼마나 믿을 수 있나)은 다른 이야기라 화면에서도 갈라 놓는다.
+const VERDICT = {
+  A: { label: '방문 우선 검토', tone: 'good' },
+  B: { label: '방문 검토 가능', tone: 'good' },
+  C: { label: '추가 확인 후 판단', tone: 'warn' },
+  D: { label: '자료 부족 — 보완 후 판단', tone: 'muted' },
+};
+function verdictReason(report) {
+  const B = report.basic || [], C = report.capacity || [];
+  const has = (arr, k) => { const x = arr.find((v) => v.key === k); return x && x.value ? x.value : null; };
+  const ups = [], downs = [];
+  if (has(B, '제조업 등록')) ups.push('식약처 화장품 제조업 등록');
+  if (has(C, 'CGMP 적합업소')) ups.push('CGMP 적합업소');
+  if (has(B, '공장/제조소 소재지')) ups.push('공장등록 확인');
+  const hire = report.hiring;
+  if (hire && hire.ok && hire.posts && hire.posts.length) ups.push('최근 채용활동 확인');
+  const ins = report.insights && report.insights.assessment;
+  if (ins && ins.level === 'good') ups.push('대외활동 확인');
+  (report.risk_flags || []).forEach((r) => downs.push(r.type));
+  const gaps = [...B, ...C, ...(report.finance || [])].filter((x) => x.data_gap).length;
+  if (gaps) downs.push(`공개자료 미확인 ${gaps}건`);
+  return { ups, downs };
+}
+function renderVerdict(report) {
+  const m = report.meta || {};
+  const g = m.overall_grade || 'D';
+  const v = VERDICT[g] || VERDICT.D;
+  const B = report.basic || [], C = report.capacity || [];
+  const bv = (k) => { const x = B.find((y) => y.key === k); return x && x.value ? x.value : null; };
+  const cv = (k) => { const x = C.find((y) => y.key === k); return x && x.value ? x.value : null; };
+  const { ups, downs } = verdictReason(report);
+  // 업종·지역 한 줄 — 어떤 업체인지부터 알아야 판정이 읽힌다
+  const sector = bv('업종') || '화장품 관련';
+  // 지역은 본점(등기) 기준으로 적는다. 공장 주소를 먼저 쓰면 R&D센터가 잡혀 실제 소재지와
+  // 다르게 보인다(다산씨엔텍: 본점 경기 김포인데 공장란은 서울 강서 R&D센터였다).
+  // 두 주소가 다르다는 사실 자체는 아래 '방문 전 확인 필요'에서 따로 알린다.
+  const addr = String(bv('본점주소') || bv('공장/제조소 소재지') || '');
+  const region = (addr.match(/^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[가-힣]*\s*[가-힣]*시?군?/) || [])[0] || '';
+
+  const box = el('div', 'verdict v-' + v.tone);
+  let html = `<div class="vd-head">`
+    + `<div class="vd-badge badge-${esc(g)}"><b>${esc(g)}</b><span>종합판정</span></div>`
+    + `<div class="vd-title"><h2>${esc(m.vendor_name || '')}</h2>`
+    + `<div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div></div>`
+    + `<div class="vd-verd">${esc(v.label)}</div></div>`;
+  // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
+  if (ups.length || downs.length) {
+    html += `<div class="vd-why">`
+      + (ups.length ? `<div class="vw up"><i>확인됨</i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
+      + (downs.length ? `<div class="vw down"><i>확인필요</i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
+      + `</div>`;
+  }
+  // 기본 현황 — 문서의 '기본 현황' 표를 칩으로
+  const revF = (report.finance || []).find((x) => x.key === '매출액' && x.value);
+  const chips = [
+    ['제조업 등록', bv('제조업 등록') ? '확인' : '미확인', bv('제조업 등록') ? 'ok' : 'na'],
+    ['사업자 상태', /계속/.test(String(bv('사업자 상태') || '')) ? '정상' : (bv('사업자 상태') || '미확인'), /계속/.test(String(bv('사업자 상태') || '')) ? 'ok' : 'na'],
+    ['공장등록', bv('공장/제조소 소재지') ? '확인' : '미확인', bv('공장/제조소 소재지') ? 'ok' : 'na'],
+    ['CGMP', cv('CGMP 적합업소') ? '적합' : '미등재', cv('CGMP 적합업소') ? 'ok' : 'na'],
+    ['직원수', String(cv('재직자수 (국민연금 가입자)') || '미확인').replace(/\s*·.*$/, ''), cv('재직자수 (국민연금 가입자)') ? 'num' : 'na'],
+    ['설립', String(bv('설립일 / 등록일') || '').slice(0, 4) || '미확인', bv('설립일 / 등록일') ? 'num' : 'na'],
+    ['매출', revF ? revF.value + (revF.grade === 'C' ? '*' : '') : '미확인', revF ? 'num' : 'na'],
+  ];
+  html += `<div class="vd-chips">` + chips.map(([k, val, t]) =>
+    `<div class="vch vch-${t}"><i>${esc(k)}</i><b>${esc(val)}</b></div>`).join('') + `</div>`;
+  html += `<div class="vd-foot">종합판정은 <b>업체를 방문할 만한지</b>에 대한 검토 결과이고, `
+    + `항목마다 붙는 A·B·C·D는 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>를 나타냅니다 — 서로 다른 이야기입니다.`
+    + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')
+    + `</div>`;
+  box.innerHTML = html;
+  return box;
+}
+
+// ── ⚠ 방문 전 반드시 확인 ──
+// 흩어져 있던 위험 신호(주소 상이·교차검증 경고·자료 공백)를 한자리에 모아 맨 위로 올린다.
+// 문서의 요구는 분명했다 — 방문 전에 3분 만에 '무엇을 확인해야 하는가'가 보여야 한다.
+function renderMustCheck(report) {
+  const items = [];
+  (report.risk_flags || []).forEach((r) => items.push({ t: r.type, d: r.detail, lv: 'high' }));
+  ((report.cross_diag || {}).items || []).forEach((x) => {
+    if (x.status !== 'warn') return;
+    if (items.some((i) => i.d === x.detail)) return;
+    items.push({ t: x.label, d: x.detail, lv: x.severe ? 'high' : 'mid' });
+  });
+  // 생산 판단에 꼭 필요한데 공개자료에 없는 것들 — '없음'이 아니라 '확인 안 됨'이다
+  const C = report.capacity || [];
+  const missing = C.filter((x) => x.data_gap).map((x) => x.key);
+  if (missing.length) {
+    items.push({ t: '공개자료 미확인 항목', lv: 'mid',
+      d: `${missing.join(' · ')} — 공개 API에서 확인되지 않았습니다. '없음'이 아니라 '확인되지 않음'이므로 현장에서 직접 확인하세요.` });
+  }
+  const fin = report.finance || [];
+  if (fin.some((x) => x.value && x.grade === 'C') && !fin.some((x) => x.value && x.grade === 'A')) {
+    items.push({ t: '최근 재무자료', lv: 'mid',
+      d: '공식 공시 재무자료가 확인되지 않아 외부 기업정보를 참고값으로 사용했습니다. 최근 결산서·표준재무제표증명(국세청 발급)을 요청하세요.' });
+  }
+  if (!items.length) return null;
+  const box = el('div', 'mustcheck');
+  box.innerHTML = `<h4>⚠ 방문 전 확인 필요 <span>${items.length}건</span></h4>`
+    + `<ol class="mc-list">` + items.map((i) =>
+      `<li class="mc-${esc(i.lv)}"><b>${esc(i.t)}</b><span>${esc(i.d)}</span></li>`).join('') + `</ol>`;
+  return box;
+}
+
 function renderCoreBand(report) {
   const B = report.basic || [], C = report.capacity || [];
   const bv = (k) => { const f = B.find((x) => x.key === k); return f && f.value ? f.value : null; };
@@ -3581,27 +3691,25 @@ function render(report, opts = {}) {
   const allFields = [...report.basic, ...report.capacity, ...report.finance].filter(included);
   const gapTotal = allFields.filter((f) => f.data_gap).length;
 
-  // Summary
-  const sm = el('div', 'summary');
-  sm.appendChild(el('div', 'grade-badge badge-' + m.overall_grade, esc(m.overall_grade)));
-  const vinfo = el('div', 'vinfo');
-  const qDate = new Date(m.query_at).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
-  vinfo.innerHTML =
-    `<h2>${esc(m.vendor_name)}</h2>` +
-    `<div class="meta-line">조회시점 <b>${esc(qDate)}</b> · 스냅샷 <b>v${m.version}</b> · ` +
-    `최신성 기준 <b>${m.max_age_years}년</b> · 사용 출처 <b>${m.sources_used.length}종</b></div>`;
-  sm.appendChild(vinfo);
-  const stats = el('div', 'stats');
-  stats.innerHTML =
-    `<div class="s"><div class="n">${allFields.length}</div><div class="k">수집 필드</div></div>` +
-    `<div class="s"><div class="n ${gapTotal ? 'warn' : ''}">${gapTotal}</div><div class="k">데이터 공백</div></div>` +
-    `<div class="s"><div class="n ${report.risk_flags.length ? 'warn' : ''}">${report.risk_flags.length}</div><div class="k">리스크</div></div>`;
-  sm.appendChild(stats);
-  root.appendChild(sm);
+  // ── 화면 순서: 종합판정 → 방문 전 확인 필요 → 핵심 타일 → 체크리스트 → 상세 블록 ──
+  // 예전에는 등급 글자 하나와 '수집 필드 22 / 공백 5' 같은 집계가 맨 위였다. 그건 시스템의
+  // 상태이지 업체에 대한 판단이 아니다. 방문 여부를 3분 안에 정하려면 '어떤 업체인가 →
+  // 방문할 만한가 → 무엇이 걸리는가 → 가서 뭘 볼 것인가' 순으로 읽혀야 한다.
+  root.appendChild(renderVerdict(report));
+
+  const mustCheck = renderMustCheck(report);
+  if (mustCheck) root.appendChild(mustCheck);
 
   // ★ 핵심 요약 — 검증에서 가장 중요한 사실을 최상단 타일로(핵심부터 파악)
   const coreBand = renderCoreBand(report);
   if (coreBand) root.appendChild(coreBand);
+
+  // 조회 메타는 판단에 쓰이지 않으니 아래로 내리고 한 줄로 줄인다
+  const qDate = new Date(m.query_at).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
+  root.appendChild(el('div', 'metaline',
+    `조회 <b>${esc(qDate)}</b> · 스냅샷 v${m.version} · 출처 ${m.sources_used.length}종 · `
+    + `수집 필드 ${allFields.length}${gapTotal ? ` · 공백 <b class="warn">${gapTotal}</b>` : ''}`
+    + `${report.risk_flags.length ? ` · 리스크 <b class="warn">${report.risk_flags.length}</b>` : ''}`));
 
   // ✅ 방문 전 체크리스트 — 웹 기반(기사·채용·기술/제품) 실사 제안(실데이터일 때)
   //    심층분석 결과가 나중에 도착하면 갱신해야 하므로 id로 찾아 교체 가능하게 둔다.
@@ -3670,8 +3778,8 @@ function render(report, opts = {}) {
   if (!excl.has('news')) { const chkW = renderCheckWeb(report); if (chkW) root.appendChild(chkW); }
 
   const blocks = el('div', 'blocks');
-  blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic)));
-  blocks.appendChild(block('생산역량 · 인원', '🏭', visible(report.capacity)));
+  blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic), 'basic'));
+  blocks.appendChild(block('생산역량 · 인원', '🏭', visible(report.capacity), 'prod'));
   if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
   // 🧑‍🏭 채용공고 추적 — 재무 뒤(재무가 오래된 업체의 '현재 활동'을 보는 자리이므로 나란히)
   if (!excl.has('hiring')) {
