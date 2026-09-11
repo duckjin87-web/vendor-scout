@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 128;
+const BUILD = 129;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3239,15 +3239,12 @@ function renderVerdict(report) {
     // 회수·판매중지와 방문 거리는 아래 타일에 따로 있었는데, 나머지 타일이 이 칩들과
     // 같은 내용이라 타일 줄을 통째로 걷어 냈다. 겹치지 않는 이 둘만 여기로 옮긴다.
     ['회수·판매중지', recallN ? `${recallN}건` : '없음', recallN ? 'bad' : 'ok'],
-    // 거리만 있으면 갈 만한지 가늠이 안 된다. 같은 120km라도 고속도로 1시간과 국도 2시간은
-    // 하루 일정이 달라진다. 소요시간을 함께 적는다.
-    ['방문 거리', dist ? String(dist).replace(/^약\s*/, '').replace(/\s*·.*$/, '') : '미확인',
-      dist ? 'num' : 'na', dist ? String(dist) : null,
-      dist ? (String(dist).match(/·\s*(.+)$/) || [])[1] || '' : ''],
+    // 생산역량 블록의 '방문 이동거리' 값을 그대로 쓴다. 거리만 떼어 내면 같은 120km라도
+    // 고속도로 1시간인지 국도 2시간인지 알 수 없어 하루 일정을 못 잡는다.
+    ['방문 거리', dist ? String(dist) : '미확인', dist ? 'num wrap' : 'na'],
   ];
-  html += `<div class="vd-chips">` + chips.map(([k, val, t, tip, sub]) =>
-    `<div class="vch vch-${t}"${tip ? ` title="${esc(tip)}"` : ''}><i>${esc(k)}</i>`
-    + `<b>${esc(val)}${sub ? `<small>${esc(sub)}</small>` : ''}</b></div>`).join('') + `</div>`;
+  html += `<div class="vd-chips">` + chips.map(([k, val, t]) =>
+    `<div class="vch vch-${t}"><i>${esc(k)}</i><b>${esc(val)}</b></div>`).join('') + `</div>`;
   html += `<div class="vd-foot">종합판정은 <b>업체를 방문할 만한지</b>에 대한 검토 결과이고, `
     + `항목마다 붙는 A·B·C·D는 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>를 나타냅니다 — 서로 다른 이야기입니다.`
     + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')
