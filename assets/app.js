@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 126;
+const BUILD = 127;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3477,7 +3477,7 @@ function renderVisitChecklist(report) {
   const xc = (report.crosscheck || []).filter((x) => x && x.expected != null && x.expected !== '');
   if (xc.length) {
     // 기본은 접어 둔다. 방문해서 맞춰 볼 표라 평소 화면에서는 자리만 차지한다.
-    // 인쇄할 때는 open 여부와 무관하게 펼쳐 나오게 CSS에서 따로 처리한다.
+    // 인쇄물도 화면을 그대로 따른다 — 필요하면 펼쳐 놓고 인쇄하면 펼쳐진 채로 나온다.
     html += `<details class="vc-xcfold"><summary>현장 대조<span>${xc.length}</span></summary>`
       + `<div class="vc-xc"><div class="xc-h"><i>항목</i><i>우리가 확보한 값</i><i>현장 확인</i></div>`
       + xc.map((x) => `<div class="xc-r"><i>${esc(x.key)}</i>`
@@ -4033,19 +4033,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // 돌고 있는 코드가 아니다. 이 파일 안에 박은 상수라야 실제로 실행 중인 코드를 가리킨다.
   const stamp = $('#buildStamp');
   if (stamp) stamp.textContent = `build v${BUILD}`;
-
-  // 현장 대조표는 평소 접혀 있지만 인쇄물에는 있어야 한다 — 방문해서 손으로 적는 표다.
-  // 접힌 <details>의 내용은 브라우저가 content-visibility로 감춰서 CSS만으로는 확실히
-  // 펼쳐지지 않는다. 인쇄 직전에 열고, 끝나면 원래대로 되돌린다.
-  let printOpened = [];
-  window.addEventListener('beforeprint', () => {
-    printOpened = [...document.querySelectorAll('.vc-xcfold:not([open])')];
-    printOpened.forEach((d) => { d.open = true; });
-  });
-  window.addEventListener('afterprint', () => {
-    printOpened.forEach((d) => { d.open = false; });
-    printOpened = [];
-  });
 
   // ── 옛 코드가 도는지 스스로 확인한다 ──
   // 캐시 사슬이 이렇게 이어진다: 브라우저에 index.html이 남아 있으면 그 안의 옛 주소

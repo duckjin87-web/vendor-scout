@@ -455,7 +455,13 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .topbar, .hero, footer, .actions { display: none !important; }
   .wrap { max-width: 100%; padding: 0; }
   .report { padding: 0; }
-  .summary, .block, .riskbox { box-shadow: none; break-inside: avoid; }
+  /* break-inside: avoid 가 공란의 주범이었다. 블록 하나가 남은 지면보다 길면 통째로
+     다음 장으로 넘어가면서 그 앞이 통으로 비었다. 큰 덩어리는 쪼개지게 두고,
+     대신 '제목만 남고 내용이 넘어가는' 것만 막는다. */
+  .summary, .block, .riskbox { box-shadow: none; break-inside: auto; }
+  .block > h3, .vcbox > h4, .hirebox > h4, .hpbox > h4, .chkbox > h3,
+  .vc-gh, .hire-sec, .vr-head { break-after: avoid; }
+  .field, .vr, .chk-list li, .hire-list li, .ib-tl li, .vch { break-inside: avoid; }
   .blocks { grid-template-columns: 1fr 1fr; }
   .block.full { grid-column: 1 / -1; }
   .grade-tag, .gdot, .badge-A, .badge-B, .badge-C, .badge-D, .srcpill, .riskbox li .t,
@@ -478,30 +484,35 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   /* 여백 압축 */
   .summary { padding: 10px 12px; margin-bottom: 8px; gap: 10px; }
   .block, .chkbox, .vcbox, .hirebox, .hpbox, .riskbox, .recallbox {
-    padding: 9px 11px; margin-bottom: 8px; border-radius: 8px;
+    padding: 7px 9px; margin-bottom: 6px; border-radius: 3px;
   }
-  .blocks { gap: 8px; }
-  .field { padding: 4px 0; }
+  .block > h3 { padding: 0 0 4px; margin-bottom: 5px; }
+  .blocks { gap: 6px; }
+  .field { padding: 3px 0; }
+  /* 접힌 묶음의 머리줄 — 화면에서는 누르는 자리라 여백이 있지만 종이에서는 한 줄이면 된다 */
+  .gapfold > summary { padding: 4px 0; }
+  .vcbox > h4, .hirebox > h4, .hpbox > h4 { margin-bottom: 5px; }
   .chk-list li, .hire-list li, .ib-tl li { padding: 4px 0; }
 
-  /* 두 단으로 나눠 세로 길이를 줄인다 — 항목은 단 사이에서 잘리지 않게 */
-  .vc-gh { break-after: avoid; }
   .vcbox, .chkbox, .hirebox { break-inside: auto; }
 
-  /* 인쇄에 필요 없는 안내·보조 UI */
+  /* ── 화면에서 접힌 것은 인쇄에도 안 나온다 ──
+     여태 인쇄에서만 따로 펴거나(현장 대조표) 따로 접었다(확인 안 됨 항목). 그래서 화면에서
+     본 것과 손에 쥔 종이가 달랐다. 접힘 상태는 브라우저의 <details> 그대로 두고, 인쇄에서는
+     여닫이 삼각형만 지운다. 펼쳐 놓고 인쇄하면 펼쳐진 채로 나온다. */
+  .gapfold > summary::before, .vc-xcfold > summary::before, .ib-more summary::before { content: none; }
+  .gapfold > summary, .vc-xcfold > summary { white-space: normal; }
+  .gapfold > summary em { overflow: visible; white-space: normal; }
+  .vc-xc .xc-r u { border-bottom: 1px solid #999; min-height: 13px; }
+
+  /* 조작용 UI와 안내 문구만 뺀다 — 종이에서는 누를 수도, 쓸모도 없다 */
   .chk-note, .vc-foot, .hire-warn, .livenote, .gennote, .srcstat, .recent,
   .hp-skip, .hp-cands, .build-stamp, .ot-hint, .sd-mini, .vc-empty,
-  .vc-add, .vc-del, .vc-edit, .chk-add, .ib-more, .field .ninfo, .field .fnote { display: none !important; }
-  /* 값이 없는 항목은 '무엇이 안 됐는지' 한 줄만 남기고 각 행은 인쇄하지 않는다 */
-  .gapfold > *:not(summary) { display: none !important; }
-  .gapfold > summary { white-space: normal; }
-  .gapfold > summary em { overflow: visible; white-space: normal; }
-  /* 현장 대조표는 방문 때 손으로 적는 표라, 화면에서 접혀 있어도 인쇄에는 펼쳐 낸다 */
-  .vc-xcfold > *:not(summary) { display: revert !important; content-visibility: visible !important; }
-  .vc-xcfold::details-content { content-visibility: visible !important; }
-  .vc-xcfold > summary::before { content: none; }
-  .vc-xc { break-inside: avoid; }
-  .vc-xc .xc-r u { border-bottom: 1px solid #999; min-height: 13px; }
+  .vc-add, .vc-del, .vc-edit, .chk-add, .field .ninfo, .vr-memo-add,
+  .sd-manual, .sd-run, .proxybtn, .hp-manual { display: none !important; }
+  /* 입력칸은 종이에서 '테두리만 있는 빈 상자'로 남는다. 메모처럼 내용이 있는 것만 남긴다. */
+  input[type="url"], input[type="search"], select, button { display: none !important; }
+  .vr-ck { display: inline-block !important; }
 
   @page { margin: 10mm; }
 }
@@ -674,9 +685,10 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .vr-own { display: none; }
 }
 @media print {
-  .vr { grid-template-columns: 16px 52px 38px 56px minmax(0, 1fr) 0 0 0; padding: 5px 8px; }
-  .vr-memo-in { border-style: solid; border-color: #999; min-height: 16px; }
-  .vr .vc-edit, .vr .vc-del, .vr-own { display: none !important; }
+  /* 조작 칸(수정·삭제·추가일)은 종이에서 쓸모가 없다. 칸 자체를 없애 본문 폭을 되찾는다. */
+  .vr { grid-template-columns: 14px 48px 34px 52px minmax(0, 1fr); gap: 6px; padding: 4px 6px; }
+  .vr > .vc-edit, .vr > .vc-del, .vr-own, .vr-head > span:nth-child(n+6) { display: none !important; }
+  .vr-memo-in { border-style: solid; border-color: #999; padding: 2px 5px; }
 }
 
 /* 현장 대조표는 평소엔 접어 둔다 — 방문해서 맞춰 볼 표라 화면에서는 자리만 차지한다.
@@ -712,7 +724,7 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .vc-cat { grid-column: 2; }
   .vc-txt, .vc-why { grid-column: 1 / -1; }
 }
-@media print { .vr-ck { -webkit-appearance: auto; appearance: auto; } .vcbox { break-inside: avoid; } }
+@media print { .vr-ck { -webkit-appearance: auto; appearance: auto; } }
 
 /* ═══ 체크 필요사항 통합 패널 (기준정보 / 웹) ═══ */
 .chkbox { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 15px 17px; box-shadow: var(--shadow); margin-bottom: 18px; }
@@ -1081,8 +1093,13 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .vch:nth-child(3n+1) { border-left: 0; padding-left: 0; }
 }
 @media print {
-  .verdict, .vcbox { break-inside: avoid; }
+  /* 표제부는 짧아서 통째로 유지해도 공란이 안 생긴다. 체크리스트는 길어서 쪼개져야 한다. */
+  .verdict { break-inside: avoid; }
   .metaline { display: none !important; }
+  /* 판정 카드 여백 압축 */
+  .verdict { padding: 10px 12px 8px; margin-bottom: 7px; }
+  .vd-why, .vd-chips, .vd-foot { margin-top: 7px; padding-top: 6px; }
+  .vch { padding: 5px 7px 4px; }
 }
 
 /* ══════════════════════════════════════════════════════════════
