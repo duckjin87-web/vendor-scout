@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 127;
+const BUILD = 128;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2574,8 +2574,17 @@ const FIN_SERIES = [
   { name: '영업이익', unit: '억', grp: 'amt', color: '#ef4444', g: (d) => d.operatingProfit },
   { name: '총자산', unit: '억', grp: 'amt', color: '#10b981', g: (d) => d.assets },
   { name: '총부채', unit: '억', grp: 'amt', color: '#f59e0b', invert: true, g: (d) => d.debt },
-  { name: '영업이익률', unit: '%', grp: 'rat', color: '#a855f7', g: (d) => (d.revenue ? +(d.operatingProfit / d.revenue * 100).toFixed(1) : null) },
-  { name: '부채비율', unit: '%', grp: 'rat', color: '#94a3b8', invert: true, g: (d) => { const eq = (d.assets || 0) - (d.debt || 0); return eq > 0 ? +(d.debt / eq * 100).toFixed(0) : null; } },
+  // 비율은 분자·분모가 둘 다 있을 때만 낸다. null 은 산술에서 0 으로 취급되기 때문에,
+  // 영업이익이 비어 있는 해가 '영업이익률 0%'로 찍혔다 — 이익이 0이라는 뜻이 되어 버린다.
+  // 자료가 없는 것과 값이 0인 것은 전혀 다른 말이라, 없으면 빈칸으로 둔다.
+  { name: '영업이익률', unit: '%', grp: 'rat', color: '#a855f7',
+    g: (d) => (d.revenue && d.operatingProfit != null ? +(d.operatingProfit / d.revenue * 100).toFixed(1) : null) },
+  { name: '부채비율', unit: '%', grp: 'rat', color: '#94a3b8', invert: true,
+    g: (d) => {
+      if (d.assets == null || d.debt == null) return null;
+      const eq = d.assets - d.debt;
+      return eq > 0 ? +(d.debt / eq * 100).toFixed(0) : null;
+    } },
 ];
 
 // 지표별 스파크 카드 — 각자 자기 스케일이라 수치 크기가 달라도 추이가 전부 보인다
@@ -2586,9 +2595,12 @@ function sparkCard(se, years) {
     return `<div class="spark" style="border-top-color:${se.color}"><div class="sphead">${esc(se.name)} <span class="u">(${se.unit})</span></div><div class="spmiss">데이터 없음</div></div>`;
   }
   const first = vals[idxs[0]], last = vals[idxs[idxs.length - 1]];
-  // 증감 배지: 금액은 %(첫해 대비), 비율(%)은 %p 차이
+  // 증감 배지: 금액은 %(첫해 대비), 비율(%)은 %p 차이.
+  // 관측치가 한 해뿐이면 견줄 대상이 없다. 그때도 first === last 라 '0%p'가 찍혀
+  // 변화가 없었다는 뜻으로 읽혔다 — 비교를 못 한 것과 변화가 없는 것은 다르다.
   let chg = '—', dir = 0;
-  if (se.unit === '%') { const d = +(last - first).toFixed(1); chg = `${d > 0 ? '+' : ''}${d}%p`; dir = Math.sign(d); }
+  if (idxs.length < 2) chg = '1개년';
+  else if (se.unit === '%') { const d = +(last - first).toFixed(1); chg = `${d > 0 ? '+' : ''}${d}%p`; dir = Math.sign(d); }
   else if (first) { const p = Math.round(((last - first) / Math.abs(first)) * 100); chg = `${p > 0 ? '+' : ''}${p}%`; dir = Math.sign(p); }
   const bad = se.invert ? dir > 0 : dir < 0;   // 부채류는 증가가 경고
   const good = se.invert ? dir < 0 : dir > 0;
@@ -3227,11 +3239,15 @@ function renderVerdict(report) {
     // 회수·판매중지와 방문 거리는 아래 타일에 따로 있었는데, 나머지 타일이 이 칩들과
     // 같은 내용이라 타일 줄을 통째로 걷어 냈다. 겹치지 않는 이 둘만 여기로 옮긴다.
     ['회수·판매중지', recallN ? `${recallN}건` : '없음', recallN ? 'bad' : 'ok'],
+    // 거리만 있으면 갈 만한지 가늠이 안 된다. 같은 120km라도 고속도로 1시간과 국도 2시간은
+    // 하루 일정이 달라진다. 소요시간을 함께 적는다.
     ['방문 거리', dist ? String(dist).replace(/^약\s*/, '').replace(/\s*·.*$/, '') : '미확인',
-      dist ? 'num' : 'na', dist ? String(dist) : null],
+      dist ? 'num' : 'na', dist ? String(dist) : null,
+      dist ? (String(dist).match(/·\s*(.+)$/) || [])[1] || '' : ''],
   ];
-  html += `<div class="vd-chips">` + chips.map(([k, val, t, tip]) =>
-    `<div class="vch vch-${t}"${tip ? ` title="${esc(tip)}"` : ''}><i>${esc(k)}</i><b>${esc(val)}</b></div>`).join('') + `</div>`;
+  html += `<div class="vd-chips">` + chips.map(([k, val, t, tip, sub]) =>
+    `<div class="vch vch-${t}"${tip ? ` title="${esc(tip)}"` : ''}><i>${esc(k)}</i>`
+    + `<b>${esc(val)}${sub ? `<small>${esc(sub)}</small>` : ''}</b></div>`).join('') + `</div>`;
   html += `<div class="vd-foot">종합판정은 <b>업체를 방문할 만한지</b>에 대한 검토 결과이고, `
     + `항목마다 붙는 A·B·C·D는 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>를 나타냅니다 — 서로 다른 이야기입니다.`
     + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')

@@ -1065,6 +1065,8 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   display: block; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 값에 딸린 부연(소요시간 등) — 한 칸에 두 줄로 넣되 무게는 확실히 낮춘다 */
+.vch b small { display: block; font-size: 10.5px; font-weight: 400; color: var(--muted); margin-top: 1px; }
 .vch-na b { color: var(--faint); font-weight: 400; }
 .vch-bad b { color: var(--risk); }
 .vd-foot { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 10.5px; color: var(--muted); line-height: 1.6; }
