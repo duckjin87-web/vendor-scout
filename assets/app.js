@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 125;
+const BUILD = 126;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2555,7 +2555,7 @@ function block(title, icon, fields, cat) {
   // 각각 긴 설명까지 달려 블록의 절반을 먹었다. 없다는 사실은 한 줄이면 충분하다.
   const gaps = fields.filter((f) => f.data_gap || f.value == null);
   const filled = fields.filter((f) => !(f.data_gap || f.value == null));
-  b.appendChild(el('h3', null, `<span class="ic">${icon}</span>${esc(title)}`
+  b.appendChild(el('h3', null, `${icon ? `<span class="ic">${icon}</span>` : ''}${esc(title)}`
     + `<span class="cnt">${fields.length}개 필드${gaps.length ? ' · 공백 ' + gaps.length : ''}</span>`));
   filled.forEach((f) => b.appendChild(fieldRow(f)));
   if (gaps.length) {
@@ -2632,7 +2632,7 @@ function financeBlock(report) {
   const hist = report.finance_history || [];
   const b = el('div', 'block full cat-fin');
   const chartN = hist.length ? '그래프 6지표 · 표 자본금' : `${fields.length}개 필드`;
-  b.appendChild(el('h3', null, `<span class="ic">💰</span>재무 (금융위)<span class="cnt">${chartN}</span>`));
+  b.appendChild(el('h3', null, `재무<span class="cnt">${chartN}</span>`));
 
   // 재무 건전성 평가 배너 (양호/주의/위험)
   const fh = report.finance_health;
@@ -2688,7 +2688,7 @@ function renderCheckWeb(report) {
 
   const box = el('div', 'chkbox chk-web');
   const downs = assess ? assess.downs : 0;
-  let html = `<h3>🌐 최근 활동 · 웹 자료 <b>· 확인사항의 근거</b>` +
+  let html = `<h3>최근 활동 · 웹 자료 <b>· 확인사항의 근거</b>` +
     `<span class="chk-sum ${downs ? 'on' : ''}">${downs ? `주의 신호 ${downs}건` : (timeline.length ? `신호 ${timeline.length}건` : `언급 ${oem.length + news.length}건`)}</span>` +
     `<button type="button" class="chk-add" data-chkadd="1">➕ 체크리스트에 추가</button></h3>` +
     `<div class="chk-note">네이버 뉴스·웹문서에서 업체명이 실제 포함된 자료만 취합했습니다. 사실관계는 원문 확인 권장.</div>`;
@@ -2772,13 +2772,13 @@ function renderHiring(h) {
   if (!h) return null;
   const box = el('div', 'hirebox');
   if (!h.ok) {
-    box.innerHTML = `<h4>🧑‍🏭 채용공고 추적 <span>잡코리아·사람인·워크넷 등</span></h4>`
+    box.innerHTML = `<h4>채용공고 추적 <span>잡코리아·사람인·워크넷 등</span></h4>`
       + `<div class="hire-none">${esc(h.reason || '조회 불가')}</div>`;
     return box;
   }
   const yrs = Object.keys(h.byYear).sort();
   const maxN = Math.max(1, ...Object.values(h.byYear));
-  let html = `<h4>🧑‍🏭 채용공고 추적 <span>공고 ${h.posts.length}건${h.spanYears ? ` · ${h.spanYears}개년 확인` : ''}</span></h4>`;
+  let html = `<h4>채용공고 추적 <span>공고 ${h.posts.length}건${h.spanYears ? ` · ${h.spanYears}개년 확인` : ''}</span></h4>`;
 
   // 판정 신호 — 가장 중요한 결론이므로 맨 위
   if (h.signals.length) {
@@ -2849,20 +2849,20 @@ function renderHiring(h) {
 // 홈페이지 추적 결과를 박스에 렌더 (검색중 → 결과 교체)
 function renderHomepageInto(box, hp) {
   const chip = (m) => `<span class="hp-m">✓ ${esc(m)}</span>`;
-  if (!hp) { box.innerHTML = '<h4>🔎 홈페이지 추적</h4><div class="hp-none">검색 실패 또는 프록시 미설정</div>'; return; }
-  if (hp.err) { box.innerHTML = `<h4>🔎 홈페이지 추적</h4><div class="hp-none">검색 실패: ${esc(hp.err)}</div>`; return; }
+  if (!hp) { box.innerHTML = '<h4>홈페이지 추적</h4><div class="hp-none">검색 실패 또는 프록시 미설정</div>'; return; }
+  if (hp.err) { box.innerHTML = `<h4>홈페이지 추적</h4><div class="hp-none">검색 실패: ${esc(hp.err)}</div>`; return; }
   const p = hp.proposed;
-  let html = `<h4>🔎 홈페이지 추적 <span>지역검색+웹문서 ${hp.tried ? `후보 ${hp.tried}건` : ''} → 페이지 대조</span></h4>`;
+  let html = `<h4>홈페이지 추적 <span>지역검색+웹문서 ${hp.tried ? `후보 ${hp.tried}건` : ''} → 페이지 대조</span></h4>`;
   if (p) {
     html += `<div class="hp-top">` +
       `<span class="hp-badge">확정 제안</span>` +
       `<a href="${esc(p.url)}" target="_blank" rel="noopener" class="hp-url">${esc(p.host)}</a>` +
       `<div class="hp-ms">${p.matches.map(chip).join('')} <em>(근거 ${p.matches.length}종 · 신뢰점수 ${p.score})</em></div>` +
       `</div>`;
-    // 🏭 홈페이지 발췌 — 생산능력·인증(자동추출). 홈페이지 게재값이라 방문 시 원본 확인 필요.
+    // 홈페이지 발췌 — 생산능력·인증(자동추출). 홈페이지 게재값이라 방문 시 원본 확인 필요.
     const ex = p.extract;
     if (ex && (ex.certs.length || ex.capa.length || ex.oemOdm.length)) {
-      html += `<div class="hp-ext"><div class="hp-ext-h">🏭 홈페이지 발췌 <span>자동추출 · 게재정보(방문 시 인증서 원본 확인)</span></div>`;
+      html += `<div class="hp-ext"><div class="hp-ext-h">홈페이지 발췌 <span>자동추출 · 게재정보(방문 시 인증서 원본 확인)</span></div>`;
       if (ex.oemOdm.length) html += `<div class="hp-row"><i>생산모델</i><span>${ex.oemOdm.map((o) => `<b class="hp-tag">${esc(o)}</b>`).join(' ')}</span></div>`;
       if (ex.certs.length) html += `<div class="hp-row"><i>인증</i><span>${ex.certs.map((c) => `<b class="hp-cert">${esc(c)}</b>`).join(' ')}</span></div>`;
       if (ex.capa.length) html += `<div class="hp-row"><i>생산능력</i><ul class="hp-capa">${ex.capa.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></div>`;
@@ -2980,22 +2980,22 @@ function sdManualRow(base) {
 }
 function renderSiteDeepInto(box, state) {
   if (state.loading) {
-    box.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>홈페이지 조사 중…</span></h4>' +
+    box.innerHTML = '<h4>홈페이지 심층분석 <span>홈페이지 조사 중…</span></h4>' +
       '<div class="sd-load">본문·메타·임베드 JSON·이미지 정보까지 훑어 키워드를 추출하고 있습니다…</div>';
     return;
   }
   const srcTag = state.source ? `<b class="sd-tag">${esc(SD_SRC_TAG[state.source] || state.source)}</b>` : '';
   if (state.err && !state.data) {
-    box.innerHTML = `<h4>🔬 홈페이지 심층분석 ${srcTag}</h4>` +
+    box.innerHTML = `<h4>홈페이지 심층분석 ${srcTag}</h4>` +
       `<div class="sd-none">${esc(state.err)}</div>` + sdManualRow(state.base);
     return;
   }
   const d = state.data;
-  if (!d) { box.innerHTML = `<h4>🔬 홈페이지 심층분석 ${srcTag}</h4><div class="sd-none">추출 결과 없음</div>` + sdManualRow(state.base); return; }
+  if (!d) { box.innerHTML = `<h4>홈페이지 심층분석 ${srcTag}</h4><div class="sd-none">추출 결과 없음</div>` + sdManualRow(state.base); return; }
   const rows = SITE_DEEP_FIELDS
     .map((f) => ({ f, has: !(d[f.key] == null || (Array.isArray(d[f.key]) && !d[f.key].length) || d[f.key] === '') }))
     .filter((r) => r.has);
-  let html = `<h4>🔬 홈페이지 심층분석 ${srcTag}<span>홈페이지 게재 정보 · 참고용(방문 시 원본 확인)</span></h4>`;
+  let html = `<h4>홈페이지 심층분석 ${srcTag}<span>홈페이지 게재 정보 · 참고용(방문 시 원본 확인)</span></h4>`;
   // 수집 방식 안내 — 이미지 전용/SPA라 웹검색으로 보완했다면 명시(신뢰도 판단용)
   const hv = state.harvest;
   if (hv && (hv.thin || hv.webFallback)) {
@@ -3411,7 +3411,7 @@ function renderVisitChecklist(report) {
   const memos = getMemos(vid);
   const bySrc = { 기준정보: 0, 웹기반: 0, 기타: 0 };
   items.forEach((i) => { bySrc[i.src || '기타'] = (bySrc[i.src || '기타'] || 0) + 1; });
-  let html = `<h4>⚠ 방문 전 확인필요 <span>확인사항 ${items.length}건`
+  let html = `<h4>방문 전 확인필요 <span>확인사항 ${items.length}건`
     + `${hi ? ` · 필수 ${hi}` : ''} · 완료 ${done}/${items.length}`
     + ` · 기준정보 ${bySrc['기준정보'] || 0} / 웹기반 ${bySrc['웹기반'] || 0}${bySrc['기타'] ? ` / 기타 ${bySrc['기타']}` : ''}</span></h4>`;
 
@@ -3443,8 +3443,10 @@ function renderVisitChecklist(report) {
       + `<div class="vr-body"><label for="vc-${esc(k)}">${esc(it.text)}</label>`
       + (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '')
       + (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '')
-      + `<div class="vr-memo"><input type="text" class="vr-memo-in" data-key="${esc(k)}" maxlength="300"`
-      + ` placeholder="메모 — 물어볼 말이나 현장에서 들은 답을 적으세요" value="${esc(memo)}"></div>`
+      // 메모는 쓸 때만 꺼낸다. 모든 줄에 입력칸을 깔아 두니 표가 입력 양식처럼 보였다.
+      + `<button type="button" class="vr-memo-add" data-key="${esc(k)}"${memo ? ' hidden' : ''}>＋ 메모</button>`
+      + `<div class="vr-memo"${memo ? '' : ' hidden'}><input type="text" class="vr-memo-in" data-key="${esc(k)}" maxlength="300"`
+      + ` placeholder="물어볼 말이나 현장에서 들은 답" value="${esc(memo)}"></div>`
       + `</div>`
       + `<span class="vr-own">${it.mine ? esc(it.at || '') : ''}</span>`
       + (it.mine ? `<button type="button" class="vc-edit" data-id="${esc(it.id)}" title="이 항목 수정" aria-label="수정">✎</button>` : '<span></span>')
@@ -3486,7 +3488,7 @@ function renderVisitChecklist(report) {
   }
 
   // ── 직접 추가 ──
-  html += `<details class="vc-add" id="vcAdd"><summary>➕ 확인할 항목 직접 추가</summary>`
+  html += `<details class="vc-add" id="vcAdd"><summary>확인할 항목 직접 추가</summary>`
     + `<div class="vc-form">`
     + `<input type="text" class="vc-in-text" placeholder="확인할 내용 (예: 감사보고서 사본 요청)" maxlength="200">`
     + `<select class="vc-in-pri"><option value="high">필수</option><option value="mid" selected>권장</option><option value="low">참고</option></select>`
@@ -3511,10 +3513,26 @@ function renderVisitChecklist(report) {
   });
   // 메모 저장 — 입력하다 말고 다른 데를 눌러도 남아야 하므로 포커스가 빠질 때 저장한다.
   // 목록을 다시 그리지는 않는다(입력 도중 커서가 튀면 쓰던 문장을 잃는다).
+  box.querySelectorAll('.vr-memo-add').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const wrap = btn.parentElement.querySelector('.vr-memo');
+      btn.hidden = true;
+      wrap.hidden = false;
+      wrap.querySelector('input').focus();
+    });
+  });
   box.querySelectorAll('.vr-memo-in').forEach((inp) => {
     const save = () => setMemo(vid, inp.dataset.key, inp.value);
     inp.addEventListener('change', save);
-    inp.addEventListener('blur', save);
+    inp.addEventListener('blur', () => {
+      save();
+      // 아무것도 안 적고 빠져나오면 다시 접는다 — 빈 칸이 남아 있으면 도로 양식처럼 보인다
+      if (!inp.value.trim()) {
+        inp.closest('.vr-memo').hidden = true;
+        const add = inp.closest('.vr-body').querySelector('.vr-memo-add');
+        if (add) add.hidden = false;
+      }
+    });
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { save(); inp.blur(); } });
   });
   // 직접 추가 항목 삭제
@@ -3730,8 +3748,8 @@ function render(report, opts = {}) {
   if (!excl.has('news')) { const chkW = renderCheckWeb(report); if (chkW) root.appendChild(chkW); }
 
   const blocks = el('div', 'blocks');
-  blocks.appendChild(block('기업 기본정보', '🏢', visible(report.basic), 'basic'));
-  blocks.appendChild(block('생산역량 · 인원', '🏭', visible(report.capacity), 'prod'));
+  blocks.appendChild(block('기업 기본정보', '', visible(report.basic), 'basic'));
+  blocks.appendChild(block('생산역량 · 인원', '', visible(report.capacity), 'prod'));
   if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
   // 🧑‍🏭 채용공고 추적 — 재무 뒤(재무가 오래된 업체의 '현재 활동'을 보는 자리이므로 나란히)
   if (!excl.has('hiring')) {
@@ -3798,7 +3816,7 @@ function render(report, opts = {}) {
     if (report._homepage !== undefined) {
       renderHomepageInto(hpBox, report._homepage);
     } else {
-      hpBox.innerHTML = '<h4>🔎 홈페이지 추적 <span>검색 중…</span></h4>';
+      hpBox.innerHTML = '<h4>홈페이지 추적 <span>검색 중…</span></h4>';
       const getV = (k) => { const f = report.basic.find((x) => x.key === k); return f && f.value; };
       findHomepage(report.meta.vendor_name, { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호'), factoryHomepage: report.meta.factory_homepage })
         .then((hp) => { report._homepage = hp || null; renderHomepageInto(hpBox, report._homepage); saveLastReport(report); })
@@ -3810,7 +3828,7 @@ function render(report, opts = {}) {
     if (report._siteDeep && (report._siteDeep.data || report._siteDeep.err)) {
       paintDeep(report._siteDeep);
     } else {
-      sdBox.innerHTML = '<h4>🔬 홈페이지 심층분석 <span>사이트 유형(정적·JS·이미지) 무관 키워드 추출 · API키 불필요</span></h4>';
+      sdBox.innerHTML = '<h4>홈페이지 심층분석 <span>사이트 유형(정적·JS·이미지) 무관 키워드 추출 · API키 불필요</span></h4>';
       const btn = el('button', 'sd-run', '🔬 심층분석 실행');
       btn.addEventListener('click', () => runDeep());
       sdBox.appendChild(btn);
@@ -3849,7 +3867,7 @@ function render(report, opts = {}) {
 function renderDiff(diff) {
   if (!diff || !diff.length) return null;
   const b = el('div', 'block');
-  b.appendChild(el('h3', null, `<span class="ic">📈</span>직전 버전 대비 변경<span class="cnt">${diff.length}건</span>`));
+  b.appendChild(el('h3', null, `직전 버전 대비 변경<span class="cnt">${diff.length}건</span>`));
   diff.forEach((d) => {
     const row = el('div', 'field');
     row.appendChild(el('div', 'k', esc(d.key)));
