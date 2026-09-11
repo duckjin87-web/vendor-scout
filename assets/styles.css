@@ -468,15 +468,12 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .report, .report * { font-size: 10px !important; line-height: 1.35 !important; }
   .summary .vinfo h2 { font-size: 14px !important; font-weight: 800; }
   .block h3, .chkbox h3, .vcbox h4, .hirebox h4, .hpbox h4, .riskbox h3, .recallbox h3 { font-size: 11px !important; }
-  .ct b, .ct .v { font-size: 12px !important; }
   .grade-badge { width: 42px; height: 42px; border-radius: 10px; }
   .grade-badge { font-size: 22px !important; }
   .field .v, .hire-head b { font-size: 11px !important; }   /* 수치는 본문보다 조금 크게 — 훑어볼 때 눈에 걸려야 한다 */
 
   /* 여백 압축 */
   .summary { padding: 10px 12px; margin-bottom: 8px; gap: 10px; }
-  .coreband { gap: 6px; margin-bottom: 8px; grid-template-columns: repeat(6, 1fr); }
-  .ct { padding: 8px 9px 7px; border-radius: 8px; }
   .block, .chkbox, .vcbox, .hirebox, .hpbox, .riskbox, .recallbox {
     padding: 9px 11px; margin-bottom: 8px; border-radius: 8px;
   }
@@ -522,30 +519,6 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
    v66 리프레시 — 핵심 요약 밴드 · 홈페이지 심층분석 · 감각 개선
    ═══════════════════════════════════════════════════════════ */
 
-/* ★ 핵심 요약 타일 — 방문 판단 핵심을 최상단에 크게 */
-.coreband {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 12px;
-  margin-bottom: 18px;
-}
-.ct {
-  position: relative; border-radius: 15px; padding: 15px 16px 13px;
-  background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow);
-  overflow: hidden;
-}
-.ct::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--faint); }
-.ct-good::before { background: var(--gA); }
-.ct-info::before { background: var(--accent); }
-.ct-warn::before { background: var(--gC); }
-.ct-bad::before  { background: var(--risk); }
-.ct-muted::before{ background: var(--gD); }
-.ct-big { font-size: 25px; font-weight: 800; letter-spacing: -.5px; line-height: 1.1; }
-.ct-good  .ct-big { color: var(--gA); }
-.ct-info  .ct-big { color: var(--accent); }
-.ct-warn  .ct-big { color: var(--gC); }
-.ct-bad   .ct-big { color: var(--risk); }
-.ct-muted .ct-big { color: var(--faint); }
-.ct-lab { font-size: 12.5px; font-weight: 700; margin-top: 5px; }
-.ct-sub { font-size: 10.5px; color: var(--faint); margin-top: 1px; }
 
 /* 🔬 홈페이지 심층분석 */
 .sdbox {
@@ -595,8 +568,6 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .grade-badge { box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); }
 
 @media (max-width: 640px) {
-  .coreband { grid-template-columns: repeat(2, 1fr); }
-  .ct-big { font-size: 22px; }
 }
 .sdbox .sd-tag { font-size: 10.5px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 8px; }
 .sd-hint { display: block; margin-top: 6px; font-size: 11.5px; color: var(--faint); line-height: 1.5; }
@@ -1033,6 +1004,8 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .vch b { display: block; font-size: 13.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vch-ok b { color: var(--gA); }
 .vch-na b { color: var(--faint); font-weight: 500; }
+.vch-bad { border-color: var(--risk); background: var(--risk-bg); }
+.vch-bad b { color: var(--risk); }
 .vch-num b { color: var(--text); }
 .vd-foot { margin-top: 12px; font-size: 11px; color: var(--faint); line-height: 1.55; }
 .vd-foot b { color: var(--muted); font-weight: 700; }

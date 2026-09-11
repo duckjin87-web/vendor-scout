@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 123;
+const BUILD = 124;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3248,6 +3248,8 @@ function renderVerdict(report) {
   }
   // 기본 현황 — 문서의 '기본 현황' 표를 칩으로
   const revF = (report.finance || []).find((x) => x.key === '매출액' && x.value);
+  const recallN = Array.isArray(report.recalls) && report.recalls.length ? report.recalls.length : 0;
+  const dist = cv('방문 이동거리');
   const chips = [
     ['제조업 등록', bv('제조업 등록') ? '확인' : '미확인', bv('제조업 등록') ? 'ok' : 'na'],
     ['사업자 상태', /계속/.test(String(bv('사업자 상태') || '')) ? '정상' : (bv('사업자 상태') || '미확인'), /계속/.test(String(bv('사업자 상태') || '')) ? 'ok' : 'na'],
@@ -3256,9 +3258,14 @@ function renderVerdict(report) {
     ['직원수', String(cv('재직자수 (국민연금 가입자)') || '미확인').replace(/\s*·.*$/, ''), cv('재직자수 (국민연금 가입자)') ? 'num' : 'na'],
     ['설립', String(bv('설립일 / 등록일') || '').slice(0, 4) || '미확인', bv('설립일 / 등록일') ? 'num' : 'na'],
     ['매출', revF ? revF.value + (revF.grade === 'C' ? '*' : '') : '미확인', revF ? 'num' : 'na'],
+    // 회수·판매중지와 방문 거리는 아래 타일에 따로 있었는데, 나머지 타일이 이 칩들과
+    // 같은 내용이라 타일 줄을 통째로 걷어 냈다. 겹치지 않는 이 둘만 여기로 옮긴다.
+    ['회수·판매중지', recallN ? `${recallN}건` : '없음', recallN ? 'bad' : 'ok'],
+    ['방문 거리', dist ? String(dist).replace(/^약\s*/, '').replace(/\s*·.*$/, '') : '미확인',
+      dist ? 'num' : 'na', dist ? String(dist) : null],
   ];
-  html += `<div class="vd-chips">` + chips.map(([k, val, t]) =>
-    `<div class="vch vch-${t}"><i>${esc(k)}</i><b>${esc(val)}</b></div>`).join('') + `</div>`;
+  html += `<div class="vd-chips">` + chips.map(([k, val, t, tip]) =>
+    `<div class="vch vch-${t}"${tip ? ` title="${esc(tip)}"` : ''}><i>${esc(k)}</i><b>${esc(val)}</b></div>`).join('') + `</div>`;
   html += `<div class="vd-foot">종합판정은 <b>업체를 방문할 만한지</b>에 대한 검토 결과이고, `
     + `항목마다 붙는 A·B·C·D는 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>를 나타냅니다 — 서로 다른 이야기입니다.`
     + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')
@@ -3298,35 +3305,6 @@ function renderMustCheck(report) {
   return box;
 }
 
-function renderCoreBand(report) {
-  const B = report.basic || [], C = report.capacity || [];
-  const bv = (k) => { const f = B.find((x) => x.key === k); return f && f.value ? f.value : null; };
-  const cv = (k) => { const f = C.find((x) => x.key === k); return f && f.value ? f.value : null; };
-  const maker = bv('제조업 등록');
-  const cgmp = cv('CGMP 적합업소');
-  const emp = cv('재직자수 (국민연금 가입자)');
-  const bstt = bv('사업자 상태');
-  const dist = cv('방문 이동거리');
-  const recall = Array.isArray(report.recalls) && report.recalls.length ? report.recalls.length : 0;
-  const tiles = [];
-  // 제조업 등록 — 이 서비스의 핵심 지표
-  tiles.push({ big: maker ? '등록' : '미확인', lab: '화장품 제조업', tone: maker ? 'good' : 'muted',
-    sub: maker ? '식약처 허가' : '상호 일치 없음' });
-  // CGMP
-  tiles.push({ big: cgmp ? '적합' : '미등재', lab: 'CGMP 인증', tone: cgmp ? 'good' : 'muted', sub: '식약처 GMP' });
-  // 재직자수
-  if (emp) tiles.push({ big: String(emp).replace(/\s.*$/, ''), lab: '재직자수', tone: 'info', sub: '국민연금 기준' });
-  // 사업자 상태
-  if (bstt) tiles.push({ big: /계속/.test(bstt) ? '정상' : String(bstt).slice(0, 6), lab: '사업자 상태', tone: /계속/.test(bstt) ? 'good' : 'warn', sub: '국세청' });
-  // 회수·판매중지 — 있으면 위험
-  tiles.push({ big: recall ? `${recall}건` : '없음', lab: '회수·판매중지', tone: recall ? 'bad' : 'good', sub: '식약처 이력' });
-  // 이동거리
-  if (dist) tiles.push({ big: String(dist).replace(/^약\s*/, '').replace(/\s*·.*$/, ''), lab: '방문 거리', tone: 'info', sub: String(dist).match(/·\s*(.+)$/) ? RegExp.$1 : '기준점 대비' });
-  const wrap = el('div', 'coreband');
-  wrap.innerHTML = tiles.map((t) =>
-    `<div class="ct ct-${t.tone}"><div class="ct-big">${esc(t.big)}</div><div class="ct-lab">${esc(t.lab)}</div><div class="ct-sub">${esc(t.sub)}</div></div>`).join('');
-  return wrap;
-}
 
 // ✅ 방문 전 체크리스트 — 기본정보(API) + 뉴스 신호 + 교차검증을 종합해 실사 확인 항목 자동 제안
 // 웹 신호(기사 태그) → 방문 시 확인할 질문·인사이트 매핑
@@ -3694,18 +3672,17 @@ function render(report, opts = {}) {
   const allFields = [...report.basic, ...report.capacity, ...report.finance].filter(included);
   const gapTotal = allFields.filter((f) => f.data_gap).length;
 
-  // ── 화면 순서: 종합판정 → 방문 전 확인 필요 → 핵심 타일 → 체크리스트 → 상세 블록 ──
+  // ── 화면 순서: 종합판정 → 방문 전 확인 필요 → 체크리스트 → 상세 블록 ──
   // 예전에는 등급 글자 하나와 '수집 필드 22 / 공백 5' 같은 집계가 맨 위였다. 그건 시스템의
   // 상태이지 업체에 대한 판단이 아니다. 방문 여부를 3분 안에 정하려면 '어떤 업체인가 →
   // 방문할 만한가 → 무엇이 걸리는가 → 가서 뭘 볼 것인가' 순으로 읽혀야 한다.
+  // 판정 카드 아래에 큰 타일 줄이 따로 있었는데, 여섯 칸 중 넷(제조업·CGMP·재직자수·
+  // 사업자 상태)이 카드의 기본 현황 칩과 같은 말이었다. 겹치지 않던 회수·판매중지와
+  // 방문 거리만 칩으로 옮기고 타일 줄은 걷어 냈다.
   root.appendChild(renderVerdict(report));
 
   const mustCheck = renderMustCheck(report);
   if (mustCheck) root.appendChild(mustCheck);
-
-  // ★ 핵심 요약 — 검증에서 가장 중요한 사실을 최상단 타일로(핵심부터 파악)
-  const coreBand = renderCoreBand(report);
-  if (coreBand) root.appendChild(coreBand);
 
   // 조회 메타는 판단에 쓰이지 않으니 아래로 내리고 한 줄로 줄인다
   const qDate = new Date(m.query_at).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
