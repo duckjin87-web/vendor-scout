@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 129;
+const BUILD = 130;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3195,6 +3195,18 @@ function verdictReason(report) {
   if (gaps) downs.push(`공개자료 미확인 ${gaps}건`);
   return { ups, downs };
 }
+// '약 162km · 차량 3시간 20분' → 앞줄 '약 162km' / 아랫줄 '차량 3h20m'
+// 시간 표기를 그대로 쓰면 좁은 화면에서 한 줄이 칸을 넘는다. 뜻은 그대로 두고 길이만 줄인다.
+const distMain = (v) => String(v).split('·')[0].trim();
+function distSub(v) {
+  const tail = String(v).split('·').slice(1).join('·').trim();
+  if (!tail) return '';
+  return tail
+    .replace(/(\d+)\s*시간\s*(\d+)\s*분/, '$1h$2m')
+    .replace(/(\d+)\s*시간(?!\d)/, '$1h')
+    .replace(/(\d+)\s*분/, '$1m')
+    .replace(/\s+/g, ' ');
+}
 function renderVerdict(report) {
   const m = report.meta || {};
   const g = m.overall_grade || 'D';
@@ -3239,12 +3251,13 @@ function renderVerdict(report) {
     // 회수·판매중지와 방문 거리는 아래 타일에 따로 있었는데, 나머지 타일이 이 칩들과
     // 같은 내용이라 타일 줄을 통째로 걷어 냈다. 겹치지 않는 이 둘만 여기로 옮긴다.
     ['회수·판매중지', recallN ? `${recallN}건` : '없음', recallN ? 'bad' : 'ok'],
-    // 생산역량 블록의 '방문 이동거리' 값을 그대로 쓴다. 거리만 떼어 내면 같은 120km라도
-    // 고속도로 1시간인지 국도 2시간인지 알 수 없어 하루 일정을 못 잡는다.
-    ['방문 거리', dist ? String(dist) : '미확인', dist ? 'num wrap' : 'na'],
+    // 거리와 소요시간을 둘 다 보여주되 칸을 넘지 않게 두 줄로 나눈다.
+    // '차량 3시간 20분'을 그대로 쓰면 좁은 화면에서 칸 밖으로 삐져나가, 시간은 3h20m으로 줄인다.
+    ['방문 거리', dist ? distMain(dist) : '미확인', dist ? 'num' : 'na', dist ? distSub(dist) : ''],
   ];
-  html += `<div class="vd-chips">` + chips.map(([k, val, t]) =>
-    `<div class="vch vch-${t}"><i>${esc(k)}</i><b>${esc(val)}</b></div>`).join('') + `</div>`;
+  html += `<div class="vd-chips">` + chips.map(([k, val, t, sub]) =>
+    `<div class="vch vch-${t}"><i>${esc(k)}</i>`
+    + `<b>${esc(val)}${sub ? `<small>${esc(sub)}</small>` : ''}</b></div>`).join('') + `</div>`;
   html += `<div class="vd-foot">종합판정은 <b>업체를 방문할 만한지</b>에 대한 검토 결과이고, `
     + `항목마다 붙는 A·B·C·D는 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>를 나타냅니다 — 서로 다른 이야기입니다.`
     + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')
