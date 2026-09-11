@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 124;
+const BUILD = 125;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -104,6 +104,18 @@ function checkKeyOf(it) {
   const s = `${it.cat}|${it.text}`;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
   return `a${h.toString(36)}`;
+}
+// 항목별 메모 — 방문 전에 물어볼 말을 적어 두거나, 방문해서 들은 답을 적는 칸.
+// 체크 표시와 같은 키를 쓰므로 문구가 그대로면 다시 조회해도 남아 있다.
+const MEMO_KEY = 'vs_memos';             // { [vendorId]: { [itemKey]: '메모' } }
+const getMemos = (vid) => (vid ? (_readMap(MEMO_KEY)[vid] || {}) : {});
+function setMemo(vid, key, text) {
+  if (!vid) return;
+  const m = _readMap(MEMO_KEY);
+  const o = { ...(m[vid] || {}) };
+  if (text && text.trim()) o[key] = text.trim(); else delete o[key];
+  m[vid] = o;
+  _writeMap(MEMO_KEY, m);
 }
 const getCheckedSet = (vid) => new Set(vid ? (_readMap(CHECKED_KEY)[vid] || []) : []);
 function toggleChecked(vid, key, on) {
@@ -2663,55 +2675,9 @@ function financeBlock(report) {
   return b;
 }
 
-// ═══ 체크 필요사항 ① 기준정보 기반 ═══
-// 리스크 플래그 + 회수·판매중지 + 교차검증 자동진단을 하나로 통합.
-// 공식 API(국세청·식약처·금융위·국민연금·산단공) 값끼리 대조해 나온 '확인 필요' 항목.
-function renderCheckOfficial(report) {
-  const flags = report.risk_flags || [];
-  const recalls = report.recalls || [];
-  const cd = report.cross_diag;
-  const cdItems = (cd && cd.items) || [];
-  if (!flags.length && !recalls.length && !cdItems.length) return null;
-
-  const rows = []; // {sev, tag, label, detail}
-  // 1) 회수·판매중지 — 품질/안전 최우선
-  recalls.slice(0, 8).forEach((r) => {
-    rows.push({ sev: 'bad', tag: '회수·판매중지',
-      label: [r.date, r.product].filter(Boolean).join(' · ') || '이력 확인',
-      detail: r.reason || '식약처 회수·판매중지 이력 — 원인·재발방지책 확인' });
-  });
-  // 2) 리스크 플래그(국세청 상태·재무 등) — 회수는 위에서 이미 표기했으므로 중복 제외
-  flags.filter((fl) => !/회수|판매중지/.test(fl.type || '')).forEach((fl) => {
-    rows.push({ sev: 'bad', tag: fl.type || '리스크', label: fl.detail || '', detail: '' });
-  });
-  // 3) 교차검증 — 불일치(warn)는 확인필요, 일치(match)/대조불가(na)는 정합성 근거로 표시
-  cdItems.forEach((c) => {
-    rows.push({ sev: c.status === 'warn' ? 'warn' : (c.status === 'match' ? 'ok' : 'na'),
-      tag: c.label, label: c.detail || '', detail: '' });
-  });
-
-  const need = rows.filter((r) => r.sev === 'bad' || r.sev === 'warn').length;
-  const box = el('div', 'chkbox chk-official');
-  let html = `<h3>🏛 체크 필요사항 <b>· 기준정보 기반</b>` +
-    `<span class="chk-sum ${need ? 'on' : ''}">${need ? `확인 필요 ${need}건` : '특이사항 없음'}</span>` +
-    `<button type="button" class="chk-add" data-chkadd="1">➕ 체크리스트에 추가</button></h3>` +
-    `<div class="chk-note">공식 API(국세청·식약처·금융위·국민연금·산단공) 값을 서로 대조한 결과입니다.</div>`;
-  html += '<ul class="chk-list">';
-  rows.forEach((r) => {
-    const ic = r.sev === 'bad' ? '⚠' : r.sev === 'warn' ? '⚠' : r.sev === 'ok' ? '✓' : '—';
-    html += `<li class="chk-${esc(r.sev)}">` +
-      `<span class="chk-ic">${ic}</span>` +
-      `<span class="chk-tag">${esc(r.tag)}</span>` +
-      `<span class="chk-body">${esc(r.label)}${r.detail ? `<em>${esc(r.detail)}</em>` : ''}</span>` +
-      `</li>`;
-  });
-  html += '</ul>';
-  box.innerHTML = html;
-  return box;
-}
-
-// ═══ 체크 필요사항 ② 웹 기반 ═══
-// 뉴스 신호 타임라인 + 웹 언급 추적 + 최신 관련기사를 하나로 통합.
+// ═══ 최근 활동 · 웹 자료 ═══
+// 뉴스 신호 타임라인 + 웹 언급 추적 + 최신 관련기사.
+// 확인'사항'은 위 '방문 전 확인필요' 표 하나로 모았고, 여기는 그 근거가 되는 원문이다.
 function renderCheckWeb(report) {
   const ins = report.insights;
   const timeline = (ins && ins.timeline) || [];
@@ -2722,7 +2688,7 @@ function renderCheckWeb(report) {
 
   const box = el('div', 'chkbox chk-web');
   const downs = assess ? assess.downs : 0;
-  let html = `<h3>🌐 체크 필요사항 <b>· 웹 기반</b>` +
+  let html = `<h3>🌐 최근 활동 · 웹 자료 <b>· 확인사항의 근거</b>` +
     `<span class="chk-sum ${downs ? 'on' : ''}">${downs ? `주의 신호 ${downs}건` : (timeline.length ? `신호 ${timeline.length}건` : `언급 ${oem.length + news.length}건`)}</span>` +
     `<button type="button" class="chk-add" data-chkadd="1">➕ 체크리스트에 추가</button></h3>` +
     `<div class="chk-note">네이버 뉴스·웹문서에서 업체명이 실제 포함된 자료만 취합했습니다. 사실관계는 원문 확인 권장.</div>`;
@@ -3277,33 +3243,6 @@ function renderVerdict(report) {
 // ── ⚠ 방문 전 반드시 확인 ──
 // 흩어져 있던 위험 신호(주소 상이·교차검증 경고·자료 공백)를 한자리에 모아 맨 위로 올린다.
 // 문서의 요구는 분명했다 — 방문 전에 3분 만에 '무엇을 확인해야 하는가'가 보여야 한다.
-function renderMustCheck(report) {
-  const items = [];
-  (report.risk_flags || []).forEach((r) => items.push({ t: r.type, d: r.detail, lv: 'high' }));
-  ((report.cross_diag || {}).items || []).forEach((x) => {
-    if (x.status !== 'warn') return;
-    if (items.some((i) => i.d === x.detail)) return;
-    items.push({ t: x.label, d: x.detail, lv: x.severe ? 'high' : 'mid' });
-  });
-  // 생산 판단에 꼭 필요한데 공개자료에 없는 것들 — '없음'이 아니라 '확인 안 됨'이다
-  const C = report.capacity || [];
-  const missing = C.filter((x) => x.data_gap).map((x) => x.key);
-  if (missing.length) {
-    items.push({ t: '공개자료 미확인 항목', lv: 'mid',
-      d: `${missing.join(' · ')} — 공개 API에서 확인되지 않았습니다. '없음'이 아니라 '확인되지 않음'이므로 현장에서 직접 확인하세요.` });
-  }
-  const fin = report.finance || [];
-  if (fin.some((x) => x.value && x.grade === 'C') && !fin.some((x) => x.value && x.grade === 'A')) {
-    items.push({ t: '최근 재무자료', lv: 'mid',
-      d: '공식 공시 재무자료가 확인되지 않아 외부 기업정보를 참고값으로 사용했습니다. 최근 결산서·표준재무제표증명(국세청 발급)을 요청하세요.' });
-  }
-  if (!items.length) return null;
-  const box = el('div', 'mustcheck');
-  box.innerHTML = `<h4>⚠ 방문 전 확인 필요 <span>${items.length}건</span></h4>`
-    + `<ol class="mc-list">` + items.map((i) =>
-      `<li class="mc-${esc(i.lv)}"><b>${esc(i.t)}</b><span>${esc(i.d)}</span></li>`).join('') + `</ol>`;
-  return box;
-}
 
 
 // ✅ 방문 전 체크리스트 — 기본정보(API) + 뉴스 신호 + 교차검증을 종합해 실사 확인 항목 자동 제안
@@ -3322,8 +3261,39 @@ const WEB_SIGNAL_ASK = {
 };
 // ✅ 방문 전 체크리스트 — 웹 기반 정보(기사·채용공고·기술/인증·판매제품)에서 확인사항·인사이트 도출
 function buildVisitChecklist(report) {
-  const items = []; // {pri, cat, text, why, ins}
-  const add = (pri, cat, text, why, ins) => items.push({ pri, cat, text, why: why || '', ins: ins || '' });
+  // {src, pri, cat, text, why, ins}
+  // src = 이 확인사항이 어디서 나왔는지. 기준정보(공공 API 대조)와 웹기반(기사·채용·홈페이지)은
+  // 신뢰도가 전혀 다른데, 여태 세 블록에 흩어져 있어 한 건을 세 군데서 보게 됐다.
+  const items = [];
+  const add = (pri, cat, text, why, ins, src) =>
+    items.push({ src: src || '웹기반', pri, cat, text, why: why || '', ins: ins || '' });
+
+  // ── ⓪ 기준정보 대조에서 나온 확인사항 ──
+  // 리스크 플래그·교차검증 경고·공개자료 공백. 예전에는 '체크 필요사항 · 기준정보 기반'이라는
+  // 별도 블록이었는데, 읽는 사람 입장에서는 방문해서 확인할 항목이라는 점이 똑같다.
+  (report.risk_flags || []).forEach((r) => {
+    add('high', '기준정보', r.detail || r.type, r.type || '', '', '기준정보');
+  });
+  ((report.cross_diag || {}).items || []).forEach((c) => {
+    if (c.status !== 'warn') return;
+    if (items.some((i) => i.text === c.detail)) return;
+    add(c.severe ? 'high' : 'mid', '기준정보', c.detail || c.label, `교차검증 · ${c.label}`, '', '기준정보');
+  });
+  (report.recalls || []).slice(0, 8).forEach((r) => {
+    add('high', '기준정보', `회수·판매중지 이력 — ${r.reason || '원인·재발방지책 확인'}`,
+      [r.date, r.product].filter(Boolean).join(' · ') || '식약처 이력', '', '기준정보');
+  });
+  const gapKeys = [...(report.capacity || []), ...(report.basic || [])].filter((x) => x.data_gap).map((x) => x.key);
+  if (gapKeys.length) {
+    add('mid', '기준정보', `${gapKeys.join(' · ')} — 공개 API에서 확인되지 않았습니다. '없음'이 아니라 '확인되지 않음'이므로 현장에서 직접 확인하세요.`,
+      `공개자료 미확인 ${gapKeys.length}건`, '', '기준정보');
+  }
+  const finRows = report.finance || [];
+  if (finRows.some((x) => x.value && x.grade === 'C') && !finRows.some((x) => x.value && x.grade === 'A')) {
+    add('high', '재무', '공식 공시 재무자료가 확인되지 않아 외부 기업정보를 참고값으로 사용했습니다 — 최근 결산서·표준재무제표증명(국세청 발급)을 요청하세요.',
+      '금융위 재무 API 미수록', '', '기준정보');
+  }
+
   const timeline = (report.insights && report.insights.timeline) || [];
   const oem = report.oem_trace || [];
   const news = report.news || [];
@@ -3409,26 +3379,7 @@ function buildVisitChecklist(report) {
   return items;
 }
 const PRI_LABEL = { high: '필수', mid: '권장', low: '참고' };
-// 비슷한 성격의 분류를 한 덩어리로 — 항목이 20건을 넘으면 분류가 흩어져 읽기 어렵고,
-// 인쇄하면 같은 주제를 여러 장에 걸쳐 찾아다니게 된다. 방문 시 확인 순서와도 대체로 맞다.
-const VC_GROUPS = [
-  ['실체·재무', ['실체', '재무']],
-  ['인력·채용', ['채용']],
-  ['생산·설비·인증', ['설비', '기술', '인증', '제품']],
-  ['거래·판로', ['레퍼런스', '수출']],
-  ['기타·직접 추가', []],            // 위에 안 걸리는 분류와 직접 추가 항목
-];
 const PRI_ORDER = { high: 0, mid: 1, low: 2 };
-function groupChecklist(items) {
-  const rest = new Set(items.map((x) => x.cat).filter(Boolean));
-  VC_GROUPS.forEach(([, cats]) => cats.forEach((c) => rest.delete(c)));
-  return VC_GROUPS.map(([name, cats]) => {
-    const inGroup = items.filter((it) => (cats.length ? cats.includes(it.cat) : (!it.cat || rest.has(it.cat))));
-    // 그룹 안에서는 우선순위 순 — 필수부터 눈에 들어와야 한다
-    inGroup.sort((a, b) => (PRI_ORDER[a.pri] ?? 9) - (PRI_ORDER[b.pri] ?? 9));
-    return { name, items: inGroup };
-  }).filter((g) => g.items.length);
-}
 // 심층분석 등 비동기 결과 도착 시 체크리스트만 제자리 갱신(전체 재렌더 없이)
 function refreshVisitChecklist(report, opts = {}) {
   const old = document.getElementById('visitChecklist');
@@ -3457,46 +3408,62 @@ function renderVisitChecklist(report) {
   const checked = getCheckedSet(vid);
   const hi = items.filter((i) => i.pri === 'high').length;
   const done = items.filter((i) => checked.has(checkKeyOf(i))).length;
-  let html = `<h4>✅ 방문 전 체크리스트 <span>웹 기반 자동 도출 + 직접 추가 · 현장 확인용`
-    + `${hi ? ` · 필수 ${hi}건` : ''}${items.length ? ` · 완료 ${done}/${items.length}` : ''}</span></h4>`;
+  const memos = getMemos(vid);
+  const bySrc = { 기준정보: 0, 웹기반: 0, 기타: 0 };
+  items.forEach((i) => { bySrc[i.src || '기타'] = (bySrc[i.src || '기타'] || 0) + 1; });
+  let html = `<h4>⚠ 방문 전 확인필요 <span>확인사항 ${items.length}건`
+    + `${hi ? ` · 필수 ${hi}` : ''} · 완료 ${done}/${items.length}`
+    + ` · 기준정보 ${bySrc['기준정보'] || 0} / 웹기반 ${bySrc['웹기반'] || 0}${bySrc['기타'] ? ` / 기타 ${bySrc['기타']}` : ''}</span></h4>`;
 
-  // 한 항목의 <li> 문자열 — 그룹별로 여러 번 쓰므로 함수로 뽑는다
+  // 한 줄 = 확인사항 하나. 출처 · 중요도 · 분류 · 내용 · 메모.
+  // 예전에는 세 블록(방문 전 체크리스트 / 체크 필요사항 기준정보 / 체크 필요사항 웹기반)에
+  // 같은 건이 흩어져 있어 한 항목을 세 군데서 다시 읽어야 했다. 한 표로 합치고,
+  // 어디서 나온 이야기인지(출처)를 첫 칸에 세워 신뢰도를 바로 가늠하게 한다.
+  const SRC_CLS = { 기준정보: 'off', 웹기반: 'web', 기타: 'etc' };
   const rowHtml = (it) => {
     const k = checkKeyOf(it);
-    // 수정 중인 항목은 입력 폼으로 대체 — 같은 자리에서 고치는 게 목록을 잃지 않는다
     if (it.mine && it.id === _editingCheck) {
-      return `<li class="vc-editing" data-id="${esc(it.id)}"><div class="vc-form">`
+      return `<div class="vr vc-editing" data-id="${esc(it.id)}"><div class="vc-form">`
         + `<input type="text" class="vc-ed-text" maxlength="200" value="${esc(it.text || '')}">`
         + `<select class="vc-ed-pri">`
         + ['high', 'mid', 'low'].map((v) => `<option value="${v}"${it.pri === v ? ' selected' : ''}>${PRI_LABEL[v]}</option>`).join('')
         + `</select>`
         + `<button type="button" class="vc-in-btn vc-ed-save">저장</button>`
         + `<button type="button" class="vc-ed-cancel">취소</button>`
-        + `</div><input type="text" class="vc-in-why vc-ed-why" maxlength="200" placeholder="근거·메모 (선택)" value="${esc(it.why || '')}"></li>`;
+        + `</div><input type="text" class="vc-in-why vc-ed-why" maxlength="200" placeholder="근거·메모 (선택)" value="${esc(it.why || '')}"></div>`;
     }
     const on = checked.has(k);
-    return `<li class="vc-${esc(it.pri)}${on ? ' vc-done' : ''}" data-key="${esc(k)}">`
-      + `<input type="checkbox" id="vc-${esc(k)}"${on ? ' checked' : ''}><label for="vc-${esc(k)}">`
-      + `<span class="vc-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
-      + `<span class="vc-cat">${esc(it.cat || '')}</span>`
-      + `<span class="vc-txt">${esc(it.text)}</span>`
+    const src = it.src || '기타';
+    const memo = memos[k] || '';
+    return `<div class="vr${on ? ' vc-done' : ''}" data-key="${esc(k)}">`
+      + `<input type="checkbox" class="vr-ck" id="vc-${esc(k)}"${on ? ' checked' : ''} aria-label="확인 완료">`
+      + `<span class="vr-src vr-src-${SRC_CLS[src] || 'etc'}">${esc(src)}</span>`
+      + `<span class="vr-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
+      + `<span class="vr-cat">${esc(it.cat || '기타')}</span>`
+      + `<div class="vr-body"><label for="vc-${esc(k)}">${esc(it.text)}</label>`
       + (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '')
       + (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '')
-      + `</label>`
-      // 추가일자·수정·삭제는 label 격자 밖(행 맨 오른쪽)에 둔다.
-      // 격자 안에 넣었더니 4번째 항목이 되어 40px 첫 칸으로 밀리며 세로로 쪼개졌다.
-      + (it.mine ? `<span class="vc-own" title="직접 추가한 항목">${esc(it.at || '')}</span>` : '')
-      + (it.mine ? `<button type="button" class="vc-edit" data-id="${esc(it.id)}" title="이 항목 수정" aria-label="수정">✎</button>` : '')
-      + (it.mine ? `<button type="button" class="vc-del" data-id="${esc(it.id)}" title="이 항목 삭제" aria-label="삭제">✕</button>` : '')
-      + `</li>`;
+      + `<div class="vr-memo"><input type="text" class="vr-memo-in" data-key="${esc(k)}" maxlength="300"`
+      + ` placeholder="메모 — 물어볼 말이나 현장에서 들은 답을 적으세요" value="${esc(memo)}"></div>`
+      + `</div>`
+      + `<span class="vr-own">${it.mine ? esc(it.at || '') : ''}</span>`
+      + (it.mine ? `<button type="button" class="vc-edit" data-id="${esc(it.id)}" title="이 항목 수정" aria-label="수정">✎</button>` : '<span></span>')
+      + (it.mine ? `<button type="button" class="vc-del" data-id="${esc(it.id)}" title="이 항목 삭제" aria-label="삭제">✕</button>` : '<span></span>')
+      + `</div>`;
   };
 
   if (items.length) {
-    // 비슷한 분류끼리 묶어 그룹별로 낸다 — 같은 성격의 확인 항목이 흩어지지 않게
-    groupChecklist(items).forEach((g) => {
-      html += `<div class="vc-gh">${esc(g.name)}<span>${g.items.length}</span></div>`
-        + `<ul class="vc-list">${g.items.map(rowHtml).join('')}</ul>`;
-    });
+    // 출처 → 중요도 순. 기준정보(공공 API 대조)가 웹 자료보다 근거가 단단해 먼저 본다.
+    const SRC_ORDER = { 기준정보: 0, 웹기반: 1, 기타: 2 };
+    const sorted = [...items].sort((x, y) =>
+      (SRC_ORDER[x.src || '기타'] ?? 9) - (SRC_ORDER[y.src || '기타'] ?? 9)
+      || (PRI_ORDER[x.pri] ?? 9) - (PRI_ORDER[y.pri] ?? 9)
+      || String(x.cat || '').localeCompare(String(y.cat || '')));
+    html += `<div class="vc-tbl">`
+      + `<div class="vr vr-head"><span></span><span>출처</span><span>중요도</span><span>분류</span>`
+      + `<span>확인 내용 · 메모</span><span></span><span></span><span></span></div>`
+      + sorted.map(rowHtml).join('')
+      + `</div>`;
   } else {
     html += '<div class="vc-empty">자동 도출된 항목이 없습니다 — 자료를 보다가 확인할 것이 생기면 아래에서 추가하세요.</div>';
   }
@@ -3535,12 +3502,20 @@ function renderVisitChecklist(report) {
   box.innerHTML = html;
 
   // 체크 상태 저장 — 재렌더(홈페이지 분석 완료 등)에도 살아남게
-  box.querySelectorAll('.vc-list input[type=checkbox]').forEach((cb) => {
+  box.querySelectorAll('.vc-tbl .vr-ck').forEach((cb) => {
     cb.addEventListener('change', () => {
-      const li = cb.closest('li');
-      toggleChecked(vid, li.dataset.key, cb.checked);
-      li.classList.toggle('vc-done', cb.checked);
+      const row = cb.closest('.vr');
+      toggleChecked(vid, row.dataset.key, cb.checked);
+      row.classList.toggle('vc-done', cb.checked);
     });
+  });
+  // 메모 저장 — 입력하다 말고 다른 데를 눌러도 남아야 하므로 포커스가 빠질 때 저장한다.
+  // 목록을 다시 그리지는 않는다(입력 도중 커서가 튀면 쓰던 문장을 잃는다).
+  box.querySelectorAll('.vr-memo-in').forEach((inp) => {
+    const save = () => setMemo(vid, inp.dataset.key, inp.value);
+    inp.addEventListener('change', save);
+    inp.addEventListener('blur', save);
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { save(); inp.blur(); } });
   });
   // 직접 추가 항목 삭제
   box.querySelectorAll('.vc-del').forEach((b) => {
@@ -3580,6 +3555,7 @@ function renderVisitChecklist(report) {
     if (!text) { t.focus(); return; }
     addCustomCheck(vid, {
       text,
+      src: '기타', cat: '직접추가',
       pri: box.querySelector('.vc-in-pri').value,
       why: (box.querySelector('.vc-in-why').value || '').trim(),
     });
@@ -3681,9 +3657,6 @@ function render(report, opts = {}) {
   // 방문 거리만 칩으로 옮기고 타일 줄은 걷어 냈다.
   root.appendChild(renderVerdict(report));
 
-  const mustCheck = renderMustCheck(report);
-  if (mustCheck) root.appendChild(mustCheck);
-
   // 조회 메타는 판단에 쓰이지 않으니 아래로 내리고 한 줄로 줄인다
   const qDate = new Date(m.query_at).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
   root.appendChild(el('div', 'metaline',
@@ -3752,9 +3725,8 @@ function render(report, opts = {}) {
       '실데이터는 우측 상단 <b>🔌 실데이터 연결</b>에 <b>프록시 주소</b>(/api/proxy)를 넣으면 됩니다.'));
   }
 
-  // 체크 필요사항 — ① 기준정보(공식 API 대조) ② 웹(뉴스·웹문서). 근거 패널 2개로 통합.
-  const chkO = renderCheckOfficial(report);
-  if (chkO) root.appendChild(chkO);
+  // 확인사항은 위 '방문 전 확인필요' 표 하나로 모았다. 여기 남는 것은 그 근거 —
+  // 기사 타임라인·웹 언급처럼 '읽어 볼 원문'이지 체크할 항목이 아니다.
   if (!excl.has('news')) { const chkW = renderCheckWeb(report); if (chkW) root.appendChild(chkW); }
 
   const blocks = el('div', 'blocks');
