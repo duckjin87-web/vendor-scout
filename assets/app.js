@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 136;
+const BUILD = 137;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -163,9 +163,9 @@ const PARAM_MAP = {
   maker:     { name: 'bssh_nm', rows: 'numOfRows' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
   factory:   { name: 'cmpnyNm', rows: 'numOfRows' }, // 산단공 공장등록 — 회사명 검색
-  factoryBass:  { name: 'cmpnyNm', rows: 'numOfRows' },
-  factoryLand:  { name: 'cmpnyNm', rows: 'numOfRows' },
-  factoryFclty: { name: 'cmpnyNm', rows: 'numOfRows' },
+  factoryBass:  { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
+  factoryLand:  { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
+  factoryFclty: { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
   recall:    { rows: 'numOfRows', page: 'pageNo' }, // 화장품 회수·판매중지 — 목록형, 프론트에서 업체명 필터
 };
 
@@ -2512,20 +2512,48 @@ async function recallLookup() {
 // 주요생산품·종업원수까지만 얻고 건축면적은 통째로 놓쳤다(마움코스메틱 조회에서 면적 D등급).
 // 나머지 오퍼레이션을 함께 불러 면적이 실린 쪽을 쓴다. 어느 오퍼레이션이 답했는지도 남겨
 // 둔다 — 산단공이 오퍼레이션 이름을 바꾸면 그 사실이 바로 드러나야 한다.
+// 실제 응답을 받아 보니 생산정보에는 면적이 없는 게 확실해졌다. 응답 항목은 이게 전부다.
+//   fctryManageNo · cmpnyNm · rnAdres · rprsntvNm · cvplChrgOrgnztNm · cmpnyTelno ·
+//   cmpnyFxnum · allEmplyCo · frstFctryRegistDe · rprsntvIndutyCode · indutyCodes ·
+//   indutyNm · mainProductCn · hmpadr · irsttNm
+// 그리고 상호(cmpnyNm)로 부른 상세 오퍼레이션 셋이 모두 HTTP 400을 냈다. 400은 '그런
+// 오퍼레이션이 없다'가 아니라 '요청이 잘못됐다'는 뜻이다 — 공장 상세는 상호가 아니라
+// 공장관리번호(fctryManageNo)로 찾는 게 자연스럽고, 그 번호는 생산정보 응답에 들어 있다.
+// 그래서 관리번호를 먼저 얻은 뒤 그것을 키로 상세를 부른다. 키가 문제가 아닐 수도 있으므로
+// 상호로도 한 번 더 시도하고, 실패하면 상류가 보낸 오류 본문을 그대로 남긴다.
 const FACTORY_OPS = ['factoryLand', 'factoryFclty', 'factoryBass'];
-async function factoryDetail(nm) {
-  const got = await mapLimit(FACTORY_OPS, 3, async (op) => {
+async function factoryDetail(nm, manageNo) {
+  const attempts = [];
+  FACTORY_OPS.forEach((op) => {
+    if (manageNo) attempts.push({ op, key: 'fctryManageNo', params: { manageNo: String(manageNo) } });
+    attempts.push({ op, key: 'cmpnyNm', params: { name: nm } });
+  });
+  const got = await mapLimit(attempts, 3, async (a2) => {
     try {
-      const d = await proxyGet(op, { name: nm, rows: '50' });
+      const d = await proxyGet(a2.op, { ...a2.params, rows: '50' });
       for (const path of ['response.body.items.item', 'body.items.item', 'body.items', 'items']) {
         let cur = d, ok = true;
         for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
-        if (ok && cur != null) return { op, items: Array.isArray(cur) ? cur : [cur].filter(Boolean) };
+        if (ok && cur != null) return { op: a2.op, key: a2.key, items: Array.isArray(cur) ? cur : [cur].filter(Boolean) };
       }
-      return { op, items: [] };
-    } catch (e) { return { op, err: (e && e.message) || String(e), items: [] }; }
+      return { op: a2.op, key: a2.key, items: [] };
+    } catch (e) { return { op: a2.op, key: a2.key, err: (e && e.message) || String(e), items: [] }; }
   });
   return got.filter(Boolean);
+}
+
+// 생산정보를 먼저 받아 공장관리번호를 얻고, 그것으로 상세(면적)를 조회한다.
+async function factoryWithDetail(nm) {
+  const prod = await proxyGet('factory', { name: nm, rows: '30' });
+  let items = [];
+  for (const path of ['response.body.items.item', 'body.items.item', 'body.items', 'items']) {
+    let cur = prod, ok = true;
+    for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
+    if (ok && cur != null) { items = Array.isArray(cur) ? cur : [cur].filter(Boolean); break; }
+  }
+  const mn = (items.find((x) => x && x.fctryManageNo) || {}).fctryManageNo || null;
+  const detail = await factoryDetail(nm, mn).catch(() => []);
+  return { prod, detail, manageNo: mn };
 }
 
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
@@ -2537,9 +2565,9 @@ async function finishLive(name, corp) {
     nps: npsLookup(nm, corp.bzno),
     maker: makerLookup(nm),
     gmp: proxyGet('gmp', { rows: '500' }),
-    factory: proxyGet('factory', { name: nm, rows: '30' }),
+    // 공장 상세(면적)는 생산정보가 주는 공장관리번호를 키로 써야 해서 순서를 지킨다
+    factory: factoryWithDetail(nm),
     recall: recallLookup(),
-    factoryDetail: factoryDetail(nm),
     nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
     naverNews: proxyOnlyGet('naverNews', { query: nm, display: '30', sort: 'date' }),
     // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
