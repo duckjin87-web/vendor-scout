@@ -814,7 +814,14 @@ function assembleLiveReport(name, corp, res) {
   }) : [];
 
   // 식약처 화장품 회수·판매중지 — 목록에서 업체명 일치 건. 응답 필드명 확정 전이라 값 스캔으로 견고하게 추출.
-  const recallListAll = R.recall && R.recall.ok ? listOf(R.recall.data, ['response.body.items.item', 'body.items', 'items']) : [];
+  // recallLookup()이 페이지를 합쳐 { items, total, scanned }로 준다. 옛 모양(원본 응답)도
+  // 받아 넘길 수 있게 둘 다 읽는다.
+  const recallRaw = (R.recall && R.recall.ok) ? R.recall.data : null;
+  const recallListAll = recallRaw
+    ? (Array.isArray(recallRaw.items) ? recallRaw.items
+      : listOf(recallRaw, ['response.body.items.item', 'body.items', 'items']))
+    : [];
+  const recallTotal = recallRaw && isFinite(Number(recallRaw.total)) ? Number(recallRaw.total) : null;
   const recallKey = stripCorp(name).replace(/\s/g, '');
   const recallHits = recallKey.length >= 2 ? recallListAll.filter((rec) =>
     Object.values(rec).some((v) => stripCorp(String(v == null ? '' : v)).replace(/\s/g, '').includes(recallKey))) : [];
@@ -898,7 +905,7 @@ function assembleLiveReport(name, corp, res) {
   // (재무 조립보다 앞에 둔다 — 아래에서 외부사이트 재무를 붙일 때 필요하다)
   const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
   const hiring = hireRaw && typeof analyzeHiring === 'function'
-    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile)
+    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints)
     : null;
 
   const flAll = R.finance && R.finance.ok ? listOf(R.finance.data, ['response.body.items.item', 'body.items']) : [];
@@ -1153,7 +1160,12 @@ function assembleLiveReport(name, corp, res) {
       : stat('news', 'naverNews', '네이버 뉴스검색', null, '기사 없음 또는 프록시 미설정'),
     // 회수·판매중지: 조회 성공 시 이력 유무 표시(이력 있으면 warn=위험 신호), 실패 시 연결오류
     (R.recall && R.recall.ok)
-      ? { key: 'recall', name: '식약처 회수·판매중지', ok: true, warn: recalls.length > 0, detail: recalls.length ? `⚠ 회수·판매중지 이력 ${recalls.length}건` : `이력 없음 (전체 ${recallListAll.length}건 조회)` }
+      ? { key: 'recall', name: '식약처 회수·판매중지', ok: true, warn: recalls.length > 0,
+          detail: recalls.length ? `⚠ 회수·판매중지 이력 ${recalls.length}건`
+            // '없음'과 '못 봤음'은 다르다. 전체 몇 건 중 몇 건을 훑었는지 밝힌다.
+            : `조회 범위 내 이력 없음 (${recallTotal != null && recallTotal > recallListAll.length
+                ? `전체 ${recallTotal}건 중 ${recallListAll.length}건 확인 — 나머지는 미조회`
+                : `전체 ${recallListAll.length}건 확인`})` }
       : stat('recall', 'recall', '식약처 회수·판매중지', null, '회수정보 조회 실패'),
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
     R.hiring ? (hiring && hiring.ok

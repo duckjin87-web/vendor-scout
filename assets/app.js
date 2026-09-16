@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 130;
+const BUILD = 131;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -163,7 +163,7 @@ const PARAM_MAP = {
   maker:     { name: 'bssh_nm', rows: 'numOfRows' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
   factory:   { name: 'cmpnyNm', rows: 'numOfRows' }, // 산단공 공장등록 — 회사명 검색
-  recall:    { rows: 'numOfRows' }, // 화장품 회수·판매중지 — 목록형, 프론트에서 업체명 필터
+  recall:    { rows: 'numOfRows', page: 'pageNo' }, // 화장품 회수·판매중지 — 목록형, 프론트에서 업체명 필터
 };
 
 // data.go 공통 에러 메시지 → 사용자 조치 안내
@@ -1059,16 +1059,14 @@ function domainAffinity(korName, host) {
   return n >= 3 && n >= Math.min(a.length, b.length) * 0.5;
 }
 
-async function findHomepage(nm, corp) {
+async function findHomepage(nm, corp, hpHints) {
   if (!getProxy()) return null;
   // 공장등록부에 홈페이지가 있으면 그게 공식 확정 — 웹검색보다 신뢰
+  // 공장등록부에 적힌 주소는 유력한 후보지만 그대로 확정하면 안 된다. 신고 당시 주소라
+  //   도메인이 팔려 엉뚱한 사이트가 되어 있거나, 그룹사 대표 사이트가 적혀 있기도 한다.
+  //   실제로 '일치 여부' 칸이 비어 있던 건 이 경로가 대조를 통째로 건너뛰었기 때문이다.
+  //   후보 목록의 맨 앞에 넣어 다른 후보와 똑같이 페이지를 열어 대조한다.
   const fctHp = corp && corp.factoryHomepage ? String(corp.factoryHomepage).trim() : '';
-  if (fctHp && /^https?:\/\//i.test(fctHp)) {
-    let host = fctHp; try { host = new URL(fctHp).hostname.replace(/^www\./, ''); } catch {}
-    const proposed = { url: fctHp, host, matches: ['공장등록부 등재'], score: 3 };
-    try { proposed.extract = await extractSiteInfo(fctHp, null); } catch { /* 추출 실패 무시 */ }
-    return { proposed, candidates: [] };
-  }
   const seen = new Set(); const cands = [];
   const skipped = {};                       // 어떤 유형이 몇 건 걸러졌는지 — 못 찾은 이유 설명용
   const addCand = (link, title, via) => {
@@ -1081,6 +1079,12 @@ async function findHomepage(nm, corp) {
     // url은 후보 '시작점'일 뿐 — fetchPageSmart가 https/http·www 변형을 시도해 실제 열리는 주소를 찾는다.
     cands.push({ url: `https://${host}`, host, origLink: link, title: String(title || '').replace(/<\/?b>/g, ''), via });
   };
+
+  // ⓪ 공장등록부에 적힌 주소 — 가장 유력한 출발점이라 맨 앞에 둔다(대조는 똑같이 받는다)
+  if (fctHp && /^https?:\/\//i.test(fctHp)) addCand(fctHp, '', 'factory');
+  // ⓪-2 채용사이트 기업정보에 적힌 홈페이지 — 사람인·잡코리아는 기업이 직접 등록한 주소다.
+  //   네이버 웹문서가 못 잡는 소규모 사이트(아임웹·모두·카페24 등)가 여기서 자주 나온다.
+  (hpHints || []).forEach((u) => addCand(u, '', 'hire'));
 
   // ① 네이버 지역검색 — 사업자 등록정보 기반이라 link가 곧 그 업체의 홈페이지다.
   //    웹문서 검색보다 정확한데 지금까지 쓰지 않고 있었다(프록시에는 이미 열려 있었다).
@@ -1123,7 +1127,7 @@ async function findHomepage(nm, corp) {
 
   // 근거별 가중치 — 사업자번호가 가장 확실하고, 도메인·제목은 페이지 본문을 못 읽어도 얻을 수 있는 단서.
   // 지역등록: 네이버 지역검색은 사업자 등록정보 기반이라 사업자번호에 준하는 근거로 본다.
-  const W = { 사업자번호: 4, 지역등록: 4, 상호: 3, 대표자: 3, 주소: 2, 도메인: 2, 제목: 2, 업종: 1 };
+  const W = { 사업자번호: 4, 지역등록: 4, 공장등록부: 3, 채용사이트: 3, 상호: 3, 대표자: 3, 주소: 2, 도메인: 2, 제목: 2, 업종: 1 };
   const scored = await Promise.all(cands.map(async (c) => {
     // https/http · www 변형을 시도(국내 중소사 홈페이지는 http·www 전용이 흔함)
     let got = await fetchPageSmart(c.url);
@@ -1145,7 +1149,9 @@ async function findHomepage(nm, corp) {
     // 페이지를 못 읽어도 판단할 수 있는 단서 두 가지
     if (nameCore && title.includes(nameCore)) m.push('제목');
     if (domainAffinity(nm, c.host)) m.push('도메인');
-    if (c.via === 'local') m.push('지역등록');   // 네이버 지역검색이 이 업체 홈페이지로 등록한 주소
+    if (c.via === 'local') m.push('지역등록');     // 네이버 지역검색이 이 업체 홈페이지로 등록한 주소
+    if (c.via === 'factory') m.push('공장등록부');  // 공장등록 신고서에 적힌 주소
+    if (c.via === 'hire') m.push('채용사이트');     // 기업이 채용사이트에 등록한 주소
     // 화장품 제조 문맥 — 동명 타업종 사이트를 걸러내는 보조 신호
     if (/화장품|코스메틱|cosmetic|OEM|ODM|제조/i.test(text) || /화장품|코스메틱|cosmetic/i.test(title)) m.push('업종');
     const score = m.reduce((s, k) => s + (W[k] || 1), 0);
@@ -1781,6 +1787,21 @@ function cleanProfileValue(v, atEnd) {
   if (atEnd) s = s.replace(/\s[가-힣]$/, '');
   return s.trim();
 }
+// 채용사이트 기업정보에 기업이 직접 등록한 홈페이지 주소.
+// 프로필 항목에서는 뺐지만(공시로 알 수 있는 값이라) 홈페이지 추적에는 이만한 단서가 없다.
+// 네이버 웹문서가 못 잡는 소규모 사이트(아임웹·모두·카페24)가 여기서 자주 나온다.
+const HP_HINT_RE = /(?:홈페이지|회사\s*홈페이지|웹사이트|사이트\s*주소|home\s*page)\s*:?\s*((?:https?:\/\/)?[a-z0-9][a-z0-9.-]{3,60}\.[a-z]{2,10}(?:\/[^\s"'<>]{0,40})?)/i;
+function extHomepageHint(text) {
+  const m = String(text || '').replace(/\s+/g, ' ').match(HP_HINT_RE);
+  if (!m) return null;
+  let u = m[1].replace(/[).,]+$/, '');
+  if (!/^https?:\/\//i.test(u)) u = `http://${u}`;
+  let host;
+  try { host = new URL(u).hostname.replace(/^www\./, ''); } catch { return null; }
+  // 채용사이트 자기 도메인이나 포털이 잡히면 홈페이지가 아니다
+  if (hpSkipReason(host)) return null;
+  return u;
+}
 function extProfile(text, host, link, kind) {
   const t = String(text || '').replace(/\s+/g, ' ');
   const out = [];
@@ -2130,12 +2151,15 @@ async function hiringTrace(nm) {
   const heads = [];
   const extFin = [];
   const extProf = [];
+  const hpHints = [];
   posts.forEach((p) => {
     const blob = `${p.title} ${p.desc}`;
     const hc = hireHeadcount(blob);
     if (hc) heads.push({ ...hc, host: p.host, link: p.link, from: 'snippet' });
     extFin.push(...extFinance(blob, p.host, p.link));
     extProf.push(...extProfile(blob, p.host, p.link, null));
+    const hh = extHomepageHint(blob);
+    if (hh) hpHints.push(hh);
   });
 
   // ④ 페이지를 직접 연다. 두 가지를 노린다.
@@ -2196,6 +2220,8 @@ async function hiringTrace(nm) {
     if (fin.length) { extFin.push(...fin); found.push(`재무 ${fin.length}`); }
     const prof = extProfile(txt, pg.host, pg.link, pg.kind === 'finance' ? 'company' : pg.kind);
     if (prof.length) { extProf.push(...prof); found.push(`정보 ${prof.length}`); }
+    const hh = extHomepageHint(txt);
+    if (hh) { hpHints.push(hh); found.push('홈페이지'); }
     // 페이지에서 찾은 날짜를 해당 공고에 돌려준다 — 스니펫에 없던 등록일이 여기 있다.
     // 단 기업정보 페이지는 공고가 아니다. 거기 있는 날짜는 설립일·사원수 기준일이라
     // 공고 시점으로 세면 안 된다(씨앤티드림: 설립 2011.09과 기준일 2017.04이 공고 날짜로
@@ -2226,12 +2252,13 @@ async function hiringTrace(nm) {
   const finRows = reconcileExtFin(extFin);
   // 사원수는 기준일이 있는 값을 우선한다(페이지 > 스니펫)
   heads.sort((a, b) => (b.asOf ? 1 : 0) - (a.asOf ? 1 : 0) || (b.from === 'page' ? 1 : 0) - (a.from === 'page' ? 1 : 0));
-  return { posts, heads, extFin: finRows, extProfile: reconcileProfile(extProf), extDiag };
+  return { posts, heads, extFin: finRows, extProfile: reconcileProfile(extProf),
+    hpHints: [...new Set(hpHints)], extDiag };
 }
 
 // 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
-function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile) {
-  if (!posts || !posts.length) return { ok: false, reason: '채용 사이트에서 이 업체 공고를 찾지 못했습니다', posts: [], heads: heads || [], extProfile: extProfile || [] };
+function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile, hpHints) {
+  if (!posts || !posts.length) return { ok: false, reason: '채용 사이트에서 이 업체 공고를 찾지 못했습니다', posts: [], heads: heads || [], extProfile: extProfile || [], hpHints: hpHints || [] };
   const now = new Date();
   const curY = now.getFullYear();
   const ym = (s) => (String(s).length >= 7 ? String(s) : `${s}-06`);          // 연도만 있으면 연중으로 근사
@@ -2348,11 +2375,48 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile) {
   }
 
   return {
-    ok: true, posts, heads: heads || [], extDiag: extDiag || null, extProfile: extProfile || [], byYear, byRole,
+    ok: true, posts, heads: heads || [], extDiag: extDiag || null, extProfile: extProfile || [],
+    hpHints: hpHints || [], byYear, byRole,
     dated: dated.length, undated: undated.length,
     recent, prior, spanYears, intensity, headTrend,
     signals: signals.sort((a, b) => (b.level === 'high' ? 1 : 0) - (a.level === 'high' ? 1 : 0)),
   };
+}
+
+// 회수·판매중지는 업체명으로 조회하는 파라미터가 없어 목록을 받아 프론트에서 거른다.
+// 그런데 지금까지 1페이지만 받았다(page 파라미터를 매핑조차 안 해 뒀다). 이 API는 전체를
+// 한 번에 주지 않으므로, 받은 범위 밖의 이력은 '없음'으로 보였다 — 어느 업체를 조회해도
+// 0건이던 이유다. totalCount를 보고 필요한 만큼 더 받고, 얼마나 훑었는지를 함께 남긴다.
+const RECALL_PAGE = 500;
+const RECALL_MAX_PAGES = 6;                   // 3,000건 상한 — 호출 시간과 맞바꾼 현실적 한계
+async function recallLookup() {
+  const first = await proxyGet('recall', { rows: String(RECALL_PAGE), page: '1' });
+  const pick = (d) => {
+    for (const path of ['response.body.items.item', 'body.items.item', 'body.items', 'items']) {
+      let cur = d, ok = true;
+      for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
+      if (ok && cur != null) return Array.isArray(cur) ? cur : [cur].filter(Boolean);
+    }
+    return [];
+  };
+  const totalOf = (d) => {
+    for (const path of ['response.body.totalCount', 'body.totalCount', 'totalCount']) {
+      let cur = d, ok = true;
+      for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
+      if (ok && cur != null && isFinite(Number(cur))) return Number(cur);
+    }
+    return null;
+  };
+  const items = pick(first);
+  const total = totalOf(first);
+  const pages = total != null ? Math.min(RECALL_MAX_PAGES, Math.ceil(total / RECALL_PAGE)) : 1;
+  if (pages > 1) {
+    const rest = await mapLimit(
+      Array.from({ length: pages - 1 }, (_, i) => i + 2), 3,
+      async (pg) => { try { return pick(await proxyGet('recall', { rows: String(RECALL_PAGE), page: String(pg) })); } catch { return []; } });
+    rest.forEach((arr) => items.push(...arr));
+  }
+  return { items, total, scanned: items.length, pages };
 }
 
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
@@ -2365,7 +2429,7 @@ async function finishLive(name, corp) {
     maker: makerLookup(nm),
     gmp: proxyGet('gmp', { rows: '500' }),
     factory: proxyGet('factory', { name: nm, rows: '30' }),
-    recall: proxyGet('recall', { rows: '500' }),
+    recall: recallLookup(),
     nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
     naverNews: proxyOnlyGet('naverNews', { query: nm, display: '30', sort: 'date' }),
     // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
@@ -3236,28 +3300,70 @@ function renderVerdict(report) {
       + (downs.length ? `<div class="vw down"><i>확인필요</i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
       + `</div>`;
   }
-  // 기본 현황 — 문서의 '기본 현황' 표를 칩으로
+  // ── 기본 현황 ──
+  // 값만 늘어놓으면 어느 칸을 봐야 하는지 알 수 없다. 방문 판단이 갈리는 지점만 색으로 세운다.
+  //   bad(빨강)  거래 전 반드시 해소해야 하는 것 — 미등록·휴폐업·회수이력·자본잠식
+  //   warn(주황) 확인하고 넘어가야 하는 것 — 영세 인력·높은 부채비율·먼 거리
+  //   good(초록) 가산점 — CGMP 같은 보유 자체가 강점인 것
+  // 나머지는 색을 쓰지 않는다. 다 칠하면 아무것도 강조되지 않는다.
   const revF = (report.finance || []).find((x) => x.key === '매출액' && x.value);
+  const revEok = revF ? Number(String(revF.value).replace(/[^0-9.-]/g, '')) : null;
   const recallN = Array.isArray(report.recalls) && report.recalls.length ? report.recalls.length : 0;
   const dist = cv('방문 이동거리');
+  const maker = bv('제조업 등록'), bstt = String(bv('사업자 상태') || ''), fct = bv('공장/제조소 소재지');
+  const cgmp = cv('CGMP 적합업소');
+  const empRaw = cv('재직자수 (국민연금 가입자)');
+  // '14명 · 2025.10 기준' 에서 숫자를 다 긁으면 기준일까지 붙어 14202510 이 된다.
+  // 맨 앞 숫자만 읽는다.
+  const empN = (() => {
+    const m = String(empRaw || '').match(/^\s*([\d,]+)/);
+    const n = m ? Number(m[1].replace(/,/g, '')) : NaN;
+    return isFinite(n) ? n : null;
+  })();
+  const fh = report.finance_health || null;
+
+  // 이동시간(분) — 1시간·2시간 경계로 색이 갈린다. 당일 왕복이 되는지가 여기서 갈린다.
+  const durMin = (() => {
+    const t = String(dist || '');
+    const h = Number((t.match(/(\d+)\s*시간/) || [])[1] || 0);
+    const m = Number((t.match(/(\d+)\s*분/) || [])[1] || 0);
+    return h || m ? h * 60 + m : null;
+  })();
+
   const chips = [
-    ['제조업 등록', bv('제조업 등록') ? '확인' : '미확인', bv('제조업 등록') ? 'ok' : 'na'],
-    ['사업자 상태', /계속/.test(String(bv('사업자 상태') || '')) ? '정상' : (bv('사업자 상태') || '미확인'), /계속/.test(String(bv('사업자 상태') || '')) ? 'ok' : 'na'],
-    ['공장등록', bv('공장/제조소 소재지') ? '확인' : '미확인', bv('공장/제조소 소재지') ? 'ok' : 'na'],
-    ['CGMP', cv('CGMP 적합업소') ? '적합' : '미등재', cv('CGMP 적합업소') ? 'ok' : 'na'],
-    ['직원수', String(cv('재직자수 (국민연금 가입자)') || '미확인').replace(/\s*·.*$/, ''), cv('재직자수 (국민연금 가입자)') ? 'num' : 'na'],
+    ['제조업 등록', maker ? '확인' : '미확인', maker ? 'ok' : 'bad'],
+    ['사업자 상태', /계속/.test(bstt) ? '정상' : (bstt || '미확인'), /계속/.test(bstt) ? 'ok' : 'bad'],
+    ['공장등록', fct ? '확인' : '미확인', fct ? 'ok' : 'warn'],
+    // CGMP는 없다고 결격은 아니지만 있으면 확실한 강점이라, 보유했을 때만 색을 준다.
+    ['CGMP', cgmp ? '적합' : '미등재', cgmp ? 'good' : 'na'],
+    // 5명 이하면 생산 물량·교대 운영을 감당할 수 있는지부터 확인해야 한다.
+    ['직원수', empRaw ? String(empRaw).replace(/\s*·.*$/, '') : '미확인',
+      empN == null ? 'na' : (empN <= 5 ? 'warn' : 'num')],
     ['설립', String(bv('설립일 / 등록일') || '').slice(0, 4) || '미확인', bv('설립일 / 등록일') ? 'num' : 'na'],
-    ['매출', revF ? revF.value + (revF.grade === 'C' ? '*' : '') : '미확인', revF ? 'num' : 'na'],
-    // 회수·판매중지와 방문 거리는 아래 타일에 따로 있었는데, 나머지 타일이 이 칩들과
-    // 같은 내용이라 타일 줄을 통째로 걷어 냈다. 겹치지 않는 이 둘만 여기로 옮긴다.
-    ['회수·판매중지', recallN ? `${recallN}건` : '없음', recallN ? 'bad' : 'ok'],
+    ['매출', revF ? revF.value + (revF.grade === 'C' ? '*' : '') : '미확인',
+      revEok == null || !isFinite(revEok) ? 'na' : (revEok <= 0 ? 'bad' : 'num')],
+    // 부채비율 — 자본잠식이면 비율 자체가 성립하지 않는다. 숫자 대신 상태를 적는다.
+    ...(fh ? [['부채비율',
+      fh.equity != null && fh.equity <= 0 ? '자본잠식'
+        : (fh.debtRatio != null ? `${fh.debtRatio}%` : '산출불가'),
+      fh.equity != null && fh.equity <= 0 ? 'bad'
+        : fh.debtRatio == null ? 'na'
+        : fh.debtRatio >= 400 ? 'bad' : fh.debtRatio >= 200 ? 'warn' : 'num',
+      fh.year ? `${fh.year}년 기준` : '']] : []),
+    ['회수·판매중지', recallN ? `${recallN}건` : '없음', recallN ? 'bad' : 'ok', '',
+      recallN ? '#vcRecall' : null],
     // 거리와 소요시간을 둘 다 보여주되 칸을 넘지 않게 두 줄로 나눈다.
-    // '차량 3시간 20분'을 그대로 쓰면 좁은 화면에서 칸 밖으로 삐져나가, 시간은 3h20m으로 줄인다.
-    ['방문 거리', dist ? distMain(dist) : '미확인', dist ? 'num' : 'na', dist ? distSub(dist) : ''],
+    ['방문 거리', dist ? distMain(dist) : '미확인',
+      durMin == null ? 'na' : (durMin > 120 ? 'bad' : durMin > 60 ? 'warn' : 'num'),
+      dist ? distSub(dist) : ''],
   ];
-  html += `<div class="vd-chips">` + chips.map(([k, val, t, sub]) =>
-    `<div class="vch vch-${t}"><i>${esc(k)}</i>`
-    + `<b>${esc(val)}${sub ? `<small>${esc(sub)}</small>` : ''}</b></div>`).join('') + `</div>`;
+  html += `<div class="vd-chips">` + chips.map(([k, val, t, sub, href]) => {
+    const inner = `<i>${esc(k)}</i><b>${esc(val)}${sub ? `<small>${esc(sub)}</small>` : ''}</b>`;
+    // 회수 이력은 건수만 보여주고 끝내면 안 된다 — 무슨 일이 있었는지로 바로 갈 수 있어야 한다.
+    return href
+      ? `<a class="vch vch-${t} vch-link" href="${esc(href)}">${inner}</a>`
+      : `<div class="vch vch-${t}">${inner}</div>`;
+  }).join('') + `</div>`;
   html += `<div class="vd-foot">종합판정은 <b>업체를 방문할 만한지</b>에 대한 검토 결과이고, `
     + `항목마다 붙는 A·B·C·D는 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>를 나타냅니다 — 서로 다른 이야기입니다.`
     + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')
@@ -3446,6 +3552,7 @@ function renderVisitChecklist(report) {
   // 같은 건이 흩어져 있어 한 항목을 세 군데서 다시 읽어야 했다. 한 표로 합치고,
   // 어디서 나온 이야기인지(출처)를 첫 칸에 세워 신뢰도를 바로 가늠하게 한다.
   const SRC_CLS = { 기준정보: 'off', 웹기반: 'web', 기타: 'etc' };
+  const seenRecallAnchor = { used: false };
   const rowHtml = (it) => {
     const k = checkKeyOf(it);
     if (it.mine && it.id === _editingCheck) {
@@ -3461,7 +3568,10 @@ function renderVisitChecklist(report) {
     const on = checked.has(k);
     const src = it.src || '기타';
     const memo = memos[k] || '';
-    return `<div class="vr${on ? ' vc-done' : ''}" data-key="${esc(k)}">`
+    // 첫 회수 항목에 앵커를 둔다 — 위 대시보드의 '회수·판매중지 N건'이 여기로 온다
+    const isRecall = /회수·판매중지/.test(it.text || '');
+    const anchor = isRecall && !seenRecallAnchor.used ? ((seenRecallAnchor.used = true), ' id="vcRecall"') : '';
+    return `<div class="vr${on ? ' vc-done' : ''}${isRecall ? ' vr-recall' : ''}" data-key="${esc(k)}"${anchor}>`
       + `<input type="checkbox" class="vr-ck" id="vc-${esc(k)}"${on ? ' checked' : ''} aria-label="확인 완료">`
       + `<span class="vr-src vr-src-${SRC_CLS[src] || 'etc'}">${esc(src)}</span>`
       + `<span class="vr-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
@@ -3844,7 +3954,11 @@ function render(report, opts = {}) {
     } else {
       hpBox.innerHTML = '<h4>홈페이지 추적 <span>검색 중…</span></h4>';
       const getV = (k) => { const f = report.basic.find((x) => x.key === k); return f && f.value; };
-      findHomepage(report.meta.vendor_name, { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호'), factoryHomepage: report.meta.factory_homepage })
+      // 채용사이트 기업정보에서 뽑아 둔 홈페이지 주소를 후보로 함께 넘긴다
+      const hints = (report.hiring && report.hiring.hpHints) || [];
+      findHomepage(report.meta.vendor_name,
+        { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호'), factoryHomepage: report.meta.factory_homepage },
+        hints)
         .then((hp) => { report._homepage = hp || null; renderHomepageInto(hpBox, report._homepage); saveLastReport(report); })
         .catch(() => { report._homepage = null; renderHomepageInto(hpBox, null); saveLastReport(report); });
     }

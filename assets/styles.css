@@ -1122,3 +1122,24 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .vc-tbl { border-radius: 3px; }
 /* 출처·중요도 라벨 — 채운 색을 옅게 낮추고 글자로 읽히게 */
 .vr-src, .vr-pri, .vr-cat { font-weight: 600; letter-spacing: .01em; }
+
+/* ── 대시보드 강조 ──
+   방문 판단이 갈리는 칸만 색으로 세운다. 다 칠하면 아무것도 강조되지 않는다. */
+.vch-good b { color: var(--gA); }
+.vch-warn b { color: var(--gC); }
+.vch-bad  b { color: var(--risk); }
+.vch-good, .vch-warn, .vch-bad { position: relative; }
+/* 색약 대비 — 색만으로 구분하지 않도록 왼쪽에 얇은 표시를 함께 둔다 */
+.vch-warn::before, .vch-bad::before {
+  content: ''; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px;
+}
+.vch:first-child.vch-warn::before, .vch:first-child.vch-bad::before { left: -2px; }
+.vch-warn::before { background: var(--gC); }
+.vch-bad::before  { background: var(--risk); }
+/* 회수 이력은 건수만 보고 끝낼 수 없다 — 눌러서 무슨 일이 있었는지로 간다 */
+a.vch-link { text-decoration: none; color: inherit; cursor: pointer; }
+a.vch-link b { text-decoration: underline; text-underline-offset: 2px; }
+a.vch-link:hover b { text-decoration-thickness: 2px; }
+/* 링크가 가리키는 행 — 도착했을 때 어느 줄인지 보이게 */
+.vr-recall:target, .vr-recall:target ~ .vr { scroll-margin-top: 80px; }
+.vr-recall:target { background: var(--risk-bg); box-shadow: inset 2px 0 0 var(--risk); }
