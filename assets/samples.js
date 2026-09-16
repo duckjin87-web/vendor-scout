@@ -55,7 +55,7 @@ function assessFinance(hist) {
 // 교차검증 자동진단 — 서로 다른 출처의 같은 항목(인력·주소)을 대조해 정합/불일치를 자동 판정.
 // status: match(일치) / warn(불일치·주의) / na(대조 불가). level: ok / mid / high / na.
 function crossVerify(ctx) {
-  const { empNps, empFct, addrHq, addrNps, addrFct } = ctx;
+  const { empNps, empFct, addrHq, addrNps, addrFct, addrWork, repHq, repPublic, repPublicLink } = ctx;
   const items = [];
   // 주소 정규화 — 행정구역 접미/괄호/공백 제거 후 앞부분만 비교(번지·상세주소 차이 무시)
   const normA = (s) => String(s || '').replace(/특별자치시|특별자치도|특별시|광역시/g, '').replace(/\s|[()]/g, '');
@@ -79,13 +79,29 @@ function crossVerify(ctx) {
   }
 
   // 2) 주소 정합성 — 본점(등기) ↔ 연금 사업장(실근무) ↔ 공장 소재지(실생산)
-  const addrs = [['본점(등기)', addrHq], ['연금 사업장', addrNps], ['공장 소재지', addrFct]].filter(([, v]) => v);
+  // 채용공고의 근무지주소는 '사람이 실제로 출근하는 곳'이라 등기·신고 주소와 성격이 다르다.
+  // 네 번째 출처로 함께 대조한다 — 공고는 회사가 직접 올린 것이라 최신인 경우가 많다.
+  const addrs = [['본점(등기)', addrHq], ['연금 사업장', addrNps], ['공장 소재지', addrFct],
+    ['채용공고 근무지', addrWork]].filter(([, v]) => v);
   if (addrs.length >= 2) {
     const uniq = [...new Set(addrs.map(([, v]) => shortA(v)))];
     if (uniq.length === 1) items.push({ label: '주소 정합성', status: 'match', detail: `${addrs.map(([l]) => l).join(' · ')} 동일 권역 — 등기·근무·생산지 일치` });
     else items.push({ label: '주소 정합성', status: 'warn', detail: `${addrs.map(([l, v]) => `${l} ${v}`).join(' / ')} — 소재지 상이. 실제 생산현장(공장/연금 사업장) 기준으로 방문` });
   } else {
     items.push({ label: '주소 정합성', status: 'na', detail: '대조할 주소 2건 미만 (일부 출처 미확보)' });
+  }
+
+  // 3) 대표자 정합성 — 등기 대표자 ↔ 지자체 공장정보 게재 대표자
+  // 다르면 명의변경·각자대표·자료 노후 중 하나인데, 어느 쪽이든 실체 확인에서 먼저 짚어야 한다.
+  if (repHq && repPublic) {
+    const same = String(repHq).replace(/\s/g, '') === String(repPublic).replace(/\s/g, '');
+    items.push(same
+      ? { label: '대표자 정합성', status: 'match', detail: `등기·지자체 공장정보 모두 ${repHq} — 일치` }
+      : { label: '대표자 정합성', status: 'warn', severe: false,
+          detail: `등기(금융위) ${repHq} ↔ 지자체 공장정보 ${repPublic} — 대표자 표기 상이. `
+            + '명의변경 후 공장등록 미갱신, 각자대표, 또는 동명 타법인일 수 있습니다. '
+            + '방문 시 사업자등록증·법인등기부로 현재 대표자를 확인하세요.'
+            + (repPublicLink ? ` (근거: ${repPublicLink})` : '') });
   }
 
   const warnCount = items.filter((x) => x.status === 'warn').length;
@@ -576,6 +592,28 @@ function listOf(data, paths) {
   return [];
 }
 
+// ── 지자체 공장정보 페이지 발췌 ──
+// 웹 언급으로 걸린 지자체 공장정보(bizok.incheon.go.kr 등)에는 대표자·연락처·종업원수가
+// 그대로 실려 있는데, 여태 제목·링크만 쓰고 본문은 버렸다. 이 셋은 공짜로 얻는 대조 자료다.
+//   대표자 — 금융위 등기 대표자와 다르면 명의변경·각자대표·자료 노후 중 하나. 실체 확인의 단서.
+//   연락처 — 방문 약속을 잡을 유일한 공개 번호.
+//   종업원 — 연금·공장등록과 함께 3중 대조.
+function publicBizFacts(oemTrace) {
+  const out = { rep: null, tel: null, fctryTel: null, empl: null, link: null };
+  (oemTrace || []).forEach((o) => {
+    const t = `${o.title || ''} ${o.desc || ''}`.replace(/\s+/g, ' ');
+    if (!/대표자|연락처|공장전화/.test(t)) return;
+    const pick = (re) => { const m = t.match(re); return m ? m[1].trim() : null; };
+    out.rep = out.rep || pick(/대표자\s*[:：]\s*([가-힣]{2,5})(?![가-힣])/);
+    out.tel = out.tel || pick(/연락처\s*[:：]\s*(0\d{1,2}-\d{3,4}-\d{4})/);
+    out.fctryTel = out.fctryTel || pick(/공장전화번호\s*[:：]\s*(0\d{1,2}-\d{3,4}-\d{4})/);
+    const e = pick(/종업원\s*수?\s*[:：]\s*([\d,]{1,6})\s*명/);
+    if (e && out.empl == null) out.empl = Number(e.replace(/,/g, ''));
+    if ((out.rep || out.tel || out.empl != null) && !out.link) out.link = o.link || null;
+  });
+  return out;
+}
+
 // ── 공장 면적 ──
 // 산단공 공장등록 레코드에는 면적 항목이 들어 있는데 여태 읽지도 않고 버렸다. 건평을 알면
 // 방문 전에 물류 동선을 가늠할 수 있다 — 5톤차가 들어갈 자리가 있는지, 자재를 쌓아 둘 데가
@@ -682,7 +720,17 @@ function assembleLiveReport(name, corp, res) {
   // 홈페이지는 여러 공장 레코드 중 등재된 것을 채택(첫 매칭에 없을 수 있음)
   const fctHmpadr = (fctList.find((it) => /^https?:\/\//i.test(String(it.hmpadr || ''))) || {}).hmpadr || null;
   const fctRegDe = fctHit ? fmtDate(fctHit.frstFctryRegistDe) : null;
-  const fctAreas = factoryAreas(fctHit);
+  // 생산정보에 면적이 없으므로 용지·시설·기본 오퍼레이션 응답에서 같은 업체 레코드를 찾아 합친다
+  const fctDetail = (R.factoryDetail && R.factoryDetail.ok ? R.factoryDetail.data : null) || [];
+  let fctDetailUsed = null;
+  const fctMerged = { ...(fctHit || {}) };
+  fctDetail.forEach((g) => {
+    const hit = matchByName(name, g.items) || (g.items.length === 1 ? g.items[0] : null);
+    if (!hit) return;
+    if (factoryAreas(hit).length && !fctDetailUsed) fctDetailUsed = g.op;
+    Object.entries(hit).forEach(([k, v]) => { if (fctMerged[k] == null || fctMerged[k] === '') fctMerged[k] = v; });
+  });
+  const fctAreas = factoryAreas(fctHit ? fctMerged : null);
   const fctFloor = factoryFloorArea(fctAreas);        // 건평으로 볼 값
   const fctLand = fctAreas.find((a) => a.label === '부지면적') || null;
   const fctNote = fctAddr ? ['★ 실제 공장 주소', fctProduct ? `생산: ${fctProduct}` : null, fctInduty || null, fctRegDe ? `등록 ${fctRegDe}` : null].filter(Boolean).join(' · ')
@@ -871,6 +919,9 @@ function assembleLiveReport(name, corp, res) {
     return { title, link: it.link || '', desc, tag: oemTag(host, title + ' ' + desc) };
   }) : [];
 
+  // 지자체 공장정보 페이지에서 대표자·연락처·종업원수를 발췌한다(있으면)
+  const pubBizFacts = publicBizFacts(oem_trace);
+
   // 식약처 화장품 회수·판매중지 — 목록에서 업체명 일치 건. 응답 필드명 확정 전이라 값 스캔으로 견고하게 추출.
   // recallLookup()이 페이지를 합쳐 { items, total, scanned }로 준다. 옛 모양(원본 응답)도
   // 받아 넘길 수 있게 둘 다 읽는다.
@@ -905,19 +956,30 @@ function assembleLiveReport(name, corp, res) {
             ? `★ 동일 사업자번호의 ${npsSites}개 국민연금 사업장(본사·공장 등) 가입자 합산 — 4대보험 재직자(월 갱신). 파견·일용·프리랜서 미포함`
             : '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함')
         : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
+    // 지자체 공장정보에 실린 연락처 — 방문 약속을 잡을 유일한 공개 번호다
+    f('공장 연락처', pubBizFacts.tel || pubBizFacts.fctryTel || null,
+      (pubBizFacts.tel || pubBizFacts.fctryTel) ? 'B' : 'D', '지자체 공장정보(웹)',
+      (pubBizFacts.tel || pubBizFacts.fctryTel) ? today : null,
+      (pubBizFacts.tel || pubBizFacts.fctryTel)
+        ? `지자체 공장정보 페이지 게재값입니다${pubBizFacts.fctryTel && pubBizFacts.tel && pubBizFacts.fctryTel !== pubBizFacts.tel ? ` (공장전화 ${pubBizFacts.fctryTel})` : ''}.`
+          + ` 공개 자료라 변경됐을 수 있으니 방문 전 통화로 확인하세요.${pubBizFacts.link ? ` 근거: ${pubBizFacts.link}` : ''}`
+        : why('oem', '웹에서 지자체 공장정보 페이지를 찾지 못해 연락처를 확보하지 못했습니다')),
     // 건평 — 방문 전 물류 동선을 가늠하는 유일한 공개 수치다
     f('공장 건축면적 (건평)',
       fctFloor ? `약 ${fctFloor.py.toLocaleString()}평 (${fctFloor.m2.toLocaleString()}㎡)` : null,
       fctFloor ? 'A' : 'D', '산업단지공단 공장등록', fctFloor ? (fctRegDe || today) : null,
       fctFloor
-        ? `★ 공장등록증 신고값의 ${fctFloor.label}입니다(응답 항목 ${fctFloor.key}). `
+        ? `★ 공장등록증 신고값의 ${fctFloor.label}입니다(${fctDetailUsed ? `${fctDetailUsed} 오퍼레이션 · ` : ''}응답 항목 ${fctFloor.key}). `
           + `${floorAreaNote(fctFloor.py)}`
           + (fctLand ? ` 부지면적은 약 ${fctLand.py.toLocaleString()}평(${fctLand.m2.toLocaleString()}㎡)입니다.` : '')
           + ' 등록·변경 시점 스냅샷이라 증축·이전이 반영되지 않았을 수 있습니다.'
         // 못 찾았을 때 '없다'로만 끝내면 API가 안 주는 건지 우리가 못 읽는 건지 알 수 없다.
       // 응답에 실제로 어떤 항목이 왔는지 적어 둔다(국민연금 결측 안내와 같은 방식).
       : why('factory', fctHit
-        ? `공장등록 응답에서 면적 항목을 찾지 못했습니다 (응답 항목: ${Object.keys(fctHit).join(', ').slice(0, 300)})`
+        ? `공장등록 응답에서 면적 항목을 찾지 못했습니다. 생산정보 응답 항목: ${Object.keys(fctHit).join(', ').slice(0, 220)}`
+          + ` / 용지·시설·기본 오퍼레이션 응답: ${fctDetail.length
+            ? fctDetail.map((g) => `${g.op} ${g.err ? '오류(' + String(g.err).slice(0, 40) + ')' : g.items.length + '건'}`).join(' · ')
+            : '호출 안 됨'}`
         : '공장등록 조회 결과가 없어 면적을 확인할 수 없습니다')),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
@@ -977,7 +1039,7 @@ function assembleLiveReport(name, corp, res) {
   // (재무 조립보다 앞에 둔다 — 아래에서 외부사이트 재무를 붙일 때 필요하다)
   const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
   const hiring = hireRaw && typeof analyzeHiring === 'function'
-    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints)
+    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs)
     : null;
 
   const flAll = R.finance && R.finance.ok ? listOf(R.finance.data, ['response.body.items.item', 'body.items']) : [];
@@ -1274,13 +1336,18 @@ function assembleLiveReport(name, corp, res) {
     risk_flags.push({ type: `${bStt}`, detail: `국세청 사업자상태가 '${bStt}' — 정상 영업 여부 확인 필요. 거래 전 반드시 재확인` });
   }
   // 교차검증 자동진단 — 인력(연금 vs 공장)·주소(본점 vs 연금 vs 공장) 대조
+
+  const workAddr = (hireRaw && hireRaw.workAddrs && hireRaw.workAddrs[0]) || null;
   const cross_diag = crossVerify({
     empNps: empVal, empFct: fctEmpl, addrHq: corp?.addr, addrNps: npsAddr, addrFct: fctAddr || mkAddr,
+    addrWork: workAddr,
+    repHq: repVal, repPublic: pubBizFacts.rep, repPublicLink: pubBizFacts.link,
   });
   cross_diag.items.forEach((c) => {
     if (c.status !== 'warn') return;
     if (c.label === '주소 정합성') risk_flags.push({ type: '주소 상이', detail: `${c.detail}` });
     if (c.label === '인력 정합성' && c.severe) risk_flags.push({ type: '인력 불일치', detail: `${c.detail}` });
+    if (c.label === '대표자 정합성') risk_flags.push({ type: '대표자 표기 상이', detail: `${c.detail}` });
   });
   // 재무 건전성 — 위험 등급이면 리스크로 승격
   // 재무 건전성은 공시 연도로만 판정한다.

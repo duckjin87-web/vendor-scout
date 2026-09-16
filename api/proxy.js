@@ -17,6 +17,12 @@ const DATAGO = {
   maker:     'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01',
   gmp:       'https://apis.data.go.kr/1471000/CsmtcsGmpStbltCompInfo/getCsmtcsGmpStbltCompInfo',
   factory:   'https://apis.data.go.kr/B550624/fctryRegistInfo/getFctryPrdctnService_v2', // 산단공 공장등록 생산정보 v2 — cmpnyNm 검색
+  // 같은 서비스의 다른 오퍼레이션 — '생산정보'에는 면적이 없다(주요생산품·종업원수까지).
+  // 공장등록대장은 기본·용지·시설·생산으로 나뉘어 있고 건축면적은 용지/시설 쪽에 있다.
+  // 금융위 재무를 요약+계정과목으로 보완하는 것과 같은 구조다.
+  factoryBass:  'https://apis.data.go.kr/B550624/fctryRegistInfo/getFctryBassService_v2',
+  factoryLand:  'https://apis.data.go.kr/B550624/fctryRegistInfo/getFctryLandService_v2',
+  factoryFclty: 'https://apis.data.go.kr/B550624/fctryRegistInfo/getFctryFcltyService_v2',
   recall:    'https://apis.data.go.kr/1471000/CsmtcsRtrvlSleStpgeInfo/getCsmtcsRtrvlSleStpgeInfo', // 식약처 화장품 회수·판매중지 정보
 };
 
@@ -78,7 +84,7 @@ async function relay(target, label, init) {
 }
 
 // json 지정에 `type` 파라미터를 쓰는 서비스(식약처 1471000 · 산단공 공장등록 v2).
-const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp', 'factory', 'recall']);
+const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp', 'factory', 'factoryBass', 'factoryLand', 'factoryFclty', 'recall']);
 // 국민연금은 V2(camelCase) 엔드포인트 사용 — V1(getBassInfoSearch)은 폐기되어 500.
 // V2는 json 지정에 `dataType` 파라미터를 쓴다(resultType/type 아님).
 const NPS = new Set(['npsSearch', 'npsDetail']);

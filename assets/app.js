@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 135;
+const BUILD = 136;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -163,6 +163,9 @@ const PARAM_MAP = {
   maker:     { name: 'bssh_nm', rows: 'numOfRows' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
   factory:   { name: 'cmpnyNm', rows: 'numOfRows' }, // 산단공 공장등록 — 회사명 검색
+  factoryBass:  { name: 'cmpnyNm', rows: 'numOfRows' },
+  factoryLand:  { name: 'cmpnyNm', rows: 'numOfRows' },
+  factoryFclty: { name: 'cmpnyNm', rows: 'numOfRows' },
   recall:    { rows: 'numOfRows', page: 'pageNo' }, // 화장품 회수·판매중지 — 목록형, 프론트에서 업체명 필터
 };
 
@@ -1839,6 +1842,16 @@ function extHomepageHint(text) {
   if (hpSkipReason(host)) return null;
   return u;
 }
+// 채용공고의 근무지주소 — '사람이 실제로 출근하는 곳'이라 등기·신고 주소와 성격이 다르다.
+// 회사가 직접 올린 값이라 등기보다 최신인 경우가 많아, 주소 대조의 네 번째 출처로 쓴다.
+const WORK_ADDR_RE = /(?:근무지\s*주소|근무\s*지역|근무지|근무\s*장소)\s*[:：]?\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[가-힣0-9\s()\-·]{4,40}?)(?:\s*[·|]|\s*지도|\s*$)/;
+function extWorkAddr(text) {
+  const m = String(text || '').replace(/\s+/g, ' ').match(WORK_ADDR_RE);
+  if (!m) return null;
+  const v = m[1].replace(/\s+/g, ' ').replace(/[\s,·|-]+$/, '').trim();
+  // 시·군·구까지는 있어야 대조에 쓸 수 있다
+  return /(시|군|구)\s|(시|군|구)$/.test(v) && v.length >= 6 ? v : null;
+}
 function extProfile(text, host, link, kind) {
   const t = String(text || '').replace(/\s+/g, ' ');
   const out = [];
@@ -2195,6 +2208,7 @@ async function hiringTrace(nm) {
   const extFin = [];
   const extProf = [];
   const hpHints = [];
+  const workAddrs = [];
   posts.forEach((p) => {
     const blob = `${p.title} ${p.desc}`;
     const hc = hireHeadcount(blob);
@@ -2203,6 +2217,8 @@ async function hiringTrace(nm) {
     extProf.push(...extProfile(blob, p.host, p.link, null));
     const hh = extHomepageHint(blob);
     if (hh) hpHints.push(hh);
+    const wa = extWorkAddr(blob);
+    if (wa) workAddrs.push(wa);
   });
 
   // ④ 페이지를 직접 연다. 두 가지를 노린다.
@@ -2265,6 +2281,8 @@ async function hiringTrace(nm) {
     if (prof.length) { extProf.push(...prof); found.push(`정보 ${prof.length}`); }
     const hh = extHomepageHint(txt);
     if (hh) { hpHints.push(hh); found.push('홈페이지'); }
+    const wa = extWorkAddr(txt);
+    if (wa) { workAddrs.push(wa); found.push('근무지'); }
     // 페이지에서 찾은 날짜를 해당 공고에 돌려준다 — 스니펫에 없던 등록일이 여기 있다.
     // 단 기업정보 페이지는 공고가 아니다. 거기 있는 날짜는 설립일·사원수 기준일이라
     // 공고 시점으로 세면 안 된다(씨앤티드림: 설립 2011.09과 기준일 2017.04이 공고 날짜로
@@ -2324,12 +2342,12 @@ async function hiringTrace(nm) {
   // 사원수는 기준일이 있는 값을 우선한다(페이지 > 스니펫)
   heads.sort((a, b) => (b.asOf ? 1 : 0) - (a.asOf ? 1 : 0) || (b.from === 'page' ? 1 : 0) - (a.from === 'page' ? 1 : 0));
   return { posts, heads, extFin: finRows, extProfile: reconcileProfile(extProf),
-    hpHints: [...new Set(hpHints)], extDiag };
+    hpHints: [...new Set(hpHints)], workAddrs: [...new Set(workAddrs)], extDiag };
 }
 
 // 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
-function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile, hpHints) {
-  if (!posts || !posts.length) return { ok: false, reason: '채용 사이트에서 이 업체 공고를 찾지 못했습니다', posts: [], heads: heads || [], extProfile: extProfile || [], hpHints: hpHints || [] };
+function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile, hpHints, workAddrs) {
+  if (!posts || !posts.length) return { ok: false, reason: '채용 사이트에서 이 업체 공고를 찾지 못했습니다', posts: [], heads: heads || [], extProfile: extProfile || [], hpHints: hpHints || [], workAddrs: workAddrs || [] };
   const now = new Date();
   const curY = now.getFullYear();
   const ym = (s) => (String(s).length >= 7 ? String(s) : `${s}-06`);          // 연도만 있으면 연중으로 근사
@@ -2447,7 +2465,7 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile, hpH
 
   return {
     ok: true, posts, heads: heads || [], extDiag: extDiag || null, extProfile: extProfile || [],
-    hpHints: hpHints || [], byYear, byRole,
+    hpHints: hpHints || [], workAddrs: workAddrs || [], byYear, byRole,
     dated: dated.length, undated: undated.length,
     recent, prior, spanYears, intensity, headTrend,
     signals: signals.sort((a, b) => (b.level === 'high' ? 1 : 0) - (a.level === 'high' ? 1 : 0)),
@@ -2490,6 +2508,26 @@ async function recallLookup() {
   return { items, total, scanned: items.length, pages };
 }
 
+// 공장등록대장은 기본·용지·시설·생산 오퍼레이션으로 나뉜다. 여태 '생산정보'만 불러서
+// 주요생산품·종업원수까지만 얻고 건축면적은 통째로 놓쳤다(마움코스메틱 조회에서 면적 D등급).
+// 나머지 오퍼레이션을 함께 불러 면적이 실린 쪽을 쓴다. 어느 오퍼레이션이 답했는지도 남겨
+// 둔다 — 산단공이 오퍼레이션 이름을 바꾸면 그 사실이 바로 드러나야 한다.
+const FACTORY_OPS = ['factoryLand', 'factoryFclty', 'factoryBass'];
+async function factoryDetail(nm) {
+  const got = await mapLimit(FACTORY_OPS, 3, async (op) => {
+    try {
+      const d = await proxyGet(op, { name: nm, rows: '50' });
+      for (const path of ['response.body.items.item', 'body.items.item', 'body.items', 'items']) {
+        let cur = d, ok = true;
+        for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
+        if (ok && cur != null) return { op, items: Array.isArray(cur) ? cur : [cur].filter(Boolean) };
+      }
+      return { op, items: [] };
+    } catch (e) { return { op, err: (e && e.message) || String(e), items: [] }; }
+  });
+  return got.filter(Boolean);
+}
+
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
@@ -2501,6 +2539,7 @@ async function finishLive(name, corp) {
     gmp: proxyGet('gmp', { rows: '500' }),
     factory: proxyGet('factory', { name: nm, rows: '30' }),
     recall: recallLookup(),
+    factoryDetail: factoryDetail(nm),
     nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
     naverNews: proxyOnlyGet('naverNews', { query: nm, display: '30', sort: 'date' }),
     // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
