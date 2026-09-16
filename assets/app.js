@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 134;
+const BUILD = 135;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1303,7 +1303,12 @@ async function kakaoTravel(destAddr) {
     });
     const route = dir && dir.routes && dir.routes[0];
     if (route && (route.result_code == null || route.result_code === 0) && route.summary) {
-      return { km: Math.round(route.summary.distance / 1000), min: Math.round(route.summary.duration / 60), method: 'navi', dest, destAddr };
+      // 카카오는 통행료·택시요금도 함께 준다. 여태 거리·시간만 쓰고 버렸는데, 왕복 통행료는
+      // 방문 품의를 올릴 때 바로 필요한 숫자다.
+      const toll = route.summary.fare && isFinite(Number(route.summary.fare.toll))
+        ? Number(route.summary.fare.toll) : null;
+      return { km: Math.round(route.summary.distance / 1000), min: Math.round(route.summary.duration / 60),
+        toll: toll && toll > 0 ? toll : null, method: 'navi', dest, destAddr };
     }
   } catch { /* 모빌리티 미이용 → 좌표 기반 추정으로 폴백 */ }
 
@@ -1779,7 +1784,11 @@ function hireDates(text) {
 function hireHeadcount(text) {
   const s = String(text || '').replace(/\s+/g, ' ');
   // 사이트마다 표기가 달라(사원수·직원수·종업원수·임직원수) 모두 받는다
-  const m = s.match(/(?:사원수|직원수|종업원수|임직원수|총\s?인원)[^0-9]{0,10}([0-9,]{1,7})\s*명(?:[^0-9(]{0,6}\(?\s*(20\d{2})[.\-/년]\s*(\d{1,2})?)?/);
+  // 기준일은 '43명 (2025.09)'처럼 숫자 바로 뒤에 붙는다. 사이에 글자가 끼는 걸 허용했더니
+  // '사원수: 44명, 설립: 2017.03.08'에서 설립일을 사원수 기준일로 읽었다(잡플래닛).
+  // 8년 묵은 날짜가 현재 인원의 기준일로 찍히면 인력 증감 판단이 통째로 어긋난다.
+  // 공백과 괄호만 사이에 둔다.
+  const m = s.match(/(?:사원수|직원수|종업원수|임직원수|총\s?인원)[^0-9]{0,10}([0-9,]{1,7})\s*명(?:[\s(]{0,3}(20\d{2})[.\-/년]\s*(\d{1,2})?)?/);
   if (!m) return null;
   const n = Number(m[1].replace(/,/g, ''));
   if (!isFinite(n) || n <= 0 || n > 100000) return null;

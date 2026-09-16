@@ -217,7 +217,9 @@ function travelText(est){
   if(!est)return null;
   if(est.same)return '한국콜마 인근 (동일 권역)';
   const h=Math.floor(est.min/60),m=est.min%60;
-  return `약 ${est.km}km · 차량 ${h?h+'시간 ':''}${m}분`;
+  // 통행료는 카카오가 주는데 여태 버렸다. 왕복 통행료는 방문 품의에 바로 쓰이는 숫자다.
+  const toll = est.toll ? ` · 통행료 편도 ${est.toll.toLocaleString()}원` : '';
+  return `약 ${est.km}km · 차량 ${h?h+'시간 ':''}${m}분${toll}`;
 }
 
 // ── 샘플 1: 리니어코스메틱 — 대체로 양호(A), 단 주소 3중 상충 1건 ──
@@ -584,8 +586,13 @@ function factoryAreas(rec) {
   if (!rec || typeof rec !== 'object') return [];
   const found = new Map();
   Object.entries(rec).forEach(([k, v]) => {
-    if (!/(^|[_a-z])(ar|area)$|area|면적/i.test(k)) return;
-    const n = Number(String(v == null ? '' : v).replace(/,/g, ''));
+    if (!/(^|[_a-z])(ar|area)$|area|면적|_ar_|plottage|extent/i.test(k)) return;
+    // 값에 단위가 붙어 오면(1,234.5㎡ / 1234 m2 / 373평) Number()가 NaN이 된다.
+    // 숫자만 남기고 읽되, '평'으로 온 값은 ㎡로 되돌린다.
+    const raw = String(v == null ? '' : v).trim();
+    const isPy = /평\s*$/.test(raw);
+    const n0 = Number(raw.replace(/,/g, '').replace(/(㎡|m2|m²|제곱미터|평)\s*$/i, '').trim());
+    const n = isFinite(n0) && isPy ? n0 * PYEONG : n0;
     if (!isFinite(n) || n <= 0 || n > 5e6) return;        // ㎡ 기준 상식 범위 밖은 버린다
     let label = '기타 면적';
     if (/(build|bild|bldg|bldng|建|건축|건물)/i.test(k)) label = '건축면적';
@@ -907,7 +914,11 @@ function assembleLiveReport(name, corp, res) {
           + `${floorAreaNote(fctFloor.py)}`
           + (fctLand ? ` 부지면적은 약 ${fctLand.py.toLocaleString()}평(${fctLand.m2.toLocaleString()}㎡)입니다.` : '')
           + ' 등록·변경 시점 스냅샷이라 증축·이전이 반영되지 않았을 수 있습니다.'
-        : why('factory', '공장등록 응답에 면적 항목이 없습니다 — 미등록 공장이거나 이 API가 면적을 제공하지 않는 경우')),
+        // 못 찾았을 때 '없다'로만 끝내면 API가 안 주는 건지 우리가 못 읽는 건지 알 수 없다.
+      // 응답에 실제로 어떤 항목이 왔는지 적어 둔다(국민연금 결측 안내와 같은 방식).
+      : why('factory', fctHit
+        ? `공장등록 응답에서 면적 항목을 찾지 못했습니다 (응답 항목: ${Object.keys(fctHit).join(', ').slice(0, 300)})`
+        : '공장등록 조회 결과가 없어 면적을 확인할 수 없습니다')),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     // ★ 월 갱신 지표 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 가장 최신 근거
