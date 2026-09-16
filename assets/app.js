@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 132;
+const BUILD = 133;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1875,7 +1875,9 @@ function reconcileProfile(rows) {
 // 다만 공시가 아니라 사이트가 자체 수집·표기한 값이라 공식 자료와 같은 칸에 두면 안 된다.
 // 뽑아 오되 출처를 '외부사이트자료'로 못 박아 구분한다.
 const EXT_FIN_KEYS = [
-  ['매출액', /(매출액|매출)/],
+  // '매출'만으로 잡으면 영업이익 설명문("매출총액에서 원가…를 뺀 금액")에 걸려
+  // 영업이익 숫자를 매출액으로 가져간다. 실제로 셀랩메드에서 그렇게 어긋났다.
+  ['매출액', /(매출액|매출(?!총액))/],
   ['영업이익', /영업\s*이익/],
   ['당기순이익', /(?:당기\s*)?순이익/],
   ['자본금', /자본금/],
@@ -1924,7 +1926,11 @@ function financeSections(t) {
   return spans;
 }
 function extFinance(text, host, link) {
-  const full = String(text || '').replace(/\s+/g, ' ');
+  // 사람인 재무 탭은 항목마다 '○○ Information <설명문> 닫기' 툴팁을 본문에 그대로 깔아 둔다.
+  // 그 설명문에 다른 항목 이름이 섞여 있어(영업이익 설명에 '매출총액', 당기순이익 설명에
+  // '영업이익'), 라벨이 설명문에 걸리면 옆 항목 숫자를 제 것으로 읽는다. 먼저 도려낸다.
+  const full = String(text || '').replace(/\s+/g, ' ')
+    .replace(/Information\s.{0,200}?닫기/g, ' ');
   const out = [];
   // 같은 항목 라벨이 한 페이지에 여러 번 나온다. 사람인 재무 탭은 페이지 제목에도
   // '매출액 68억 1,834만원 영업이익, 자본금 …'이 있어, 첫 출현에서 멈추면 연도 없는 값
@@ -2264,10 +2270,12 @@ async function hiringTrace(nm) {
     // 재무 탭 원문은 값을 뽑았든 못 뽑았든 남긴다.
     // 사이트마다 표기가 달라 실제 문구를 봐야 패턴을 맞출 수 있는데, 지금까지 '0건일 때만'
     // 남기다 보니 일부만 뽑힌 경우(다산씨엔텍: 4개년 표에서 1개년만)는 원인을 볼 수가 없었다.
+    // 재무를 한 건이라도 뽑았거나 재무 탭이면 원문을 남긴다. 여태 '재무 탭이거나 0건일 때'만
+    // 남겨서, 잡코리아 회사 페이지가 재무 9건을 잘못 뽑아도 원문을 볼 수가 없었다.
     let sample = null;
-    if (!fin.length || pg.kind === 'finance') {
+    {
       const at = txt.search(/(매출액|매출|자본금|자본총계|당기순이익|재무정보)/);
-      if (at >= 0) sample = txt.slice(at, at + (pg.kind === 'finance' ? 420 : 160)).replace(/\s+/g, ' ').trim();
+      if (at >= 0) sample = txt.slice(at, at + (fin.length || pg.kind === 'finance' ? 480 : 160)).replace(/\s+/g, ' ').trim();
     }
     extDiag.push({
       host: pg.host, kind: pg.kind, ok: true, chars: txt.length,
@@ -2277,7 +2285,33 @@ async function hiringTrace(nm) {
   });
   // 사이트마다 수집 시점과 출처가 달라 같은 항목도 값이 갈린다. 한 곳만 남기고 버리면
   // 어느 값이 맞는지 판단할 근거가 사라진다. 항목·연도별로 모아 서로 대조한다.
-  const finRows = reconcileExtFin(extFin);
+  let finRows = reconcileExtFin(extFin);
+  // ── 산술로 말이 안 되는 값은 싣지 않는다 ──
+  // 셀랩메드에서 매출 60.5·72.9·69.9억에 영업이익이 -60·-72·-69억으로 나왔다. 해마다
+  // 매출의 거울상이다 — 표의 열이 한 칸 어긋나 매출 숫자를 영업이익 칸에서 읽은 것이다.
+  // 한 해만 보면 '큰 영업손실'과 구분이 안 되지만, 여러 해가 나란히 매출과 같으면 파싱 사고다.
+  // 당기순이익이 매출을 넘는 것도 마찬가지로 자본총계·자산총계가 섞인 흔적이다.
+  const dropped = [];
+  {
+    const revBy = new Map();
+    finRows.forEach((r) => { if (r.key === '매출액' && r.year) revBy.set(r.year, Math.abs(r.eok)); });
+    const near = (a2, b2) => b2 > 0 && Math.abs(Math.abs(a2) - b2) <= b2 * 0.05;
+    const mirrorYears = finRows.filter((r) => r.key === '영업이익' && r.year && near(r.eok, revBy.get(r.year))).length;
+    const opBroken = mirrorYears >= 2;      // 두 해 이상 겹치면 우연이 아니다
+    finRows = finRows.filter((r) => {
+      const rev = r.year ? revBy.get(r.year) : null;
+      if (r.key === '영업이익' && opBroken) {
+        dropped.push(`${r.year} 영업이익 ${r.eok}억 — 매출과 같은 값이 ${mirrorYears}개년 반복(열 어긋남)`);
+        return false;
+      }
+      if (rev && r.key === '당기순이익' && Math.abs(r.eok) > rev) {
+        dropped.push(`${r.year} 당기순이익 ${r.eok}억 — 같은 해 매출 ${rev}억보다 큼(자본·자산 혼입 의심)`);
+        return false;
+      }
+      return true;
+    });
+  }
+  if (dropped.length) extDiag.push({ host: '—', kind: 'sanity', ok: true, found: `비정상 값 ${dropped.length}건 제외`, dropped });
   // 사원수는 기준일이 있는 값을 우선한다(페이지 > 스니펫)
   heads.sort((a, b) => (b.asOf ? 1 : 0) - (a.asOf ? 1 : 0) || (b.from === 'page' ? 1 : 0) - (a.from === 'page' ? 1 : 0));
   return { posts, heads, extFin: finRows, extProfile: reconcileProfile(extProf),
