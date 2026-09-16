@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 133;
+const BUILD = 134;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3484,6 +3484,23 @@ function buildVisitChecklist(report) {
   if (gapKeys.length) {
     add('mid', '기준정보', `${gapKeys.join(' · ')} — 공개 API에서 확인되지 않았습니다. '없음'이 아니라 '확인되지 않음'이므로 현장에서 직접 확인하세요.`,
       `공개자료 미확인 ${gapKeys.length}건`, '', '기준정보');
+  }
+  // 공장이 작으면 물류가 먼저 걸린다. 발주량을 정하기 전에 확인해야 하는 것들이라
+  // 확인사항으로 자동으로 올린다.
+  const areaF = (report.capacity || []).find((x) => x.key === '공장 건축면적 (건평)' && x.value);
+  if (areaF) {
+    const py = Number((String(areaF.value).match(/약\s*([\d,]+)\s*평/) || [])[1]?.replace(/,/g, ''));
+    if (isFinite(py) && py < 300) {
+      add(py < 100 ? 'high' : 'mid', '설비',
+        py < 100
+          ? `건평 약 ${py}평 — 자재·완제품 보관 공간과 상하차 방식(도크 유무·지게차·수작업), 대형 화물차 진입·회차 가능 여부를 확인하세요`
+          : `건평 약 ${py}평 — 5톤 이상 화물차 진입·회차 공간과 상하차 도크 유무, 자재 보관 구역 분리 여부를 확인하세요`,
+        `공장등록 신고 면적 ${areaF.value}`,
+        py < 100
+          ? '보관 공간이 부족하면 한 번에 받을 수 있는 물량이 제한되고, 소형차 분할 배송으로 물류비가 올라갑니다'
+          : '도크가 없으면 하차에 시간이 더 걸리고 파손 위험도 커집니다',
+        '기준정보');
+    }
   }
   const finRows = report.finance || [];
   if (finRows.some((x) => x.value && x.grade === 'C') && !finRows.some((x) => x.value && x.grade === 'A')) {

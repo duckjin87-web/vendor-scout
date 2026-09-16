@@ -574,6 +574,54 @@ function listOf(data, paths) {
   return [];
 }
 
+// ── 공장 면적 ──
+// 산단공 공장등록 레코드에는 면적 항목이 들어 있는데 여태 읽지도 않고 버렸다. 건평을 알면
+// 방문 전에 물류 동선을 가늠할 수 있다 — 5톤차가 들어갈 자리가 있는지, 자재를 쌓아 둘 데가
+// 있는지는 소규모 업체일수록 실제 발주 가능량을 좌우한다.
+// 필드명이 API마다 달라 주소와 같은 방식으로 값 스캔한다(명시 후보 없이 키 이름으로 분류).
+const PYEONG = 3.305785;                       // 1평 = 3.3058㎡
+function factoryAreas(rec) {
+  if (!rec || typeof rec !== 'object') return [];
+  const found = new Map();
+  Object.entries(rec).forEach(([k, v]) => {
+    if (!/(^|[_a-z])(ar|area)$|area|면적/i.test(k)) return;
+    const n = Number(String(v == null ? '' : v).replace(/,/g, ''));
+    if (!isFinite(n) || n <= 0 || n > 5e6) return;        // ㎡ 기준 상식 범위 밖은 버린다
+    let label = '기타 면적';
+    if (/(build|bild|bldg|bldng|建|건축|건물)/i.test(k)) label = '건축면적';
+    else if (/(manu|mnfct|manfact|제조|생산)/i.test(k)) label = '제조시설면적';
+    else if (/(adit|addi|부대)/i.test(k)) label = '부대시설면적';
+    else if (/(land|lot|blot|use|site|용지|부지|대지)/i.test(k)) label = '부지면적';
+    else if (/(tot|전체|합계|연면적)/i.test(k)) label = '연면적';
+    const prev = found.get(label);
+    if (!prev || n > prev.m2) found.set(label, { label, key: k, m2: n, py: Math.round(n / PYEONG) });
+  });
+  return [...found.values()];
+}
+// 건평으로 볼 값 — 건축면적이 가장 가깝고, 없으면 제조시설·연면적 순으로 대신한다
+function factoryFloorArea(areas) {
+  for (const want of ['건축면적', '제조시설면적', '연면적']) {
+    const hit = areas.find((a) => a.label === want);
+    if (hit) return hit;
+  }
+  return null;
+}
+// 규모에 따라 방문 시 확인할 물류 사항이 달라진다. 숫자만 주면 판단이 안 되므로 함께 적는다.
+function floorAreaNote(py) {
+  if (py == null) return null;
+  if (py < 100) {
+    return `약 ${py}평 — 소규모입니다. 자재·완제품을 둘 공간이 빠듯해 외부 창고를 쓰거나 `
+      + `재고 회전이 촉박할 수 있습니다. 한 번에 받을 수 있는 입고 물량, 완제품 보관 가능량, `
+      + `상하차 방식(도크 유무·지게차·수작업)을 반드시 확인하세요. 대형 화물차 진입·회차가 `
+      + `어려우면 소형차 분할 배송으로 물류비가 올라갑니다.`;
+  }
+  if (py < 300) {
+    return `약 ${py}평 — 중소 규모입니다. 5톤 이상 화물차 진입·회차 공간과 상하차 도크 유무, `
+      + `자재 보관 구역이 생산 구역과 분리돼 있는지 확인하세요.`;
+  }
+  return `약 ${py}평 — 상하차 도크와 자재·완제품 보관 구역을 방문 시 함께 확인하세요.`;
+}
+
 // 선택된 업체 기준정보 + 재무/식약처/국민연금 응답 → 전체 리포트 조립 (실데이터 + 진단)
 // res = { finance:{ok,data|err}, rpt:{ok,...}, nps:{ok,...} }
 function assembleLiveReport(name, corp, res) {
@@ -627,6 +675,9 @@ function assembleLiveReport(name, corp, res) {
   // 홈페이지는 여러 공장 레코드 중 등재된 것을 채택(첫 매칭에 없을 수 있음)
   const fctHmpadr = (fctList.find((it) => /^https?:\/\//i.test(String(it.hmpadr || ''))) || {}).hmpadr || null;
   const fctRegDe = fctHit ? fmtDate(fctHit.frstFctryRegistDe) : null;
+  const fctAreas = factoryAreas(fctHit);
+  const fctFloor = factoryFloorArea(fctAreas);        // 건평으로 볼 값
+  const fctLand = fctAreas.find((a) => a.label === '부지면적') || null;
   const fctNote = fctAddr ? ['★ 실제 공장 주소', fctProduct ? `생산: ${fctProduct}` : null, fctInduty || null, fctRegDe ? `등록 ${fctRegDe}` : null].filter(Boolean).join(' · ')
     : why('factory', '공장등록 조회 결과 없음 — 미등록 공장(임대/소규모) 또는 상호 불일치');
 
@@ -847,6 +898,16 @@ function assembleLiveReport(name, corp, res) {
             ? `★ 동일 사업자번호의 ${npsSites}개 국민연금 사업장(본사·공장 등) 가입자 합산 — 4대보험 재직자(월 갱신). 파견·일용·프리랜서 미포함`
             : '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함')
         : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
+    // 건평 — 방문 전 물류 동선을 가늠하는 유일한 공개 수치다
+    f('공장 건축면적 (건평)',
+      fctFloor ? `약 ${fctFloor.py.toLocaleString()}평 (${fctFloor.m2.toLocaleString()}㎡)` : null,
+      fctFloor ? 'A' : 'D', '산업단지공단 공장등록', fctFloor ? (fctRegDe || today) : null,
+      fctFloor
+        ? `★ 공장등록증 신고값의 ${fctFloor.label}입니다(응답 항목 ${fctFloor.key}). `
+          + `${floorAreaNote(fctFloor.py)}`
+          + (fctLand ? ` 부지면적은 약 ${fctLand.py.toLocaleString()}평(${fctLand.m2.toLocaleString()}㎡)입니다.` : '')
+          + ' 등록·변경 시점 스냅샷이라 증축·이전이 반영되지 않았을 수 있습니다.'
+        : why('factory', '공장등록 응답에 면적 항목이 없습니다 — 미등록 공장이거나 이 API가 면적을 제공하지 않는 경우')),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     // ★ 월 갱신 지표 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 가장 최신 근거
