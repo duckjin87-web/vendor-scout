@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 131;
+const BUILD = 132;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -285,12 +285,25 @@ const HP_SKIP_GROUPS = {
   사업자정보집계: /(^|\.)(moneypin|bizno|nicebizinfo|cretop|sbiz24|findbiz|jaoms|ktdb|wgbiz|innobiz|kisline|saramin|ppomppu)(\.|$)/i,
   쇼핑·오픈마켓: /(^|\.)(11st|coupang|gmarket|auction|ssg|smartstore|interpark|tmon|wemakeprice|lotteon|oliveyoung|naverpay)(\.|$)/i,
   // 홈페이지 제작·디자인 대행사 포트폴리오 — 고객사 상호가 그대로 실려 상위에 올라온다(ipdesign.kr 사례)
-  제작대행: /(^|\.)(ipdesign|cafe24|imweb|godo|makeshop|wixsite|weebly|modoo|creatorlink|sitepro|homepage|webmaker|design)(\.|$)/i,
+  // ※ 아임웹·카페24·모두 같은 '빌더'는 여기서 뺐다. 아래 HP_BUILDERS 참고.
+  제작대행: /(^|\.)(ipdesign|sitepro|homepage|webmaker|webdesign)(\.|$)/i,
   공공·기관: /(^|\.)(go\.kr|or\.kr\.gov|molit|data\.go)(\.|$)/i,
   언론: /(^|\.)(news|press|newsis|yna|mk\.co\.kr|hankyung|edaily|etnews|mt\.co\.kr|sedaily)(\.|$)/i,
 };
+// 홈페이지 빌더 플랫폼. 영세 제조업체는 자기 도메인을 사지 않고 여기에 그냥 얹는 경우가 많다
+// (cellab.imweb.me 처럼). 여태 이것들을 '제작대행'으로 싸잡아 걸러서, 정작 찾아야 할
+// 업체 홈페이지를 후보에서 지우고 있었다. 플랫폼 대문(imweb.me)만 걸러내고
+// 서브도메인(cellab.imweb.me)은 그 업체의 홈페이지로 본다.
+const HP_BUILDERS = [
+  'imweb.me', 'cafe24.com', 'modoo.at', 'creatorlink.net', 'wixsite.com', 'weebly.com',
+  'makeshop.co.kr', 'godomall.com', 'sixshop.com', 'shopby.kr', 'mycafe24.com', 'site123.me',
+  'creatorlink.com', 'squarespace.com', 'wordpress.com', 'webnode.kr',
+];
 function hpSkipReason(host) {
-  for (const [why, re] of Object.entries(HP_SKIP_GROUPS)) if (re.test(host)) return why;
+  const h = String(host || '').toLowerCase().replace(/^www\./, '');
+  const builder = HP_BUILDERS.find((d) => h === d || h.endsWith('.' + d));
+  if (builder) return h === builder ? '제작대행' : null;   // 서브도메인 = 그 업체 사이트
+  for (const [why, re] of Object.entries(HP_SKIP_GROUPS)) if (re.test(h)) return why;
   return null;
 }
 function hpAddrCores(addr) {
@@ -1103,7 +1116,9 @@ async function findHomepage(nm, corp, hpHints) {
   // ② 웹문서 다각도 검색 — 한 질의로는 후보가 3~4건뿐이고 그마저 노이즈인 경우가 많다.
   //    상호 단독·업종·홈페이지·소재지 조합으로 넓힌다.
   const region = (String((corp && corp.addr) || '').match(/([가-힣]+(?:시|군|구))/) || [])[1] || '';
-  const qs = [`${nm} 화장품`, `${nm} OEM ODM`, `${nm} 홈페이지`, `"${nm}"`, `${nm} 제조`];
+  const qs = [`${nm} 화장품`, `${nm} OEM ODM`, `${nm} 홈페이지`, `"${nm}"`, `${nm} 제조`,
+    // 소규모 업체는 자기 도메인 없이 빌더에 얹는 경우가 많아, 회사소개·공식 표현으로도 훑는다
+    `${nm} 회사소개`, `${nm} 공식홈페이지`];
   if (region) qs.push(`${nm} ${region}`);
   const webs = await mapLimit(qs, 3, async (q) => {
     try { return await proxyOnlyGet('naverWeb', { query: q, display: '20' }); } catch { return null; }
@@ -1117,7 +1132,7 @@ async function findHomepage(nm, corp, hpHints) {
     return { proposed: null, candidates: [], err: webErr,
       reason: why ? `검색결과가 모두 제외 대상이었습니다 (${why}) — 자체 홈페이지가 없는 업체일 수 있습니다` : '검색결과 없음' };
   }
-  cands.splice(10);                          // 대조 비용 상한 — 노이즈를 걸러낸 뒤라 10건이면 충분
+  cands.splice(12);                          // 대조 비용 상한 — 노이즈를 걸러낸 뒤라 이 정도면 충분
 
   const nameCore = stripCorp(nm).replace(/\s/g, '');
   const rep = corp && corp.rep ? String(corp.rep).replace(/\s/g, '') : '';
@@ -1155,17 +1170,30 @@ async function findHomepage(nm, corp, hpHints) {
     // 화장품 제조 문맥 — 동명 타업종 사이트를 걸러내는 보조 신호
     if (/화장품|코스메틱|cosmetic|OEM|ODM|제조/i.test(text) || /화장품|코스메틱|cosmetic/i.test(title)) m.push('업종');
     const score = m.reduce((s, k) => s + (W[k] || 1), 0);
-    return { ...c, url, matches: m, score, html: rawHtml };
+    // 본문을 실제로 읽어 확인한 근거와, 페이지를 안 열고도 알 수 있는 근거(제목·도메인·등록)는
+    // 무게가 다르다. 둘을 갈라 둬야 '본문에 상호가 없는데 확정된' 상황을 잡아낼 수 있다.
+    const BODY = new Set(['상호', '대표자', '사업자번호', '주소']);
+    const bodyHits = m.filter((k) => BODY.has(k));
+    return { ...c, url, matches: m, score, bodyHits, chars: text.length, html: rawHtml };
   }));
   scored.sort((a, b) => b.score - a.score);
   // 4점 이상 = 강한 근거 1개 + 보조, 또는 보조 근거 2~3개. (예: 제목+도메인+업종 = 5)
-  const proposed = scored[0] && scored[0].score >= 4 ? scored[0] : null;
-  // 확정 못 했을 때 '왜'인지 남긴다 — 후보가 없어서인지, 있는데 근거가 약해서인지는 대응이 다르다.
+  // 다만 본문 대조가 0건이면 확정하지 않는다. (주)셀랩 조회에서 icellab.com 이 제목(2)+
+  // 지역등록(4) = 6점으로 확정됐는데, 정작 그 페이지 어디에도 상호가 없었다. 상호가 비슷한
+  // 다른 회사이거나 자바스크립트로 그려지는 사이트인데, 어느 쪽인지 모른 채 확정한 셈이다.
+  const top = scored[0] || null;
+  const strong = top && top.score >= 4;
+  const proposed = strong && top.bodyHits.length ? top : null;
   const reason = proposed ? null
-    : (scored[0]
-      ? `가장 근접한 후보(${scored[0].host})도 근거 ${scored[0].score}점으로 확정 기준(4점)에 못 미쳤습니다`
-        + (scored[0].matches.length ? ` — 확인된 근거: ${scored[0].matches.join('·')}` : ' — 페이지에서 상호·대표자·사업자번호를 찾지 못했습니다')
-      : '대조할 후보가 없습니다');
+    : (strong
+      ? `가장 유력한 후보(${top.host})는 근거 ${top.score}점이지만 페이지 본문에서 상호·대표자·사업자번호·주소를 하나도 확인하지 못했습니다`
+        + (top.chars < 200
+          ? ' — 본문을 거의 읽지 못했습니다(자바스크립트로 그려지는 사이트일 수 있음). 직접 열어 확인하세요.'
+          : ' — 상호가 비슷한 다른 업체일 수 있습니다. 직접 열어 확인하세요.')
+      : (top
+        ? `가장 근접한 후보(${top.host})도 근거 ${top.score}점으로 확정 기준(4점)에 못 미쳤습니다`
+          + (top.matches.length ? ` — 확인된 근거: ${top.matches.join('·')}` : ' — 페이지에서 상호·대표자·사업자번호를 찾지 못했습니다')
+        : '대조할 후보가 없습니다'));
   // 확정 사이트에서만 인증·생산능력 추출(오매칭 사이트 정보 방지). 이미 받은 HTML 재사용.
   if (proposed) { try { proposed.extract = await extractSiteInfo(proposed.url, proposed.html); } catch { /* 무시 */ } }
   scored.forEach((c) => { delete c.html; }); // 원문 HTML은 저장 용량 커서 제거
@@ -2933,7 +2961,10 @@ function renderHomepageInto(box, hp) {
     html += `<div class="hp-top">` +
       `<span class="hp-badge">확정 제안</span>` +
       `<a href="${esc(p.url)}" target="_blank" rel="noopener" class="hp-url">${esc(p.host)}</a>` +
-      `<div class="hp-ms">${p.matches.map(chip).join('')} <em>(근거 ${p.matches.length}종 · 신뢰점수 ${p.score})</em></div>` +
+      `<div class="hp-ms">${p.matches.map(chip).join('')} `
+      // 본문에서 실제로 확인한 근거를 따로 밝힌다 — 제목·도메인만으로 맞춘 것과는 무게가 다르다
+      + `<em>(근거 ${p.matches.length}종 · 신뢰점수 ${p.score}`
+      + `${p.bodyHits && p.bodyHits.length ? ` · 본문 확인 ${p.bodyHits.join('·')}` : ''})</em></div>` +
       `</div>`;
     // 홈페이지 발췌 — 생산능력·인증(자동추출). 홈페이지 게재값이라 방문 시 원본 확인 필요.
     const ex = p.extract;
