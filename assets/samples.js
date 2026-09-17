@@ -694,6 +694,16 @@ function assembleLiveReport(name, corp, res) {
   // ★ mkList[0] 폴백 금지: maker API가 상호 필터링을 안 해 첫 레코드가 '남의 회사'일 수 있음(할루시네이션 방지)
   const mkList = R.maker && R.maker.ok ? listOf(R.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const mk = matchByName(name, mkList);
+  // ── 화장품 제조업 허가 3단 판정 ──
+  // 여태 '등록' 아니면 전부 null(D등급)이라, 조회가 실패한 것과 조회는 됐는데 등록이 없는 것이
+  // 화면에서 똑같아 보였다. 둘은 전혀 다른 말이다. 제조 위탁을 맡길 업체에 제조업 허가가
+  // 없다는 건 그 자체로 결격 사유라, 확인이 된 '없음'은 분명하게 못 박아야 한다.
+  //   확인   등록 레코드 일치
+  //   없음   조회는 정상인데 명단에 없음  → 주의 문구 + 리스크
+  //   불가   API 오류·미조회             → 판단 보류
+  const mkState = mk ? '확인'
+    : (R.maker && R.maker.ok && mkList.length ? '없음' : '불가');
+  const mkScanN = mkList.length;
   const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? mk.PRMISN_NO ?? mk.prmisnNo ?? null) : null;
 
   // 국세청 사업자상태 (odcloud: {data:[{b_stt, tax_type, ...}]})
@@ -785,8 +795,22 @@ function assembleLiveReport(name, corp, res) {
     f('대표자', repVal, repVal ? (corp?.rep ? 'A' : 'B') : 'D', repSrc, repVal ? today : null, repNote),
     f('설립일 / 등록일', estbVal, estbVal ? (corp?.estbDt ? 'A' : 'C') : 'D', estbSrc, estbVal || null, estbNote),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
-    f('제조업 등록', mk ? `등록${mkNo ? ` (허가 ${mkNo})` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null,
-      mk ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인') : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
+    f('제조업 등록',
+      mkState === '확인' ? `등록${mkNo ? ` (허가 ${mkNo})` : ''}`
+        : mkState === '없음' ? '⚠ 제조업 허가 등록 없음' : null,
+      mkState === '확인' ? 'A' : (mkState === '없음' ? 'B' : 'D'),
+      '식약처 화장품제조업 API', mkState === '불가' ? null : today,
+      mkState === '확인'
+        ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인')
+        : mkState === '없음'
+          ? `★ 식약처 화장품제조업 등록 명단(조회 ${mkScanN.toLocaleString()}건)에서 이 상호를 찾지 못했습니다. `
+            + '화장품을 직접 제조하려면 화장품법상 제조업 등록이 반드시 있어야 하므로, 다음 중 하나입니다 — '
+            + '① 제조는 하지 않고 책임판매업만 등록(생산은 타사 OEM 위탁), '
+            + '② 등록 업소명이 상호와 달라 매칭 실패(법인명 ≠ 업소명), '
+            + '③ 미등록. '
+            + '제조 위탁을 맡길 업체라면 ①·③은 결격 사유입니다 — 방문 전 화장품제조업 등록필증 사본을 요청해 '
+            + '등록번호·업소명·소재지를 대조하세요.'
+          : why('maker', '식약처 제조업 조회에 실패해 등록 여부를 확인하지 못했습니다 — 판단 보류')),
     f('공장/제조소 소재지', fctAddr || mkAddr || null, (fctAddr || mkAddr) ? 'A' : 'D',
       fctAddr ? '산업단지공단 공장등록' : (mkAddr ? '식약처 화장품제조업 API' : '산업단지공단 공장등록'),
       (fctAddr || mkAddr) ? today : null,
@@ -1295,7 +1319,7 @@ function assembleLiveReport(name, corp, res) {
     { key: 'maker', name: '식약처 화장품제조업', ok: !!mk, warn: !mk && !!(R.maker && R.maker.ok),
       detail: mk ? `제조업 등록 확인${mkRep ? ` · 대표 ${mkRep}` : ''}${mkAddr ? ` · ${mkAddr}` : ''}`
         : (!R.maker ? '자료 미제출/미등록' : (!R.maker.ok ? briefErr(R.maker.err)
-          : (mkList.length ? `상호 일치 0건 (전체 ${mkList.length}건 중 미포함 — 제조업 미등록이거나 업소명 표기 상이)` : '등록 0건 — 책임판매업만 등록 가능성'))) },
+          : (mkList.length ? `⚠ 제조업 허가 등록 없음 — 조회 ${mkList.length}건 중 상호 일치 0건(미등록·책임판매업만 등록·업소명 표기 상이)` : '등록 0건 — 책임판매업만 등록 가능성'))) },
     { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, warn: !fctAddr && !!(R.factory && R.factory.ok),
       detail: fctAddr ? `공장 확인${fctEmpl ? ` · 종업원 ${fctEmpl}명` : ''}${fctProduct ? ' · ' + fctProduct : ''}`
         : (!R.factory ? '자료 미제출/미등록' : (!R.factory.ok ? briefErr(R.factory.err) : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '공장등록 0건(미등록/임대 가능)'))) },
@@ -1359,6 +1383,13 @@ function assembleLiveReport(name, corp, res) {
     repPublicSrc: fctRep ? '산단공 공장등록' : '지자체 공장정보',
     repPublicLink: fctRep ? null : pubBizFacts.link,
   });
+  // 제조업 허가가 '확인된 없음'이면 리스크로 올린다 — 제조 위탁 대상으로는 결격일 수 있다
+  if (mkState === '없음') {
+    risk_flags.push({ type: '제조업 허가 등록 없음',
+      detail: `식약처 화장품제조업 등록 명단에서 「${name}」을(를) 찾지 못했습니다. `
+        + '책임판매업만 등록(타사 OEM 위탁 생산)이거나, 등록 업소명이 상호와 다르거나, 미등록입니다. '
+        + '직접 제조를 맡길 업체라면 방문 전 화장품제조업 등록필증으로 반드시 확인하세요.' });
+  }
   cross_diag.items.forEach((c) => {
     if (c.status !== 'warn') return;
     if (c.label === '주소 정합성') risk_flags.push({ type: '주소 상이', detail: `${c.detail}` });

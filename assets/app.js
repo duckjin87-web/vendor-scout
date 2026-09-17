@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 138;
+const BUILD = 139;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3459,7 +3459,9 @@ function verdictReason(report) {
   const B = report.basic || [], C = report.capacity || [];
   const has = (arr, k) => { const x = arr.find((v) => v.key === k); return x && x.value ? x.value : null; };
   const ups = [], downs = [];
-  if (has(B, '제조업 등록')) ups.push('식약처 화장품 제조업 등록');
+  const mkv = has(B, '제조업 등록');
+  if (mkv && !/없음/.test(String(mkv))) ups.push('식약처 화장품 제조업 등록');
+  else if (mkv) downs.push('제조업 허가 등록 없음');
   if (has(C, 'CGMP 적합업소')) ups.push('CGMP 적합업소');
   if (has(B, '공장/제조소 소재지')) ups.push('공장등록 확인');
   const hire = report.hiring;
@@ -3543,7 +3545,11 @@ function renderVerdict(report) {
   })();
 
   const chips = [
-    ['제조업 등록', maker ? '확인' : '미확인', maker ? 'ok' : 'bad'],
+    // '확인된 없음'과 '조회 못 함'은 다른 말이다. 없음은 빨강, 조회불가는 회색으로 둔다 —
+    // 확인을 못 한 것을 결격으로 읽으면 멀쩡한 업체를 떨어뜨리게 된다.
+    ['제조업 등록',
+      maker ? (/없음/.test(String(maker)) ? '등록없음' : '확인') : '조회불가',
+      maker ? (/없음/.test(String(maker)) ? 'bad' : 'ok') : 'na'],
     ['사업자 상태', /계속/.test(bstt) ? '정상' : (bstt || '미확인'), /계속/.test(bstt) ? 'ok' : 'bad'],
     ['공장등록', fct ? '확인' : '미확인', fct ? 'ok' : 'warn'],
     // CGMP는 없다고 결격은 아니지만 있으면 확실한 강점이라, 보유했을 때만 색을 준다.
