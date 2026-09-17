@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 139;
+const BUILD = 140;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2711,6 +2711,36 @@ async function finishLive(name, corp) {
 }
 
 // 동명업체 선택 UI — source: 'fsc'(금융위 법인) | 'mfds'(식약처 등록업체 기준)
+// ── 후보별 화장품 제조업 허가 대조 ──
+// 업체를 고르는 단계에서 가장 먼저 알아야 할 게 '이 회사가 화장품을 직접 만들 수 있는가'다.
+// 여태 식약처에서 온 후보에만 배지가 붙고 금융위 법인 후보에는 아무 표시가 없어서,
+// 동명 업체 중 어느 쪽이 제조사인지 모른 채 찍어서 들어가야 했다.
+// 먼저 검색어로 명단을 한 번 받아 전부 대조하고(대개 후보들이 비슷한 이름이라 여기서 걸린다),
+// 거기서 못 찾은 후보만 자기 이름으로 한 번 더 확인한다.
+async function annotateMakerStatus(cands, typed, onUpdate) {
+  if (!getProxy() || !cands.length) return;
+  const core = stripCorp(typed || '').replace(/\s/g, '') || typed;
+  let pool = [];
+  try { pool = (await makerLookup(core)).items || []; } catch { /* 실패해도 개별 확인으로 진행 */ }
+  const mark = (c, hit) => {
+    c._mkState = hit ? '등록' : '미확인';
+    if (hit) c._mkNo = hit.LCNS_NO || hit.lcnsNo || hit.PRMISN_NO || hit.prmisnNo || null;
+  };
+  cands.forEach((c) => { if (c.mfds) { c._mkState = '등록'; } else mark(c, matchByName(c.corpNm || '', pool)); });
+  onUpdate();
+  // 명단이 검색어로 좁게 걸러져 나오면 다른 후보는 그 안에 없다 — 못 찾은 쪽만 따로 확인한다
+  const rest = cands.filter((c) => c._mkState === '미확인' && c.corpNm).slice(0, 6);
+  if (!rest.length) return;
+  await mapLimit(rest, 2, async (c) => {
+    try {
+      const own = (await makerLookup(stripCorp(c.corpNm).replace(/\s/g, '') || c.corpNm)).items || [];
+      const hit = matchByName(c.corpNm, own);
+      if (hit) mark(c, hit);
+    } catch { /* 개별 실패는 미확인 그대로 */ }
+  });
+  onUpdate();
+}
+
 function renderCandidates(name, cands, source, similar) {
   const root = $('#report');
   root.classList.remove('hidden');
@@ -2725,26 +2755,59 @@ function renderCandidates(name, cands, source, similar) {
         + `<span class="candsub">${esc(headSrc)} · 한글 표기 차이(ㅐ↔ㅔ, 된소리, 띄어쓰기)를 감안해 골랐습니다. 대표자·주소로 같은 회사인지 확인하세요</span>`
       : `「${esc(name)}」 ${isMfds ? '식약처 등록업체' : '동명·유사 업체'} <b>${cands.length}건</b> — 조회할 업체를 선택하세요`
         + `<span class="candsub">${esc(headSrc)}${isMfds ? ' · 금융위 법인 미검색이라 식약처 등록명으로 추천' : ''}</span>`));
-  cands.forEach((c) => {
-    const card = el('button', 'cand');
-    const meta = [
-      c.rep ? '대표 ' + esc(c.rep) : '',
-      c.bzno ? '사업자 ' + esc(c.bzno) : '',
-      c.lcns ? '허가 ' + esc(c.lcns) : '',
-      c.addr ? esc(c.addr) : '',
-    ].filter(Boolean).join(' · ');
-    const tag = (c.mfds ? '<span class="cand-tag">식약처 등록</span>' : '')
-      + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
-    card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
-    card.addEventListener('click', async () => {
-      root.innerHTML = `<div class="empty">「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…</div>`;
-      try { render(await (c.mfds ? finishLiveMfds(name, c) : finishLive(name, c))); }
-      catch (e) { root.innerHTML = `<div class="empty">조회 실패: ${esc(e.message)}</div>`; }
+
+  // 제조업 등록 요약 — 어느 후보를 골라야 하는지 한 줄로 알려 준다
+  const sum = el('div', 'cand-mksum', isMfds
+    ? '아래는 모두 <b>식약처 화장품제조업 등록업체</b>입니다'
+    : '화장품 제조업 등록 여부를 확인하는 중…');
+  box.appendChild(sum);
+
+  const list = el('div', 'cand-list');
+  box.appendChild(list);
+
+  const paint = () => {
+    list.innerHTML = '';
+    cands.forEach((c) => {
+      const card = el('button', 'cand');
+      const meta = [
+        c.rep ? '대표 ' + esc(c.rep) : '',
+        c.bzno ? '사업자 ' + esc(c.bzno) : '',
+        c.lcns ? '허가 ' + esc(c.lcns) : '',
+        c.addr ? esc(c.addr) : '',
+      ].filter(Boolean).join(' · ');
+      // 제조업 허가 배지 — 확인 전에는 '확인 중', 끝나면 등록/없음으로 바뀐다
+      const mkTag = c._mkState === '등록'
+        ? `<span class="cand-tag cand-mk-ok">✓ 제조업 등록${c._mkNo ? ` ${esc(c._mkNo)}` : ''}</span>`
+        : c._mkState === '미확인'
+          ? '<span class="cand-tag cand-mk-no">제조업 등록 없음</span>'
+          : '<span class="cand-tag cand-mk-wait">제조업 허가 확인 중…</span>';
+      const tag = mkTag
+        + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
+      card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
+      card.addEventListener('click', async () => {
+        root.innerHTML = `<div class="empty">「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…</div>`;
+        try { render(await (c.mfds ? finishLiveMfds(name, c) : finishLive(name, c))); }
+        catch (e) { root.innerHTML = `<div class="empty">조회 실패: ${esc(errText(e))}</div>`; }
+      });
+      list.appendChild(card);
     });
-    box.appendChild(card);
-  });
+  };
+  paint();
   root.appendChild(box);
   root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // 식약처 명단과 대조해 배지를 채운다. 목록은 이미 떠 있으므로 결과가 오는 대로 갈아 끼운다
+  // — 확인을 기다리느라 선택 자체가 늦어지면 안 된다.
+  if (!isMfds) {
+    annotateMakerStatus(cands, name, () => {
+      const n = cands.filter((c) => c._mkState === '등록').length;
+      const done = cands.every((c) => c._mkState);
+      sum.innerHTML = !done ? '화장품 제조업 등록 여부를 확인하는 중…'
+        : n ? `화장품 제조업 등록이 확인된 업체 <b>${n}건</b> — 직접 제조를 맡기려면 이 중에서 고르세요`
+        : '이 후보들 중 <b>화장품 제조업 등록이 확인된 업체가 없습니다</b> — 책임판매업만 등록(타사 OEM 위탁)이거나, 등록 업소명이 상호와 다를 수 있습니다';
+      paint();
+    }).catch(() => { sum.textContent = '제조업 등록 확인에 실패했습니다 — 업체를 선택해 개별 확인하세요'; });
+  }
 }
 
 function setProxyUI() {
