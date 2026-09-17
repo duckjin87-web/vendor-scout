@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 137;
+const BUILD = 138;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1412,6 +1412,77 @@ async function finishLiveMfds(name, cand) {
 
 // 1단계: 기준정보(동명업체 후보) 조회 → {candidates} 또는 {report}
 //  금융위 법인 후보 우선 → 없으면 식약처 등록업체 기준 후보 추천 → 그래도 없으면 상호명 조회
+// ── 홈페이지 주소로 업체 찾기 ──
+// 업체 사이트는 아는데 등기 상호를 모르는 경우가 많다. 브랜드명과 법인명이 다르거나
+// (노블테크 / (주)○○테크놀로지), 영문 표기라 한글로 뭘 쳐야 할지 모르는 경우다.
+// 그런 상태에서 주소를 그대로 검색창에 넣으면 상호로 취급돼 반드시 0건이 난다.
+// 국내 사이트는 하단이나 '오시는 길'에 사업자등록번호·상호를 적어 두게 되어 있다.
+// 그 값을 읽어 조회하면 된다 — 사업자번호가 잡히면 동명 업체 문제까지 한 번에 풀린다.
+// 서브도메인이 붙은 주소도 받아야 한다 — 영세 업체는 cellab.imweb.me 처럼 빌더에 얹는다
+const URLISH = /^(https?:\/\/|www\.)|^[a-z0-9][a-z0-9.-]{1,61}\.(co\.kr|kr|com|net|org|io|me|biz)(\/|$)/i;
+const isUrlish = (v) => URLISH.test(String(v || '').trim());
+// 사이트 안에서 사업자정보가 실려 있을 만한 곳 — 하단(메인)과 회사소개·오시는길 계열
+const SITE_INFO_HINT = /(company|about|intro|greeting|location|contact|map|오시는|회사|소개|연혁|찾아)/i;
+const BNO_RE = /(\d{3})\s*-\s*(\d{2})\s*-\s*(\d{5})/;
+const CORP_NAME_RES = [
+  /(?:상호|회사명|법인명|업체명)\s*[:：]?\s*((?:\(주\)|주식회사)?\s*[가-힣A-Za-z0-9()\s]{2,30}?)\s*(?:[|·\/]|대표|사업자|주소|$)/,
+  /((?:\(주\)|㈜|주식회사)\s*[가-힣A-Za-z0-9]{2,20})/,
+  /([가-힣A-Za-z0-9]{2,20}\s*(?:\(주\)|㈜|주식회사))/,
+];
+function siteBizInfo(text) {
+  const t = String(text || '').replace(/\s+/g, ' ');
+  const bm = t.match(BNO_RE);
+  const bno = bm ? `${bm[1]}${bm[2]}${bm[3]}` : null;
+  let nm = null;
+  for (const re of CORP_NAME_RES) {
+    const m = t.match(re);
+    if (m && m[1]) {
+      const v = m[1].replace(/\s+/g, ' ').replace(/^㈜/, '(주)').trim();
+      // 너무 일반적인 말이 잡히면 버린다
+      if (v.length >= 3 && !/^(주식회사|\(주\))$/.test(v) && !/(개인정보|이용약관|고객센터)/.test(v)) { nm = v; break; }
+    }
+  }
+  return { bno, name: nm };
+}
+// 주소를 받아 메인과 회사소개·오시는길 페이지를 훑어 사업자정보를 모은다
+async function lookupBySite(raw) {
+  if (!getProxy()) return { err: '프록시 미설정 — 주소로 찾으려면 실데이터 연결이 필요합니다' };
+  let url = String(raw).trim();
+  if (!/^https?:\/\//i.test(url)) url = `https://${url.replace(/^\/+/, '')}`;
+  let host = ''; try { host = new URL(url).hostname; } catch { return { err: '주소를 읽을 수 없습니다' }; }
+
+  const pages = [];
+  const first = await fetchPageSmart(url);
+  if (first.html) pages.push({ url: first.url || url, html: first.html });
+  // 메인에서 회사소개·오시는길 링크를 찾아 두 곳까지 더 본다(하단 사업자정보가 없을 때 대비)
+  if (first.html) {
+    const seen = new Set([String(first.url || url).replace(/\/+$/, '')]);
+    const targets = [];
+    for (const l of extractLinks(first.html, first.url || url)) {
+      const k = l.href.replace(/\/+$/, '');
+      if (seen.has(k)) continue;
+      if (SITE_INFO_HINT.test(l.anchor) || SITE_INFO_HINT.test(l.href)) { targets.push(l.href); seen.add(k); }
+      if (targets.length >= 2) break;
+    }
+    const subs = await mapLimit(targets, 2, async (u) => {
+      try { const r = await proxyOnlyGet('fetchPage', { url: u }); return { url: u, html: (r && r.text) || '' }; } catch { return null; }
+    });
+    subs.forEach((x) => { if (x && x.html) pages.push(x); });
+  }
+  if (!pages.length) return { err: `${host} 페이지를 열지 못했습니다 — 주소가 맞는지, 사이트가 열려 있는지 확인하세요`, host };
+
+  // 사업자번호가 하나라도 잡히면 그걸 최우선으로 쓴다
+  let found = { bno: null, name: null, from: null };
+  for (const pg of pages) {
+    const txt = harvestFromHtml(pg.html, pg.url).text;
+    const info = siteBizInfo(txt);
+    if (info.bno && !found.bno) { found.bno = info.bno; found.from = pg.url; }
+    if (info.name && !found.name) found.name = info.name;
+    if (found.bno && found.name) break;
+  }
+  return { ...found, host, tried: pages.length };
+}
+
 async function liveLookup(name) {
   // ── 사업자등록번호 입력/병기 지원 ── "143-81-19635" 또는 "코스맥스 143-81-19635"처럼
   //    번호가 섞이면 금융위 corp를 bzno로 직접 조회(동명 계열사 중 정확한 법인 특정 → 신뢰성↑)
@@ -4254,19 +4325,44 @@ function lookup(name, bno) {
   if (isConnected() && !report) {
     const root = $('#report');
     root.classList.remove('hidden');
+    // 조회 결과 처리 — 주소 경로와 상호 경로가 같은 처리를 쓴다
+    const onLive = (res) => {
+      if (res.candidates) renderCandidates(res.name, res.candidates, res.source, res.similar);
+      else render(res.report);
+    };
+    const onLiveErr = (e) => {
+      root.innerHTML =
+        `<div class="empty">실데이터 조회 실패: ${esc(errText(e))}<br>` +
+        `<span style="font-size:12.5px">프록시 주소·키·API 승인을 확인하세요. 데모 데이터로 대체하려면 아래를 누르세요.</span><br><br>` +
+        `<button class="act" id="fallbackBtn">데모 리포트 보기</button></div>`;
+      const fb = $('#fallbackBtn');
+      if (fb) fb.addEventListener('click', () => render(window.generateReport(nm || key)));
+    };
+
+    // 홈페이지 주소를 넣은 경우 — 그대로 상호로 검색하면 반드시 0건이다.
+    // 사이트에서 사업자등록번호·상호를 먼저 읽어 그걸로 조회한다.
+    if (nm && isUrlish(nm) && !bz) {
+      root.innerHTML = `<div class="empty">「${esc(nm)}」 사이트에서 사업자정보를 찾는 중…</div>`;
+      lookupBySite(nm).then((site) => {
+        if (site && (site.bno || site.name)) {
+          const q = [site.name, site.bno].filter(Boolean).join(' ');
+          root.innerHTML = `<div class="empty">${esc(site.host)}에서 `
+            + `${site.name ? `상호 「${esc(site.name)}」` : ''}${site.name && site.bno ? ' · ' : ''}`
+            + `${site.bno ? `사업자 ${esc(site.bno.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3'))}` : ''}`
+            + ` 확인 → 조회 중…</div>`;
+          pushRecent(site.name || site.host); renderRecent();
+          return liveLookup(q).then(onLive).catch(onLiveErr);
+        }
+        root.innerHTML = `<div class="empty">「${esc(nm)}」에서 사업자정보를 찾지 못했습니다`
+          + `${site && site.err ? ` — ${esc(site.err)}` : ''}<br>`
+          + `사이트 하단이나 '오시는 길'에 적힌 <b>상호</b> 또는 <b>사업자등록번호</b>로 다시 검색해 주세요.</div>`;
+      }).catch((e) => { root.innerHTML = `<div class="empty">주소 조회 실패: ${esc(errText(e))}</div>`; });
+      return;
+    }
     root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}${nm && bz ? ` · 사업자 ${bzDisp}` : ''}」</div>`;
     // 업체명 + 사업자번호 병기 → liveLookup이 사업자번호 일치 법인만 선별(교집합)
     const liveQuery = [nm, bz].filter(Boolean).join(' ');
-    liveLookup(liveQuery)
-      .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates, res.source, res.similar); else render(res.report); })
-      .catch((e) => {
-        root.innerHTML =
-          `<div class="empty">실데이터 조회 실패: ${esc(e.message)}<br>` +
-          `<span style="font-size:12.5px">프록시 주소·키·API 승인을 확인하세요. 데모 데이터로 대체하려면 아래를 누르세요.</span><br><br>` +
-          `<button class="act" id="fallbackBtn">데모 리포트 보기</button></div>`;
-        const fb = $('#fallbackBtn');
-        if (fb) fb.addEventListener('click', () => render(window.generateReport(nm || key)));
-      });
+    liveLookup(liveQuery).then(onLive).catch(onLiveErr);
     return;
   }
   // 범용성: 미등록 업체명은 이름 기반으로 데모 리포트 자동 생성
