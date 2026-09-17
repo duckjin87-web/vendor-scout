@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 140;
+const BUILD = 141;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1350,28 +1350,73 @@ function pickByKey(rec, re) {
 //        올바른 키가 준 '이 업체 레코드'가 포함되고 matchByName이 그것만 정확히 집어냄(할루시네이션 없음).
 // 주의: numOfRows 최대 500(초과 시 전체 호출 거부). 각 후보 500건.
 const MAKER_NAME_PARAMS = ['bssh_nm', 'Bssh_Nm', 'BSSH_NM', 'entpName', 'entp_name', 'prmisnEntpNm'];
+// 응답 어디에 총건수가 실려 있는지 API마다 달라 경로를 훑는다
+function totalCountOf(d) {
+  for (const path of ['response.body.totalCount', 'body.totalCount', 'totalCount', 'total_count']) {
+    let cur = d, ok = true;
+    for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
+    if (ok && cur != null && isFinite(Number(cur))) return Number(cur);
+  }
+  return null;
+}
+// ── 식약처 화장품제조업 조회 ──
+// 이 API는 업체명 파라미터를 무시하고 목록을 그대로 준다. 그래서 여태 첫 페이지(500건)만
+// 받아 거기서 상호를 찾고, 없으면 '미등록'이라고 했다. 그런데 화장품제조업체는 전국에
+// 4천 곳이 넘는다 — 십분의 일만 보고 없다고 한 셈이다. 실제로 노블테크주식회사(화장품제조,
+// 허가 2025-12-09)가 의약품안전나라에는 있는데 우리 화면에는 미등록으로 나왔다.
+// 이름으로 먼저 빠르게 찾아 보고, 못 찾으면 총건수를 읽어 명단 전체를 받아 다시 찾는다.
+// 어디까지 훑었는지(full)를 함께 돌려줘서, 일부만 본 상태로 '등록 없음'이라고 말하지 않게 한다.
+const MAKER_PAGE = 500;
+const MAKER_MAX_PAGES = 20;                 // 1만 건 상한 — 명단 규모를 넉넉히 덮는다
+function pickItems(d) {
+  for (const path of ['response.body.items.item', 'body.items.item', 'body.items', 'items']) {
+    let cur = d, ok = true;
+    for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
+    if (ok && cur != null) return Array.isArray(cur) ? cur : [cur].filter(Boolean);
+  }
+  return [];
+}
 async function makerLookup(nm) {
-  const settled = await Promise.allSettled(
-    MAKER_NAME_PARAMS.map((p) => proxyOnlyGet('maker', { [p]: nm, numOfRows: '500' })),
-  );
   const merged = [];
   const seen = new Set();
-  let anyOk = false, lastErr = '';
-  for (const s of settled) {
-    if (s.status !== 'fulfilled') { lastErr = String(s.reason && s.reason.message || s.reason); continue; }
+  let anyOk = false, lastErr = '', total = null;
+  const absorb = (d) => {
     anyOk = true;
-    const list = listOf(s.value, ['response.body.items.item', 'body.items', 'items']);
-    for (const r of list) {
+    if (total == null) total = totalCountOf(d);
+    for (const r of pickItems(d)) {
       const sig = JSON.stringify(r);
-      if (seen.has(sig)) continue;      // 후보키 간 중복 제거
+      if (seen.has(sig)) continue;
       seen.add(sig);
       merged.push(r);
-      if (merged.length >= 4000) break; // 안전 상한
     }
-    if (merged.length >= 4000) break;
+  };
+
+  // ① 업체명 파라미터가 먹는 키가 있는지 — 먹으면 몇 건만 와서 가장 빠르다
+  const first = await Promise.allSettled(
+    MAKER_NAME_PARAMS.map((p) => proxyOnlyGet('maker', { [p]: nm, numOfRows: String(MAKER_PAGE), pageNo: '1' })),
+  );
+  for (const s of first) {
+    if (s.status !== 'fulfilled') { lastErr = String((s.reason && s.reason.message) || s.reason); continue; }
+    absorb(s.value);
   }
   if (!anyOk) throw new Error(lastErr || '식약처 제조업 조회 실패');
-  return { items: merged };
+  if (matchByNameApp(nm, merged)) {
+    return { items: merged, total, scanned: merged.length, full: true };
+  }
+
+  // ② 못 찾았으면 명단 전체를 훑는다 — 이름 필터가 안 먹은 것이므로 페이지를 넘겨야 한다
+  const pages = total != null ? Math.min(MAKER_MAX_PAGES, Math.ceil(total / MAKER_PAGE)) : 1;
+  if (pages > 1) {
+    const rest = await mapLimit(
+      Array.from({ length: pages - 1 }, (_, i) => i + 2), 3,
+      async (pg) => {
+        try { return await proxyOnlyGet('maker', { numOfRows: String(MAKER_PAGE), pageNo: String(pg) }); }
+        catch { return null; }
+      });
+    rest.forEach((d) => { if (d) absorb(d); });
+  }
+  const full = total == null ? false : merged.length >= total || pages >= Math.ceil(total / MAKER_PAGE);
+  return { items: merged, total, scanned: merged.length, full };
 }
 
 // 식약처 화장품제조업 등록업체 기준 후보 — 상호명으로 조회해 등록 업체명(중복제거) 목록화
@@ -2720,22 +2765,27 @@ async function finishLive(name, corp) {
 async function annotateMakerStatus(cands, typed, onUpdate) {
   if (!getProxy() || !cands.length) return;
   const core = stripCorp(typed || '').replace(/\s/g, '') || typed;
-  let pool = [];
-  try { pool = (await makerLookup(core)).items || []; } catch { /* 실패해도 개별 확인으로 진행 */ }
-  const mark = (c, hit) => {
-    c._mkState = hit ? '등록' : '미확인';
+  let pool = [], poolFull = false;
+  try {
+    const r = await makerLookup(core);
+    pool = r.items || [];
+    poolFull = !!r.full;                      // 명단을 끝까지 훑었나
+  } catch { /* 실패해도 개별 확인으로 진행 */ }
+  const mark = (c, hit, full) => {
+    // 못 찾았을 때 '없음'이라고 하려면 명단을 끝까지 봤어야 한다. 아니면 '확인 못 함'이다.
+    c._mkState = hit ? '등록' : (full ? '없음' : '미확인');
     if (hit) c._mkNo = hit.LCNS_NO || hit.lcnsNo || hit.PRMISN_NO || hit.prmisnNo || null;
   };
-  cands.forEach((c) => { if (c.mfds) { c._mkState = '등록'; } else mark(c, matchByName(c.corpNm || '', pool)); });
+  cands.forEach((c) => { if (c.mfds) { c._mkState = '등록'; } else mark(c, matchByName(c.corpNm || '', pool), poolFull); });
   onUpdate();
-  // 명단이 검색어로 좁게 걸러져 나오면 다른 후보는 그 안에 없다 — 못 찾은 쪽만 따로 확인한다
+  // 명단 전체를 이미 훑었다면 더 볼 게 없다. 일부만 봤을 때만 후보별로 한 번 더 확인한다.
+  if (poolFull) return;
   const rest = cands.filter((c) => c._mkState === '미확인' && c.corpNm).slice(0, 6);
   if (!rest.length) return;
   await mapLimit(rest, 2, async (c) => {
     try {
-      const own = (await makerLookup(stripCorp(c.corpNm).replace(/\s/g, '') || c.corpNm)).items || [];
-      const hit = matchByName(c.corpNm, own);
-      if (hit) mark(c, hit);
+      const r = await makerLookup(stripCorp(c.corpNm).replace(/\s/g, '') || c.corpNm);
+      mark(c, matchByName(c.corpNm, r.items || []), !!r.full);
     } catch { /* 개별 실패는 미확인 그대로 */ }
   });
   onUpdate();
@@ -2778,9 +2828,11 @@ function renderCandidates(name, cands, source, similar) {
       // 제조업 허가 배지 — 확인 전에는 '확인 중', 끝나면 등록/없음으로 바뀐다
       const mkTag = c._mkState === '등록'
         ? `<span class="cand-tag cand-mk-ok">✓ 제조업 등록${c._mkNo ? ` ${esc(c._mkNo)}` : ''}</span>`
-        : c._mkState === '미확인'
+        : c._mkState === '없음'
           ? '<span class="cand-tag cand-mk-no">제조업 등록 없음</span>'
-          : '<span class="cand-tag cand-mk-wait">제조업 허가 확인 중…</span>';
+          : c._mkState === '미확인'
+            ? '<span class="cand-tag cand-mk-wait">제조업 등록 확인 못 함</span>'
+            : '<span class="cand-tag cand-mk-wait">제조업 허가 확인 중…</span>';
       const tag = mkTag
         + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
       card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;

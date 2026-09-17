@@ -701,8 +701,13 @@ function assembleLiveReport(name, corp, res) {
   //   확인   등록 레코드 일치
   //   없음   조회는 정상인데 명단에 없음  → 주의 문구 + 리스크
   //   불가   API 오류·미조회             → 판단 보류
+  // '없음'이라고 말하려면 명단을 끝까지 봤어야 한다. 여태 첫 500건만 보고 없다고 했는데,
+  // 화장품제조업체는 전국 4천 곳이 넘는다 — 노블테크주식회사가 실제로 등록돼 있는데도
+  // 우리 화면에는 미등록으로 나왔다. 전체를 훑지 못했으면 '불가'로 두고 판단을 보류한다.
+  const mkFull = !!(R.maker && R.maker.ok && R.maker.data && R.maker.data.full);
+  const mkTotal = (R.maker && R.maker.ok && R.maker.data && R.maker.data.total) || null;
   const mkState = mk ? '확인'
-    : (R.maker && R.maker.ok && mkList.length ? '없음' : '불가');
+    : (R.maker && R.maker.ok && mkList.length && mkFull ? '없음' : '불가');
   const mkScanN = mkList.length;
   const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? mk.PRMISN_NO ?? mk.prmisnNo ?? null) : null;
 
@@ -803,14 +808,19 @@ function assembleLiveReport(name, corp, res) {
       mkState === '확인'
         ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인')
         : mkState === '없음'
-          ? `★ 식약처 화장품제조업 등록 명단(조회 ${mkScanN.toLocaleString()}건)에서 이 상호를 찾지 못했습니다. `
+          ? `★ 식약처 화장품제조업 등록 명단 전체(${mkScanN.toLocaleString()}건`
+            + `${mkTotal ? ` / 전체 ${mkTotal.toLocaleString()}건` : ''})를 확인했으나 이 상호를 찾지 못했습니다. `
             + '화장품을 직접 제조하려면 화장품법상 제조업 등록이 반드시 있어야 하므로, 다음 중 하나입니다 — '
             + '① 제조는 하지 않고 책임판매업만 등록(생산은 타사 OEM 위탁), '
             + '② 등록 업소명이 상호와 달라 매칭 실패(법인명 ≠ 업소명), '
             + '③ 미등록. '
             + '제조 위탁을 맡길 업체라면 ①·③은 결격 사유입니다 — 방문 전 화장품제조업 등록필증 사본을 요청해 '
             + '등록번호·업소명·소재지를 대조하세요.'
-          : why('maker', '식약처 제조업 조회에 실패해 등록 여부를 확인하지 못했습니다 — 판단 보류')),
+          : why('maker', mkList.length
+            ? `식약처 제조업 명단을 끝까지 확인하지 못했습니다(${mkScanN.toLocaleString()}건 조회`
+              + `${mkTotal ? ` / 전체 ${mkTotal.toLocaleString()}건` : ''}). 이 범위에는 없지만 명단 밖에 있을 수 있어 `
+              + '등록 없음으로 단정하지 않습니다 — 의약품안전나라(nedrug.mfds.go.kr) 업체정보에서 직접 확인하세요.'
+            : '식약처 제조업 조회에 실패해 등록 여부를 확인하지 못했습니다 — 판단 보류')),
     f('공장/제조소 소재지', fctAddr || mkAddr || null, (fctAddr || mkAddr) ? 'A' : 'D',
       fctAddr ? '산업단지공단 공장등록' : (mkAddr ? '식약처 화장품제조업 API' : '산업단지공단 공장등록'),
       (fctAddr || mkAddr) ? today : null,
@@ -1319,7 +1329,11 @@ function assembleLiveReport(name, corp, res) {
     { key: 'maker', name: '식약처 화장품제조업', ok: !!mk, warn: !mk && !!(R.maker && R.maker.ok),
       detail: mk ? `제조업 등록 확인${mkRep ? ` · 대표 ${mkRep}` : ''}${mkAddr ? ` · ${mkAddr}` : ''}`
         : (!R.maker ? '자료 미제출/미등록' : (!R.maker.ok ? briefErr(R.maker.err)
-          : (mkList.length ? `⚠ 제조업 허가 등록 없음 — 조회 ${mkList.length}건 중 상호 일치 0건(미등록·책임판매업만 등록·업소명 표기 상이)` : '등록 0건 — 책임판매업만 등록 가능성'))) },
+          : (mkList.length
+            ? (mkFull
+              ? `⚠ 제조업 허가 등록 없음 — 명단 전체 ${mkList.length.toLocaleString()}건 중 상호 일치 0건`
+              : `판단 보류 — 명단 ${mkList.length.toLocaleString()}건${mkTotal ? `/전체 ${mkTotal.toLocaleString()}건` : ''}만 조회돼 등록 여부 미확정`)
+            : '등록 0건 — 책임판매업만 등록 가능성'))) },
     { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, warn: !fctAddr && !!(R.factory && R.factory.ok),
       detail: fctAddr ? `공장 확인${fctEmpl ? ` · 종업원 ${fctEmpl}명` : ''}${fctProduct ? ' · ' + fctProduct : ''}`
         : (!R.factory ? '자료 미제출/미등록' : (!R.factory.ok ? briefErr(R.factory.err) : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '공장등록 0건(미등록/임대 가능)'))) },
