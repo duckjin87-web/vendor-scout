@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 141;
+const BUILD = 142;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2762,6 +2762,48 @@ async function finishLive(name, corp) {
 // 동명 업체 중 어느 쪽이 제조사인지 모른 채 찍어서 들어가야 했다.
 // 먼저 검색어로 명단을 한 번 받아 전부 대조하고(대개 후보들이 비슷한 이름이라 여기서 걸린다),
 // 거기서 못 찾은 후보만 자기 이름으로 한 번 더 확인한다.
+// 주소에서 시·도만 뽑는다 — 같은 상호가 여러 지역에 있을 때 가르는 가장 굵은 기준
+const SIDO = /(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/;
+const sidoOf = (v) => (String(v || '').match(SIDO) || [])[1] || null;
+// 시·도만으로는 못 가른다 — 성남과 남양주가 둘 다 경기도다. 시·군·구까지 묶어 키로 쓴다.
+function locKey(addr) {
+  const s = String(addr || '').replace(/\s/g, '');
+  const sido = sidoOf(s);
+  if (!sido) return null;
+  const m = s.match(/(?:시|도)([가-힣]{2,6}(?:시|군|구))/) || s.match(/([가-힣]{2,6}(?:시|군|구))/);
+  return sido + (m ? m[1] : '');
+}
+const normNm = (v) => stripCorp(String(v || '')).replace(/\s/g, '');
+// 식약처 레코드에서 필요한 값만 꺼낸다
+function mkFields(r) {
+  return {
+    nm: pickByKey(r, /BSSH_NM|CMPNY_NM|ENTRPS_?NM|MANF|업체|회사|제조사/i) || pickByKey(r, /_NM$/i),
+    rep: pickByKey(r, /PRSNL|PRSDNT|RPRSNTV|REPRE|대표/i),
+    addr: pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i),
+    lcns: pickByKey(r, /LCNS_?NO|PERMIT|허가/i),
+  };
+}
+// 후보 ↔ 식약처 레코드 매칭은 엄격해야 한다.
+// 여태 '아무 필드에 상호가 포함되면 일치'로 봐서, 부산·성남·대전의 노블테크 세 곳이
+// 남양주 노블테크주식회사 한 건에 모두 걸려 전부 '제조업 등록'으로 표시됐다.
+// 이름이 같아야 하고, 주소나 대표자가 있으면 그것까지 맞아야 한다.
+function strictMakerMatch(cand, list) {
+  const key = normNm(cand.corpNm);
+  if (key.length < 2) return null;
+  const sameName = (list || []).map(mkFields).filter((x) => x.nm && normNm(x.nm) === key);
+  if (!sameName.length) return null;
+  const cLoc = locKey(cand.addr), cRep = String(cand.rep || '').replace(/\s/g, '');
+  // 대표자가 맞으면 가장 확실하다
+  if (cRep) { const byRep = sameName.find((x) => String(x.rep || '').replace(/\s/g, '') === cRep); if (byRep) return byRep; }
+  if (cLoc) {
+    const byLoc = sameName.find((x) => locKey(x.addr) === cLoc);
+    if (byLoc) return byLoc;
+    // 후보에도 레코드에도 주소가 있는데 시·군·구가 다 다르면 남의 회사다
+    if (sameName.every((x) => locKey(x.addr))) return null;
+  }
+  return sameName.length === 1 && !cLoc ? sameName[0] : null;
+}
+
 async function annotateMakerStatus(cands, typed, onUpdate) {
   if (!getProxy() || !cands.length) return;
   const core = stripCorp(typed || '').replace(/\s/g, '') || typed;
@@ -2774,18 +2816,46 @@ async function annotateMakerStatus(cands, typed, onUpdate) {
   const mark = (c, hit, full) => {
     // 못 찾았을 때 '없음'이라고 하려면 명단을 끝까지 봤어야 한다. 아니면 '확인 못 함'이다.
     c._mkState = hit ? '등록' : (full ? '없음' : '미확인');
-    if (hit) c._mkNo = hit.LCNS_NO || hit.lcnsNo || hit.PRMISN_NO || hit.prmisnNo || null;
+    if (hit) { c._mkNo = hit.lcns || null; c._mkAddr = hit.addr || null; }
   };
-  cands.forEach((c) => { if (c.mfds) { c._mkState = '등록'; } else mark(c, matchByName(c.corpNm || '', pool), poolFull); });
+  cands.forEach((c) => {
+    if (c.mfds) { c._mkState = '등록'; return; }
+    mark(c, strictMakerMatch(c, pool), poolFull);
+  });
+
+  // ── 식약처 명단에만 있는 업체를 후보에 더한다 ──
+  // 금융위 법인 검색에 안 잡히는 업체가 있다. 노블테크주식회사(남양주)가 그랬는데,
+  // 정작 화장품 제조업 허가를 가진 건 그 업체였다. 제조를 맡길 곳을 고르는 화면에서
+  // 허가 보유 업체가 목록에 없으면 이 화면은 제 일을 못 한 것이다.
+  if (pool.length && core.length >= 2) {
+    // 상호만으로 중복을 판단하면 안 된다. 노블테크는 부산·성남·대전·남양주에 각각 있고
+    // 전부 이름이 같다 — 상호가 같다는 이유로 남양주를 빼면 정작 허가를 가진 곳이 사라진다.
+    const have = new Set(cands.map((c) => `${normNm(c.corpNm)}|${locKey(c.addr) || ''}`));
+    const add = [];
+    const seen = new Set();
+    pool.forEach((r) => {
+      const x = mkFields(r);
+      if (!x.nm) return;
+      const k = normNm(x.nm);
+      const dedup = `${k}|${locKey(x.addr) || ''}`;
+      if (k.length < 2 || have.has(dedup) || seen.has(dedup)) return;
+      // 검색어를 품고 있거나 표기가 비슷한 업소명만
+      if (!(k.includes(core) || core.includes(k) || nameSimilarity(core, x.nm) >= 0.8)) return;
+      seen.add(dedup);
+      add.push({ corpNm: x.nm, rep: x.rep, addr: x.addr, lcns: x.lcns, mfds: true, _mkState: '등록', _mkNo: x.lcns });
+    });
+    if (add.length) cands.push(...add.slice(0, 10));
+  }
   onUpdate();
+
   // 명단 전체를 이미 훑었다면 더 볼 게 없다. 일부만 봤을 때만 후보별로 한 번 더 확인한다.
   if (poolFull) return;
   const rest = cands.filter((c) => c._mkState === '미확인' && c.corpNm).slice(0, 6);
   if (!rest.length) return;
   await mapLimit(rest, 2, async (c) => {
     try {
-      const r = await makerLookup(stripCorp(c.corpNm).replace(/\s/g, '') || c.corpNm);
-      mark(c, matchByName(c.corpNm, r.items || []), !!r.full);
+      const r = await makerLookup(normNm(c.corpNm) || c.corpNm);
+      mark(c, strictMakerMatch(c, r.items || []), !!r.full);
     } catch { /* 개별 실패는 미확인 그대로 */ }
   });
   onUpdate();
@@ -2834,6 +2904,7 @@ function renderCandidates(name, cands, source, similar) {
             ? '<span class="cand-tag cand-mk-wait">제조업 등록 확인 못 함</span>'
             : '<span class="cand-tag cand-mk-wait">제조업 허가 확인 중…</span>';
       const tag = mkTag
+        + (c.mfds && !isMfds ? '<span class="cand-src">식약처 명단</span>' : '')
         + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
       card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
       card.addEventListener('click', async () => {
@@ -2854,9 +2925,14 @@ function renderCandidates(name, cands, source, similar) {
     annotateMakerStatus(cands, name, () => {
       const n = cands.filter((c) => c._mkState === '등록').length;
       const done = cands.every((c) => c._mkState);
+      const added = cands.filter((c) => c.mfds).length;
       sum.innerHTML = !done ? '화장품 제조업 등록 여부를 확인하는 중…'
         : n ? `화장품 제조업 등록이 확인된 업체 <b>${n}건</b> — 직접 제조를 맡기려면 이 중에서 고르세요`
+          + (added ? `<br><span class="cand-mkadd">그중 ${added}건은 금융위 법인 검색에는 없고 <b>식약처 제조업 명단에서 찾은 업체</b>입니다</span>` : '')
         : '이 후보들 중 <b>화장품 제조업 등록이 확인된 업체가 없습니다</b> — 책임판매업만 등록(타사 OEM 위탁)이거나, 등록 업소명이 상호와 다를 수 있습니다';
+      // 후보가 늘었으면 머리글의 건수도 맞춰 준다
+      const cnt = box.querySelector('.candhead b');
+      if (cnt) cnt.textContent = `${cands.length}건`;
       paint();
     }).catch(() => { sum.textContent = '제조업 등록 확인에 실패했습니다 — 업체를 선택해 개별 확인하세요'; });
   }
