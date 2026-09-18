@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 146;
+const BUILD = 147;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -219,48 +219,6 @@ function mapParams(logical, map) {
 
 // 프록시 비정상응답(res.ok=false) 본문에서 사람이 읽을 오류 메시지 추출
 // (프록시가 { error, detail, upstreamStatus } 형태로 실어보냄. error가 객체여도 문자열화)
-// ── 플랫폼(Vercel) 오류 판별 ──
-// 프록시 함수가 아예 돌지 못하면 우리 JSON이 아니라 Vercel 오류 페이지(HTML)가 온다.
-// 여태 그 본문을 200자로 잘라 그대로 보여줬는데, 정작 원인을 말해 주는 오류코드는
-// 본문 아래쪽에 있어서 매번 잘려 나갔다 — 두 번이나 엉뚱한 곳을 고친 이유다.
-// 코드는 응답 헤더(x-vercel-error)에도 실리고 본문에도 찍히니 양쪽을 다 본다.
-let _platformErr = null;   // 이번 조회에서 마지막으로 본 플랫폼 오류 {code, status, id}
-let _corpErr = null;       // 금융위 corp 조회가 '실패'했는지(0건과 구분) — 리포트 진단용
-const VERCEL_CODE_HINT = {
-  FUNCTION_INVOCATION_FAILED: '프록시 함수가 실행 중 죽었습니다',
-  FUNCTION_INVOCATION_TIMEOUT: '프록시 함수가 제한시간을 넘겼습니다(공공 API 응답 지연)',
-  FUNCTION_PAYLOAD_TOO_LARGE: '응답이 너무 큽니다',
-  FUNCTION_THROTTLED: '프록시 호출이 한도에 걸려 제한되었습니다',
-  EDGE_FUNCTION_INVOCATION_FAILED: '프록시 함수가 실행 중 죽었습니다',
-  EDGE_FUNCTION_INVOCATION_TIMEOUT: '프록시 함수가 제한시간을 넘겼습니다',
-  DEPLOYMENT_PAUSED: '배포가 일시중지 상태입니다',
-  DEPLOYMENT_DISABLED: '배포가 비활성화되었습니다',
-  DEPLOYMENT_BLOCKED: '배포가 차단되었습니다',
-  DEPLOYMENT_NOT_FOUND: '배포를 찾을 수 없습니다(주소 확인 필요)',
-  NOT_FOUND: '해당 주소에 함수가 없습니다(프록시 주소 확인 필요)',
-  BANDWIDTH_LIMIT_EXCEEDED: '대역폭 한도를 초과했습니다',
-  TOO_MANY_REQUESTS: '요청이 너무 많아 차단되었습니다',
-};
-function platformErrFrom(res, body) {
-  const isHtml = /^\s*<(!doctype|html)/i.test(body || '');
-  const hdr = (() => { try { return res.headers.get('x-vercel-error') || ''; } catch { return ''; } })();
-  if (!isHtml && !hdr) return null;
-  // 본문에서 코드 추출. Vercel 오류 페이지는 `<strong>Code</strong>: <code>XXX</code>`처럼
-  // 태그가 중간에 끼어 있어서 'Code:'만 찾으면 못 잡는다. 여러 형태를 순서대로 본다.
-  const b = String(body || '');
-  const m = b.match(/<code>\s*([A-Z][A-Z_]{5,60})\s*<\/code>/)          // 표준 오류 페이지
-    || b.match(/Code[^A-Za-z]{0,20}([A-Z][A-Z_]{5,60})/)                 // 태그가 다른 변형
-    || b.match(/<title>[^<]*?\d{3}\s*:\s*([A-Z][A-Z_]{5,60})/)           // 제목줄 폴백
-    || b.match(/\b([A-Z][A-Z_]{8,60})\b/);                               // 마지막 수단
-  const code = hdr || (m ? m[1] : '');
-  const id = (() => { try { return res.headers.get('x-vercel-id') || ''; } catch { return ''; } })();
-  return { code: code || `HTTP_${res.status}`, status: res.status, id };
-}
-function platformErrText(p) {
-  const why = VERCEL_CODE_HINT[p.code] || '프록시가 우리 함수 대신 오류 페이지를 돌려줬습니다';
-  return `프록시 장애 — ${why} (HTTP ${p.status} · ${p.code})`;
-}
-
 async function proxyErrMsg(res) {
   const body = await res.text().catch(() => '');
   try {
@@ -270,29 +228,7 @@ async function proxyErrMsg(res) {
     const parts = [j.error, j.detail, j.hint].map(errText).filter(Boolean);
     if (parts.length) return parts.join(' · ');
   } catch { /* JSON 아님 */ }
-  const p = platformErrFrom(res, body);
-  if (p) { _platformErr = p; return platformErrText(p); }
   return body ? body.slice(0, 200) : `프록시 HTTP ${res.status}`;
-}
-
-// ── 프록시 사전 점검 ──
-// 상류를 전혀 부르지 않는 ping 한 번으로 '함수가 살아 있는가'를 먼저 가른다.
-// 죽어 있으면 조회를 스무 번 날려 전 항목을 조회불가로 칠하는 대신, 원인을 바로 말한다.
-async function proxyPing() {
-  if (!getProxy()) return { alive: false, reason: '프록시 주소가 설정되지 않았습니다' };
-  let res;
-  try { res = await fetchRetry(buildProxyUrl({ service: 'ping' }), { headers: { Accept: 'application/json' } }, 2); }
-  catch (e) { return { alive: false, reason: `프록시에 연결하지 못했습니다 (${e.message})` }; }
-  const body = await res.text().catch(() => '');
-  const p = platformErrFrom(res, body);
-  if (p) { _platformErr = p; return { alive: false, reason: platformErrText(p), platform: p }; }
-  try {
-    const j = JSON.parse(body);
-    if (j && j.ok) return { alive: true, keys: j.keys || {} };
-    // ping을 모르는 구버전 프록시라도, JSON이 왔다는 건 함수가 살아 있다는 뜻이다
-    return { alive: true, keys: null, legacy: true };
-  } catch { /* JSON 아님 */ }
-  return { alive: false, reason: `프록시가 JSON이 아닌 응답을 돌려줬습니다 (HTTP ${res.status})` };
 }
 
 // 브라우저 fetch 재시도 — 순간 네트워크 실패("Failed to fetch")·연결끊김을 짧게 재시도.
@@ -1482,14 +1418,7 @@ async function liveLookup(name) {
   const bnoM = String(name).match(/(\d{3})-?(\d{2})-?(\d{5})/) || String(name).match(/(?<!\d)(\d{10})(?!\d)/);
   const bno = bnoM ? bnoM[0].replace(/\D/g, '') : null;
   const nameOnly = bno ? String(name).replace(bnoM[0], '').replace(/[\s,]+/g, ' ').trim() : String(name);
-  // 조회 실패를 삼키면 '법인 미검색'으로 둔갑한다. 한국콜마처럼 큰 회사가 '미검색'으로
-  // 찍혀 나온 게 그래서였다 — 실제로는 프록시가 죽어 corp 호출 자체가 실패한 것이었다.
-  // 실패 사유를 남겨 두고, 한 건도 못 받았을 때 그 사유를 리포트에 싣는다.
-  _corpErr = null;
-  const tryCorp = async (q, extra) => {
-    try { return window.mapCorpCandidates(await proxyGet('corp', { ...(q ? { name: q } : {}), ...(extra || {}) })); }
-    catch (e) { _corpErr = e && e.message ? e.message : String(e); return []; }
-  };
+  const tryCorp = async (q, extra) => { try { return window.mapCorpCandidates(await proxyGet('corp', { ...(q ? { name: q } : {}), ...(extra || {}) })); } catch { return []; } };
   if (bno) {
     // (1) 금융위 corp를 bzno 파라미터로 직접 조회(지원 시 정확) …
     let byBno = await tryCorp(null, { bzno: bno });
@@ -2707,7 +2636,6 @@ async function finishLive(name, corp) {
     ? { ok: true, data: travel }
     : { ok: false, err: `${kakaoErr || '실패'} — 추정치 대체` };
 
-  if (_corpErr) res.corpErr = { ok: false, err: _corpErr };
   return window.assembleLiveReport(corp.corpNm || name, corp, res);
 }
 
@@ -4292,43 +4220,6 @@ function renderRecent() {
     c.addEventListener('click', () => { $('#q').value = c.dataset.q; lookup(c.dataset.q); }));
 }
 
-// ── 프록시 장애 화면 ──
-// 전 항목을 '조회불가'로 칠해 놓으면 업체에 자료가 없는 것처럼 보인다. 실제로는 서버가
-// 죽은 것이니, 업체 자료인 양 보여주지 말고 무엇이 잘못됐는지와 무엇을 확인할지를 적는다.
-function renderProxyDown(ping) {
-  const root = $('#report');
-  root.classList.remove('hidden');
-  const p = ping.platform || _platformErr;
-  const steps = p && /NOT_FOUND/.test(p.code)
-    ? ['프록시 주소가 맞는지 확인하세요 (예: https://<프로젝트>.vercel.app/api/proxy)',
-       'Vercel 대시보드에서 최신 배포가 <b>Ready</b> 상태인지 확인하세요']
-    : p && /(PAUSED|DISABLED|BLOCKED|LIMIT|THROTTLED|TOO_MANY)/.test(p.code)
-      ? ['Vercel 대시보드 → Usage에서 한도 초과·일시중지 여부를 확인하세요',
-         '한도 문제라면 결제 주기가 바뀌거나 한도를 올려야 풀립니다']
-      : ['Vercel 대시보드 → Deployments → 최신 배포 → <b>Functions / Logs</b>에서 오류를 확인하세요',
-         '환경변수(DATA_GO_KR_API_KEY 등)가 Production에 설정돼 있는지 확인하세요'];
-  root.innerHTML =
-    `<div class="empty" style="text-align:left;max-width:720px;margin:0 auto">`
-    + `<div style="font-size:15px;font-weight:700;margin-bottom:8px">조회를 시작하지 못했습니다 — 프록시(서버)가 응답하지 않습니다</div>`
-    + `<div style="margin-bottom:10px">${esc(ping.reason || '원인 미상')}</div>`
-    + (p && p.id ? `<div style="font-size:12px;opacity:.7;margin-bottom:10px">추적 ID: ${esc(p.id)}</div>` : '')
-    + `<div style="font-size:13px;line-height:1.7">확인할 것<ol style="margin:6px 0 0 18px">`
-    + steps.map((s) => `<li>${s}</li>`).join('')
-    + `</ol></div>`
-    + `<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">`
-    + `<button class="act" id="pingRetry">다시 점검</button>`
-    + `<button class="act" id="pingDemo">데모 리포트 보기</button></div>`
-    + `<div style="font-size:12px;opacity:.7;margin-top:10px">업체 자료가 없는 것이 아니라 서버에 닿지 못한 것입니다 — 이 화면의 내용을 업체 평가에 쓰지 마세요.</div>`
-    + `</div>`;
-  const r = $('#pingRetry');
-  if (r) r.addEventListener('click', () => proxyPing().then((p2) => {
-    if (p2.alive) { root.innerHTML = `<div class="empty">프록시 정상 — 다시 조회해 주세요.</div>`; }
-    else renderProxyDown(p2);
-  }));
-  const d = $('#pingDemo');
-  if (d) d.addEventListener('click', () => render(window.generateReport('데모')));
-}
-
 function lookup(name, bno) {
   const nm = (name || '').trim();
   const bz = (bno || '').replace(/\D/g, '');                 // 사업자번호 10자리(선택)
@@ -4366,25 +4257,16 @@ function lookup(name, bno) {
     root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}${nm && bz ? ` · 사업자 ${bzDisp}` : ''}」</div>`;
     // 업체명 + 사업자번호 병기 → liveLookup이 사업자번호 일치 법인만 선별(교집합)
     const liveQuery = [nm, bz].filter(Boolean).join(' ');
-    _platformErr = null;
-    // 프록시가 죽어 있으면 조회를 스무 번 날려 봐야 전부 같은 오류다. 먼저 한 번 두드려 본다.
-    proxyPing().then((ping) => {
-      if (!ping.alive) { renderProxyDown(ping); return; }
-      // 키가 빠져 있으면 어느 소스가 왜 비는지 미리 알려 준다(조회는 그대로 진행)
-      const miss = ping.keys ? Object.entries(ping.keys).filter(([, v]) => !v).map(([k]) => k) : [];
-      if (miss.length) console.warn('프록시 환경변수 미설정:', miss.join(', '));
-      return liveLookup(liveQuery)
-        .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates, res.source, res.similar); else render(res.report); });
-    }).catch((e) => {
-      // 조회 도중 프록시가 죽은 경우도 같은 화면으로 안내한다
-      if (_platformErr) { renderProxyDown({ alive: false, reason: platformErrText(_platformErr), platform: _platformErr }); return; }
-      root.innerHTML =
-        `<div class="empty">실데이터 조회 실패: ${esc(e.message)}<br>` +
-        `<span style="font-size:12.5px">프록시 주소·키·API 승인을 확인하세요. 데모 데이터로 대체하려면 아래를 누르세요.</span><br><br>` +
-        `<button class="act" id="fallbackBtn">데모 리포트 보기</button></div>`;
-      const fb = $('#fallbackBtn');
-      if (fb) fb.addEventListener('click', () => render(window.generateReport(nm || key)));
-    });
+    liveLookup(liveQuery)
+      .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates, res.source, res.similar); else render(res.report); })
+      .catch((e) => {
+        root.innerHTML =
+          `<div class="empty">실데이터 조회 실패: ${esc(e.message)}<br>` +
+          `<span style="font-size:12.5px">프록시 주소·키·API 승인을 확인하세요. 데모 데이터로 대체하려면 아래를 누르세요.</span><br><br>` +
+          `<button class="act" id="fallbackBtn">데모 리포트 보기</button></div>`;
+        const fb = $('#fallbackBtn');
+        if (fb) fb.addEventListener('click', () => render(window.generateReport(nm || key)));
+      });
     return;
   }
   // 범용성: 미등록 업체명은 이름 기반으로 데모 리포트 자동 생성

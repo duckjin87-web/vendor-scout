@@ -675,9 +675,6 @@ function assembleLiveReport(name, corp, res) {
   // 장황한 상류 오류를 짧은 사유로 정규화 — "조회불가"/"자료 미제출" 등 간략 표기(사용자 요청)
   const briefErr = (msg) => {
     const m = String(msg || '');
-    // 프록시(서버)가 죽은 건 '자료가 없다'와 전혀 다른 이야기다. 짧게 줄이면 원인이 지워지니
-    // 이것만은 그대로 통과시킨다 — 어느 코드로 죽었는지가 복구의 유일한 단서다.
-    if (/^프록시 장애/.test(m)) return m;
     if (/미제출|없음|0건|미검색|미등록|미수록/.test(m) && !/HTTP|50\d|타임아웃|서버|실패|오류/.test(m)) return '자료 미제출/미등록';
     if (/50\d|서버 오류|API 서버|점검|과부하|일시적/.test(m)) return '조회불가 (제공기관 서버 오류)';
     if (/타임아웃|지연|deadline|abort/i.test(m)) return '조회불가 (응답 지연)';
@@ -1270,12 +1267,7 @@ function assembleLiveReport(name, corp, res) {
   const src_status = [
     hasCorp
       ? { name: '금융위 기업기본정보', ok: true, detail: `기준정보 확보 (${corp.crno || '법인번호 미상'})` }
-      // 조회가 '실패'한 것과 조회해 봤더니 '0건'인 것은 다르다. 실패를 미검색이라 적으면
-      // 업체에 자료가 없는 것처럼 읽혀서, 서버가 죽은 줄도 모르고 업체를 의심하게 된다.
-      : (R.corpErr && !R.corpErr.ok
-        ? { name: '금융위 기업기본정보', ok: false, warn: true,
-            detail: /^프록시 장애/.test(briefErr(R.corpErr.err)) ? briefErr(R.corpErr.err) : `조회 실패 — ${briefErr(R.corpErr.err)}` }
-        : { name: '금융위 기업기본정보', ok: false, warn: true, detail: '법인 미검색 — 개인사업자이거나 법인명 불일치(상호명으로 타 소스 조회)' }),
+      : { name: '금융위 기업기본정보', ok: false, warn: true, detail: '법인 미검색 — 개인사업자이거나 법인명 불일치(상호명으로 타 소스 조회)' },
     // 연결 실패 / 조회성공·데이터없음 을 명확히 구분
     { key: 'nts', name: '국세청 사업자상태', ok: !!bStt,
       detail: bStt ? `${bStt}${bTax ? ' · ' + bTax : ''}`

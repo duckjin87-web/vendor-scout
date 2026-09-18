@@ -287,24 +287,6 @@ export default async function handler(req) {
     const service = url.searchParams.get('service');
     const env = process.env;
 
-    // 프록시 자체 점검 — 상류를 전혀 부르지 않는다.
-    // 모든 소스가 한꺼번에 '조회불가'로 찍힐 때, 원인이 공공API 쪽인지 이 함수 쪽인지
-    // 가르는 게 먼저다. 이게 JSON으로 돌아오면 함수는 살아 있는 것이고, 플랫폼 오류
-    // HTML이 돌아오면 배포·한도 등 Vercel 쪽 문제다. 키 값은 절대 싣지 않고 유무만 알린다.
-    if (service === 'ping') {
-      return jsonRes({
-        ok: true,
-        ts: new Date().toISOString(),
-        runtime: 'edge',
-        keys: {
-          datago: !!env.DATA_GO_KR_API_KEY,
-          naver: !!(env.NAVER_CLIENT_ID && env.NAVER_CLIENT_SECRET),
-          kakao: !!env.KAKAO_REST_KEY,
-          anthropic: !!env.ANTHROPIC_API_KEY,
-        },
-      });
-    }
-
     if (service === 'naverNews')       return handleNaver(url, env, 'news');
     if (service === 'naverWeb')        return handleNaver(url, env, 'webkr');
     if (service === 'naverLocal')      return handleNaver(url, env, 'local');
