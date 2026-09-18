@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 142;
+const BUILD = 143;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1380,15 +1380,23 @@ async function makerLookup(nm) {
   const merged = [];
   const seen = new Set();
   let anyOk = false, lastErr = '', total = null;
+  // totalCount 는 응답마다 다르게 온다. 이름 파라미터가 먹은 호출은 '걸러진 건수'를,
+  // 안 먹은 호출은 '전체 건수'를 준다. 먼저 도착한 값을 총건수로 삼았더니 필터된 응답(0건)이
+  // 먼저 와서 pages=1 이 되고 페이징을 건너뛰었다 — 그러고도 full=true 라 '등록 없음'이라
+  // 단정했다. 노블테크주식회사가 명단에 있는데도 안 나온 이유가 이것이다. 최댓값을 쓴다.
   const absorb = (d) => {
     anyOk = true;
-    if (total == null) total = totalCountOf(d);
+    const t = totalCountOf(d);
+    if (t != null && (total == null || t > total)) total = t;
+    let added = 0;
     for (const r of pickItems(d)) {
       const sig = JSON.stringify(r);
       if (seen.has(sig)) continue;
       seen.add(sig);
       merged.push(r);
+      added++;
     }
+    return { got: pickItems(d).length, added };
   };
 
   // ① 업체명 파라미터가 먹는 키가 있는지 — 먹으면 몇 건만 와서 가장 빠르다
@@ -1401,22 +1409,32 @@ async function makerLookup(nm) {
   }
   if (!anyOk) throw new Error(lastErr || '식약처 제조업 조회 실패');
   if (matchByNameApp(nm, merged)) {
-    return { items: merged, total, scanned: merged.length, full: true };
+    return { items: merged, total, scanned: merged.length, full: true, via: 'name' };
   }
 
-  // ② 못 찾았으면 명단 전체를 훑는다 — 이름 필터가 안 먹은 것이므로 페이지를 넘겨야 한다
-  const pages = total != null ? Math.min(MAKER_MAX_PAGES, Math.ceil(total / MAKER_PAGE)) : 1;
-  if (pages > 1) {
-    const rest = await mapLimit(
-      Array.from({ length: pages - 1 }, (_, i) => i + 2), 3,
-      async (pg) => {
-        try { return await proxyOnlyGet('maker', { numOfRows: String(MAKER_PAGE), pageNo: String(pg) }); }
-        catch { return null; }
-      });
-    rest.forEach((d) => { if (d) absorb(d); });
+  // ② 못 찾았으면 명단 전체를 훑는다.
+  // totalCount 를 믿고 페이지 수를 계산하지 않는다 — 응답마다 값이 달라 어느 쪽이 전체인지
+  // 확실하지 않다. 한 페이지가 numOfRows 보다 적게 오면 그게 마지막 페이지다. 그때까지 넘긴다.
+  // 1페이지부터 다시 받는다. 1페이지는 이름 파라미터를 붙인 호출로만 받았는데, 그게 걸러져
+  // 0건이면 앞쪽 500건을 통째로 못 본 채 끝난다(중복은 어차피 걸러진다).
+  let page = 1, reachedEnd = false;
+  while (!reachedEnd && page <= MAKER_MAX_PAGES) {
+    const batch = [];
+    for (let i = 0; i < 4 && page + i <= MAKER_MAX_PAGES; i++) batch.push(page + i);
+    const res = await mapLimit(batch, 4, async (pg) => {
+      try { return { pg, d: await proxyOnlyGet('maker', { numOfRows: String(MAKER_PAGE), pageNo: String(pg) }) }; }
+      catch { return { pg, d: null }; }
+    });
+    res.sort((x, y) => x.pg - y.pg).forEach((r) => {
+      if (!r.d) { reachedEnd = true; return; }             // 실패한 페이지가 있으면 거기서 멈춘다
+      const { got } = absorb(r.d);
+      if (got < MAKER_PAGE) reachedEnd = true;             // 짧은 페이지 = 마지막
+    });
+    page += batch.length;
   }
-  const full = total == null ? false : merged.length >= total || pages >= Math.ceil(total / MAKER_PAGE);
-  return { items: merged, total, scanned: merged.length, full };
+  // 끝까지 갔거나(짧은 페이지를 만났거나) 총건수만큼 모았으면 전체를 본 것이다
+  const full = reachedEnd || (total != null && merged.length >= total);
+  return { items: merged, total, scanned: merged.length, full, via: 'page' };
 }
 
 // 식약처 화장품제조업 등록업체 기준 후보 — 상호명으로 조회해 등록 업체명(중복제거) 목록화
