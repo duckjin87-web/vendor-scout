@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 143;
+const BUILD = 144;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -228,18 +228,56 @@ async function proxyErrMsg(res) {
     const parts = [j.error, j.detail, j.hint].map(errText).filter(Boolean);
     if (parts.length) return parts.join(' · ');
   } catch { /* JSON 아님 */ }
+  // 프록시가 죽으면 JSON이 아니라 플랫폼 오류 HTML이 온다. 그 원문을 그대로 화면에 흘리면
+  // 모든 항목에 <!DOCTYPE html>이 찍혀 무슨 일인지 알 수 없다 — 무슨 상황인지로 바꿔 준다.
+  if (/^\s*<(!doctype|html)/i.test(body)) {
+    return res.status === 429
+      ? `프록시 요청이 몰렸습니다(HTTP 429) — 잠시 후 다시 조회하세요`
+      : `프록시 응답 오류(HTTP ${res.status}) — 배포 상태나 함수 실행 오류일 수 있습니다`;
+  }
   return body ? body.slice(0, 200) : `프록시 HTTP ${res.status}`;
 }
 
 // 브라우저 fetch 재시도 — 순간 네트워크 실패("Failed to fetch")·연결끊김을 짧게 재시도.
 // (프록시 도달 전 클라이언트단 실패라 서버 재시도로는 못 잡음)
+// ── 전역 동시 요청 상한 ──
+// mapLimit은 호출부 안에서만 동시성을 누른다. 그런데 조회 한 번에 재무·식약처·연금·공장·
+// 회수·채용 가지가 동시에 돌고, 각 가지가 또 여러 번 부른다. 가지별로는 3~4건이어도
+// 합치면 80건이 넘게 나갔고, 프록시(Vercel)가 그 폭주를 막으면서 모든 호출에 HTML 오류
+// 페이지를 돌려줬다 — 화면에는 전 항목 '조회불가'로 찍혔다. 프록시로 나가는 문을 하나로
+// 좁혀 어느 가지에서 부르든 동시에 이 수를 넘지 않게 한다.
+const MAX_INFLIGHT = 6;
+let _inflight = 0;
+const _waitQ = [];
+function _acquireSlot() {
+  if (_inflight < MAX_INFLIGHT) { _inflight++; return Promise.resolve(); }
+  return new Promise((resolve) => _waitQ.push(resolve));
+}
+function _releaseSlot() {
+  const next = _waitQ.shift();
+  if (next) next();                 // 자리를 그대로 넘긴다(_inflight 유지)
+  else _inflight--;
+}
 async function fetchRetry(url, opts, tries = 3) {
-  let lastErr;
-  for (let i = 0; i < tries; i++) {
-    try { return await fetch(url, opts); }
-    catch (e) { lastErr = e; if (i < tries - 1) await new Promise((r) => setTimeout(r, 500 * (i + 1))); }
-  }
-  throw lastErr;
+  await _acquireSlot();
+  try {
+    let lastErr;
+    for (let i = 0; i < tries; i++) {
+      try {
+        const res = await fetch(url, opts);
+        // 429·5xx는 '잠깐 몰렸다'는 뜻이라 조금 쉬었다 다시 부른다. 4xx는 다시 불러도 같다.
+        if ((res.status === 429 || res.status >= 500) && i < tries - 1) {
+          await new Promise((r) => setTimeout(r, 700 * (i + 1) + Math.random() * 300));
+          continue;
+        }
+        return res;
+      } catch (e) {
+        lastErr = e;
+        if (i < tries - 1) await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+      }
+    }
+    throw lastErr || new Error('요청 실패');
+  } finally { _releaseSlot(); }
 }
 
 // 동시성 제한 병렬 실행 — 브라우저 동시연결 포화("Failed to fetch") 방지
@@ -1349,7 +1387,9 @@ function pickByKey(rec, re) {
 //        목록을 주고, '올바른 키'만 상호로 필터됨. → 후보 키들을 병렬로 시도해 결과를 합치면,
 //        올바른 키가 준 '이 업체 레코드'가 포함되고 matchByName이 그것만 정확히 집어냄(할루시네이션 없음).
 // 주의: numOfRows 최대 500(초과 시 전체 호출 거부). 각 후보 500건.
-const MAKER_NAME_PARAMS = ['bssh_nm', 'Bssh_Nm', 'BSSH_NM', 'entpName', 'entp_name', 'prmisnEntpNm'];
+// 이 API는 업체명 파라미터를 사실상 무시한다(늘 목록을 그대로 준다). 후보 키를 여섯 개나
+// 던지면 매 조회마다 6번을 헛으로 부르는 셈이라, 가장 그럴듯한 둘만 남긴다.
+const MAKER_NAME_PARAMS = ['bssh_nm', 'BSSH_NM'];
 // 응답 어디에 총건수가 실려 있는지 API마다 달라 경로를 훑는다
 function totalCountOf(d) {
   for (const path of ['response.body.totalCount', 'body.totalCount', 'totalCount', 'total_count']) {
@@ -1376,7 +1416,11 @@ function pickItems(d) {
   }
   return [];
 }
+// 명단 전체는 어느 업체를 보든 같다. 한 번 받아 두고 다시 쓰지 않으면, 후보가 여럿인
+// 화면에서 같은 4천 건을 후보 수만큼 다시 받게 된다(그게 요청 폭주의 큰 몫이었다).
+let _makerAll = null;
 async function makerLookup(nm) {
+  if (_makerAll && _makerAll.full) return { ..._makerAll, via: 'cache' };
   const merged = [];
   const seen = new Set();
   let anyOk = false, lastErr = '', total = null;
@@ -1434,7 +1478,9 @@ async function makerLookup(nm) {
   }
   // 끝까지 갔거나(짧은 페이지를 만났거나) 총건수만큼 모았으면 전체를 본 것이다
   const full = reachedEnd || (total != null && merged.length >= total);
-  return { items: merged, total, scanned: merged.length, full, via: 'page' };
+  const out = { items: merged, total, scanned: merged.length, full };
+  if (full) _makerAll = out;                 // 전체를 받았을 때만 캐시한다
+  return { ...out, via: 'page' };
 }
 
 // 식약처 화장품제조업 등록업체 기준 후보 — 상호명으로 조회해 등록 업체명(중복제거) 목록화
@@ -2657,11 +2703,11 @@ async function recallLookup() {
 // 상호로도 한 번 더 시도하고, 실패하면 상류가 보낸 오류 본문을 그대로 남긴다.
 const FACTORY_OPS = ['factoryLand', 'factoryFclty', 'factoryBass'];
 async function factoryDetail(nm, manageNo) {
-  const attempts = [];
-  FACTORY_OPS.forEach((op) => {
-    if (manageNo) attempts.push({ op, key: 'fctryManageNo', params: { manageNo: String(manageNo) } });
-    attempts.push({ op, key: 'cmpnyNm', params: { name: nm } });
-  });
+  // 오퍼레이션마다 키를 두 가지씩 시도하면 6번을 부른다. 관리번호가 있으면 그게 정답에
+  // 가까우므로 그것만 쓰고, 없을 때만 상호로 부른다 — 한 번 조회에 3번이면 충분하다.
+  const attempts = FACTORY_OPS.map((op) => (manageNo
+    ? { op, key: 'fctryManageNo', params: { manageNo: String(manageNo) } }
+    : { op, key: 'cmpnyNm', params: { name: nm } }));
   const got = await mapLimit(attempts, 3, async (a2) => {
     try {
       const d = await proxyGet(a2.op, { ...a2.params, rows: '50' });
