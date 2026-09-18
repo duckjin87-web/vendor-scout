@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 144;
+const BUILD = 145;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -228,56 +228,18 @@ async function proxyErrMsg(res) {
     const parts = [j.error, j.detail, j.hint].map(errText).filter(Boolean);
     if (parts.length) return parts.join(' · ');
   } catch { /* JSON 아님 */ }
-  // 프록시가 죽으면 JSON이 아니라 플랫폼 오류 HTML이 온다. 그 원문을 그대로 화면에 흘리면
-  // 모든 항목에 <!DOCTYPE html>이 찍혀 무슨 일인지 알 수 없다 — 무슨 상황인지로 바꿔 준다.
-  if (/^\s*<(!doctype|html)/i.test(body)) {
-    return res.status === 429
-      ? `프록시 요청이 몰렸습니다(HTTP 429) — 잠시 후 다시 조회하세요`
-      : `프록시 응답 오류(HTTP ${res.status}) — 배포 상태나 함수 실행 오류일 수 있습니다`;
-  }
   return body ? body.slice(0, 200) : `프록시 HTTP ${res.status}`;
 }
 
 // 브라우저 fetch 재시도 — 순간 네트워크 실패("Failed to fetch")·연결끊김을 짧게 재시도.
 // (프록시 도달 전 클라이언트단 실패라 서버 재시도로는 못 잡음)
-// ── 전역 동시 요청 상한 ──
-// mapLimit은 호출부 안에서만 동시성을 누른다. 그런데 조회 한 번에 재무·식약처·연금·공장·
-// 회수·채용 가지가 동시에 돌고, 각 가지가 또 여러 번 부른다. 가지별로는 3~4건이어도
-// 합치면 80건이 넘게 나갔고, 프록시(Vercel)가 그 폭주를 막으면서 모든 호출에 HTML 오류
-// 페이지를 돌려줬다 — 화면에는 전 항목 '조회불가'로 찍혔다. 프록시로 나가는 문을 하나로
-// 좁혀 어느 가지에서 부르든 동시에 이 수를 넘지 않게 한다.
-const MAX_INFLIGHT = 6;
-let _inflight = 0;
-const _waitQ = [];
-function _acquireSlot() {
-  if (_inflight < MAX_INFLIGHT) { _inflight++; return Promise.resolve(); }
-  return new Promise((resolve) => _waitQ.push(resolve));
-}
-function _releaseSlot() {
-  const next = _waitQ.shift();
-  if (next) next();                 // 자리를 그대로 넘긴다(_inflight 유지)
-  else _inflight--;
-}
 async function fetchRetry(url, opts, tries = 3) {
-  await _acquireSlot();
-  try {
-    let lastErr;
-    for (let i = 0; i < tries; i++) {
-      try {
-        const res = await fetch(url, opts);
-        // 429·5xx는 '잠깐 몰렸다'는 뜻이라 조금 쉬었다 다시 부른다. 4xx는 다시 불러도 같다.
-        if ((res.status === 429 || res.status >= 500) && i < tries - 1) {
-          await new Promise((r) => setTimeout(r, 700 * (i + 1) + Math.random() * 300));
-          continue;
-        }
-        return res;
-      } catch (e) {
-        lastErr = e;
-        if (i < tries - 1) await new Promise((r) => setTimeout(r, 500 * (i + 1)));
-      }
-    }
-    throw lastErr || new Error('요청 실패');
-  } finally { _releaseSlot(); }
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try { return await fetch(url, opts); }
+    catch (e) { lastErr = e; if (i < tries - 1) await new Promise((r) => setTimeout(r, 500 * (i + 1))); }
+  }
+  throw lastErr;
 }
 
 // 동시성 제한 병렬 실행 — 브라우저 동시연결 포화("Failed to fetch") 방지
@@ -1387,100 +1349,29 @@ function pickByKey(rec, re) {
 //        목록을 주고, '올바른 키'만 상호로 필터됨. → 후보 키들을 병렬로 시도해 결과를 합치면,
 //        올바른 키가 준 '이 업체 레코드'가 포함되고 matchByName이 그것만 정확히 집어냄(할루시네이션 없음).
 // 주의: numOfRows 최대 500(초과 시 전체 호출 거부). 각 후보 500건.
-// 이 API는 업체명 파라미터를 사실상 무시한다(늘 목록을 그대로 준다). 후보 키를 여섯 개나
-// 던지면 매 조회마다 6번을 헛으로 부르는 셈이라, 가장 그럴듯한 둘만 남긴다.
-const MAKER_NAME_PARAMS = ['bssh_nm', 'BSSH_NM'];
-// 응답 어디에 총건수가 실려 있는지 API마다 달라 경로를 훑는다
-function totalCountOf(d) {
-  for (const path of ['response.body.totalCount', 'body.totalCount', 'totalCount', 'total_count']) {
-    let cur = d, ok = true;
-    for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
-    if (ok && cur != null && isFinite(Number(cur))) return Number(cur);
-  }
-  return null;
-}
-// ── 식약처 화장품제조업 조회 ──
-// 이 API는 업체명 파라미터를 무시하고 목록을 그대로 준다. 그래서 여태 첫 페이지(500건)만
-// 받아 거기서 상호를 찾고, 없으면 '미등록'이라고 했다. 그런데 화장품제조업체는 전국에
-// 4천 곳이 넘는다 — 십분의 일만 보고 없다고 한 셈이다. 실제로 노블테크주식회사(화장품제조,
-// 허가 2025-12-09)가 의약품안전나라에는 있는데 우리 화면에는 미등록으로 나왔다.
-// 이름으로 먼저 빠르게 찾아 보고, 못 찾으면 총건수를 읽어 명단 전체를 받아 다시 찾는다.
-// 어디까지 훑었는지(full)를 함께 돌려줘서, 일부만 본 상태로 '등록 없음'이라고 말하지 않게 한다.
-const MAKER_PAGE = 500;
-const MAKER_MAX_PAGES = 20;                 // 1만 건 상한 — 명단 규모를 넉넉히 덮는다
-function pickItems(d) {
-  for (const path of ['response.body.items.item', 'body.items.item', 'body.items', 'items']) {
-    let cur = d, ok = true;
-    for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
-    if (ok && cur != null) return Array.isArray(cur) ? cur : [cur].filter(Boolean);
-  }
-  return [];
-}
-// 명단 전체는 어느 업체를 보든 같다. 한 번 받아 두고 다시 쓰지 않으면, 후보가 여럿인
-// 화면에서 같은 4천 건을 후보 수만큼 다시 받게 된다(그게 요청 폭주의 큰 몫이었다).
-let _makerAll = null;
+const MAKER_NAME_PARAMS = ['bssh_nm', 'Bssh_Nm', 'BSSH_NM', 'entpName', 'entp_name', 'prmisnEntpNm'];
 async function makerLookup(nm) {
-  if (_makerAll && _makerAll.full) return { ..._makerAll, via: 'cache' };
+  const settled = await Promise.allSettled(
+    MAKER_NAME_PARAMS.map((p) => proxyOnlyGet('maker', { [p]: nm, numOfRows: '500' })),
+  );
   const merged = [];
   const seen = new Set();
-  let anyOk = false, lastErr = '', total = null;
-  // totalCount 는 응답마다 다르게 온다. 이름 파라미터가 먹은 호출은 '걸러진 건수'를,
-  // 안 먹은 호출은 '전체 건수'를 준다. 먼저 도착한 값을 총건수로 삼았더니 필터된 응답(0건)이
-  // 먼저 와서 pages=1 이 되고 페이징을 건너뛰었다 — 그러고도 full=true 라 '등록 없음'이라
-  // 단정했다. 노블테크주식회사가 명단에 있는데도 안 나온 이유가 이것이다. 최댓값을 쓴다.
-  const absorb = (d) => {
+  let anyOk = false, lastErr = '';
+  for (const s of settled) {
+    if (s.status !== 'fulfilled') { lastErr = String(s.reason && s.reason.message || s.reason); continue; }
     anyOk = true;
-    const t = totalCountOf(d);
-    if (t != null && (total == null || t > total)) total = t;
-    let added = 0;
-    for (const r of pickItems(d)) {
+    const list = listOf(s.value, ['response.body.items.item', 'body.items', 'items']);
+    for (const r of list) {
       const sig = JSON.stringify(r);
-      if (seen.has(sig)) continue;
+      if (seen.has(sig)) continue;      // 후보키 간 중복 제거
       seen.add(sig);
       merged.push(r);
-      added++;
+      if (merged.length >= 4000) break; // 안전 상한
     }
-    return { got: pickItems(d).length, added };
-  };
-
-  // ① 업체명 파라미터가 먹는 키가 있는지 — 먹으면 몇 건만 와서 가장 빠르다
-  const first = await Promise.allSettled(
-    MAKER_NAME_PARAMS.map((p) => proxyOnlyGet('maker', { [p]: nm, numOfRows: String(MAKER_PAGE), pageNo: '1' })),
-  );
-  for (const s of first) {
-    if (s.status !== 'fulfilled') { lastErr = String((s.reason && s.reason.message) || s.reason); continue; }
-    absorb(s.value);
+    if (merged.length >= 4000) break;
   }
   if (!anyOk) throw new Error(lastErr || '식약처 제조업 조회 실패');
-  if (matchByNameApp(nm, merged)) {
-    return { items: merged, total, scanned: merged.length, full: true, via: 'name' };
-  }
-
-  // ② 못 찾았으면 명단 전체를 훑는다.
-  // totalCount 를 믿고 페이지 수를 계산하지 않는다 — 응답마다 값이 달라 어느 쪽이 전체인지
-  // 확실하지 않다. 한 페이지가 numOfRows 보다 적게 오면 그게 마지막 페이지다. 그때까지 넘긴다.
-  // 1페이지부터 다시 받는다. 1페이지는 이름 파라미터를 붙인 호출로만 받았는데, 그게 걸러져
-  // 0건이면 앞쪽 500건을 통째로 못 본 채 끝난다(중복은 어차피 걸러진다).
-  let page = 1, reachedEnd = false;
-  while (!reachedEnd && page <= MAKER_MAX_PAGES) {
-    const batch = [];
-    for (let i = 0; i < 4 && page + i <= MAKER_MAX_PAGES; i++) batch.push(page + i);
-    const res = await mapLimit(batch, 4, async (pg) => {
-      try { return { pg, d: await proxyOnlyGet('maker', { numOfRows: String(MAKER_PAGE), pageNo: String(pg) }) }; }
-      catch { return { pg, d: null }; }
-    });
-    res.sort((x, y) => x.pg - y.pg).forEach((r) => {
-      if (!r.d) { reachedEnd = true; return; }             // 실패한 페이지가 있으면 거기서 멈춘다
-      const { got } = absorb(r.d);
-      if (got < MAKER_PAGE) reachedEnd = true;             // 짧은 페이지 = 마지막
-    });
-    page += batch.length;
-  }
-  // 끝까지 갔거나(짧은 페이지를 만났거나) 총건수만큼 모았으면 전체를 본 것이다
-  const full = reachedEnd || (total != null && merged.length >= total);
-  const out = { items: merged, total, scanned: merged.length, full };
-  if (full) _makerAll = out;                 // 전체를 받았을 때만 캐시한다
-  return { ...out, via: 'page' };
+  return { items: merged };
 }
 
 // 식약처 화장품제조업 등록업체 기준 후보 — 상호명으로 조회해 등록 업체명(중복제거) 목록화
@@ -1521,77 +1412,6 @@ async function finishLiveMfds(name, cand) {
 
 // 1단계: 기준정보(동명업체 후보) 조회 → {candidates} 또는 {report}
 //  금융위 법인 후보 우선 → 없으면 식약처 등록업체 기준 후보 추천 → 그래도 없으면 상호명 조회
-// ── 홈페이지 주소로 업체 찾기 ──
-// 업체 사이트는 아는데 등기 상호를 모르는 경우가 많다. 브랜드명과 법인명이 다르거나
-// (노블테크 / (주)○○테크놀로지), 영문 표기라 한글로 뭘 쳐야 할지 모르는 경우다.
-// 그런 상태에서 주소를 그대로 검색창에 넣으면 상호로 취급돼 반드시 0건이 난다.
-// 국내 사이트는 하단이나 '오시는 길'에 사업자등록번호·상호를 적어 두게 되어 있다.
-// 그 값을 읽어 조회하면 된다 — 사업자번호가 잡히면 동명 업체 문제까지 한 번에 풀린다.
-// 서브도메인이 붙은 주소도 받아야 한다 — 영세 업체는 cellab.imweb.me 처럼 빌더에 얹는다
-const URLISH = /^(https?:\/\/|www\.)|^[a-z0-9][a-z0-9.-]{1,61}\.(co\.kr|kr|com|net|org|io|me|biz)(\/|$)/i;
-const isUrlish = (v) => URLISH.test(String(v || '').trim());
-// 사이트 안에서 사업자정보가 실려 있을 만한 곳 — 하단(메인)과 회사소개·오시는길 계열
-const SITE_INFO_HINT = /(company|about|intro|greeting|location|contact|map|오시는|회사|소개|연혁|찾아)/i;
-const BNO_RE = /(\d{3})\s*-\s*(\d{2})\s*-\s*(\d{5})/;
-const CORP_NAME_RES = [
-  /(?:상호|회사명|법인명|업체명)\s*[:：]?\s*((?:\(주\)|주식회사)?\s*[가-힣A-Za-z0-9()\s]{2,30}?)\s*(?:[|·\/]|대표|사업자|주소|$)/,
-  /((?:\(주\)|㈜|주식회사)\s*[가-힣A-Za-z0-9]{2,20})/,
-  /([가-힣A-Za-z0-9]{2,20}\s*(?:\(주\)|㈜|주식회사))/,
-];
-function siteBizInfo(text) {
-  const t = String(text || '').replace(/\s+/g, ' ');
-  const bm = t.match(BNO_RE);
-  const bno = bm ? `${bm[1]}${bm[2]}${bm[3]}` : null;
-  let nm = null;
-  for (const re of CORP_NAME_RES) {
-    const m = t.match(re);
-    if (m && m[1]) {
-      const v = m[1].replace(/\s+/g, ' ').replace(/^㈜/, '(주)').trim();
-      // 너무 일반적인 말이 잡히면 버린다
-      if (v.length >= 3 && !/^(주식회사|\(주\))$/.test(v) && !/(개인정보|이용약관|고객센터)/.test(v)) { nm = v; break; }
-    }
-  }
-  return { bno, name: nm };
-}
-// 주소를 받아 메인과 회사소개·오시는길 페이지를 훑어 사업자정보를 모은다
-async function lookupBySite(raw) {
-  if (!getProxy()) return { err: '프록시 미설정 — 주소로 찾으려면 실데이터 연결이 필요합니다' };
-  let url = String(raw).trim();
-  if (!/^https?:\/\//i.test(url)) url = `https://${url.replace(/^\/+/, '')}`;
-  let host = ''; try { host = new URL(url).hostname; } catch { return { err: '주소를 읽을 수 없습니다' }; }
-
-  const pages = [];
-  const first = await fetchPageSmart(url);
-  if (first.html) pages.push({ url: first.url || url, html: first.html });
-  // 메인에서 회사소개·오시는길 링크를 찾아 두 곳까지 더 본다(하단 사업자정보가 없을 때 대비)
-  if (first.html) {
-    const seen = new Set([String(first.url || url).replace(/\/+$/, '')]);
-    const targets = [];
-    for (const l of extractLinks(first.html, first.url || url)) {
-      const k = l.href.replace(/\/+$/, '');
-      if (seen.has(k)) continue;
-      if (SITE_INFO_HINT.test(l.anchor) || SITE_INFO_HINT.test(l.href)) { targets.push(l.href); seen.add(k); }
-      if (targets.length >= 2) break;
-    }
-    const subs = await mapLimit(targets, 2, async (u) => {
-      try { const r = await proxyOnlyGet('fetchPage', { url: u }); return { url: u, html: (r && r.text) || '' }; } catch { return null; }
-    });
-    subs.forEach((x) => { if (x && x.html) pages.push(x); });
-  }
-  if (!pages.length) return { err: `${host} 페이지를 열지 못했습니다 — 주소가 맞는지, 사이트가 열려 있는지 확인하세요`, host };
-
-  // 사업자번호가 하나라도 잡히면 그걸 최우선으로 쓴다
-  let found = { bno: null, name: null, from: null };
-  for (const pg of pages) {
-    const txt = harvestFromHtml(pg.html, pg.url).text;
-    const info = siteBizInfo(txt);
-    if (info.bno && !found.bno) { found.bno = info.bno; found.from = pg.url; }
-    if (info.name && !found.name) found.name = info.name;
-    if (found.bno && found.name) break;
-  }
-  return { ...found, host, tried: pages.length };
-}
-
 async function liveLookup(name) {
   // ── 사업자등록번호 입력/병기 지원 ── "143-81-19635" 또는 "코스맥스 143-81-19635"처럼
   //    번호가 섞이면 금융위 corp를 bzno로 직접 조회(동명 계열사 중 정확한 법인 특정 → 신뢰성↑)
@@ -2703,11 +2523,11 @@ async function recallLookup() {
 // 상호로도 한 번 더 시도하고, 실패하면 상류가 보낸 오류 본문을 그대로 남긴다.
 const FACTORY_OPS = ['factoryLand', 'factoryFclty', 'factoryBass'];
 async function factoryDetail(nm, manageNo) {
-  // 오퍼레이션마다 키를 두 가지씩 시도하면 6번을 부른다. 관리번호가 있으면 그게 정답에
-  // 가까우므로 그것만 쓰고, 없을 때만 상호로 부른다 — 한 번 조회에 3번이면 충분하다.
-  const attempts = FACTORY_OPS.map((op) => (manageNo
-    ? { op, key: 'fctryManageNo', params: { manageNo: String(manageNo) } }
-    : { op, key: 'cmpnyNm', params: { name: nm } }));
+  const attempts = [];
+  FACTORY_OPS.forEach((op) => {
+    if (manageNo) attempts.push({ op, key: 'fctryManageNo', params: { manageNo: String(manageNo) } });
+    attempts.push({ op, key: 'cmpnyNm', params: { name: nm } });
+  });
   const got = await mapLimit(attempts, 3, async (a2) => {
     try {
       const d = await proxyGet(a2.op, { ...a2.params, rows: '50' });
@@ -2820,111 +2640,6 @@ async function finishLive(name, corp) {
 }
 
 // 동명업체 선택 UI — source: 'fsc'(금융위 법인) | 'mfds'(식약처 등록업체 기준)
-// ── 후보별 화장품 제조업 허가 대조 ──
-// 업체를 고르는 단계에서 가장 먼저 알아야 할 게 '이 회사가 화장품을 직접 만들 수 있는가'다.
-// 여태 식약처에서 온 후보에만 배지가 붙고 금융위 법인 후보에는 아무 표시가 없어서,
-// 동명 업체 중 어느 쪽이 제조사인지 모른 채 찍어서 들어가야 했다.
-// 먼저 검색어로 명단을 한 번 받아 전부 대조하고(대개 후보들이 비슷한 이름이라 여기서 걸린다),
-// 거기서 못 찾은 후보만 자기 이름으로 한 번 더 확인한다.
-// 주소에서 시·도만 뽑는다 — 같은 상호가 여러 지역에 있을 때 가르는 가장 굵은 기준
-const SIDO = /(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/;
-const sidoOf = (v) => (String(v || '').match(SIDO) || [])[1] || null;
-// 시·도만으로는 못 가른다 — 성남과 남양주가 둘 다 경기도다. 시·군·구까지 묶어 키로 쓴다.
-function locKey(addr) {
-  const s = String(addr || '').replace(/\s/g, '');
-  const sido = sidoOf(s);
-  if (!sido) return null;
-  const m = s.match(/(?:시|도)([가-힣]{2,6}(?:시|군|구))/) || s.match(/([가-힣]{2,6}(?:시|군|구))/);
-  return sido + (m ? m[1] : '');
-}
-const normNm = (v) => stripCorp(String(v || '')).replace(/\s/g, '');
-// 식약처 레코드에서 필요한 값만 꺼낸다
-function mkFields(r) {
-  return {
-    nm: pickByKey(r, /BSSH_NM|CMPNY_NM|ENTRPS_?NM|MANF|업체|회사|제조사/i) || pickByKey(r, /_NM$/i),
-    rep: pickByKey(r, /PRSNL|PRSDNT|RPRSNTV|REPRE|대표/i),
-    addr: pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i),
-    lcns: pickByKey(r, /LCNS_?NO|PERMIT|허가/i),
-  };
-}
-// 후보 ↔ 식약처 레코드 매칭은 엄격해야 한다.
-// 여태 '아무 필드에 상호가 포함되면 일치'로 봐서, 부산·성남·대전의 노블테크 세 곳이
-// 남양주 노블테크주식회사 한 건에 모두 걸려 전부 '제조업 등록'으로 표시됐다.
-// 이름이 같아야 하고, 주소나 대표자가 있으면 그것까지 맞아야 한다.
-function strictMakerMatch(cand, list) {
-  const key = normNm(cand.corpNm);
-  if (key.length < 2) return null;
-  const sameName = (list || []).map(mkFields).filter((x) => x.nm && normNm(x.nm) === key);
-  if (!sameName.length) return null;
-  const cLoc = locKey(cand.addr), cRep = String(cand.rep || '').replace(/\s/g, '');
-  // 대표자가 맞으면 가장 확실하다
-  if (cRep) { const byRep = sameName.find((x) => String(x.rep || '').replace(/\s/g, '') === cRep); if (byRep) return byRep; }
-  if (cLoc) {
-    const byLoc = sameName.find((x) => locKey(x.addr) === cLoc);
-    if (byLoc) return byLoc;
-    // 후보에도 레코드에도 주소가 있는데 시·군·구가 다 다르면 남의 회사다
-    if (sameName.every((x) => locKey(x.addr))) return null;
-  }
-  return sameName.length === 1 && !cLoc ? sameName[0] : null;
-}
-
-async function annotateMakerStatus(cands, typed, onUpdate) {
-  if (!getProxy() || !cands.length) return;
-  const core = stripCorp(typed || '').replace(/\s/g, '') || typed;
-  let pool = [], poolFull = false;
-  try {
-    const r = await makerLookup(core);
-    pool = r.items || [];
-    poolFull = !!r.full;                      // 명단을 끝까지 훑었나
-  } catch { /* 실패해도 개별 확인으로 진행 */ }
-  const mark = (c, hit, full) => {
-    // 못 찾았을 때 '없음'이라고 하려면 명단을 끝까지 봤어야 한다. 아니면 '확인 못 함'이다.
-    c._mkState = hit ? '등록' : (full ? '없음' : '미확인');
-    if (hit) { c._mkNo = hit.lcns || null; c._mkAddr = hit.addr || null; }
-  };
-  cands.forEach((c) => {
-    if (c.mfds) { c._mkState = '등록'; return; }
-    mark(c, strictMakerMatch(c, pool), poolFull);
-  });
-
-  // ── 식약처 명단에만 있는 업체를 후보에 더한다 ──
-  // 금융위 법인 검색에 안 잡히는 업체가 있다. 노블테크주식회사(남양주)가 그랬는데,
-  // 정작 화장품 제조업 허가를 가진 건 그 업체였다. 제조를 맡길 곳을 고르는 화면에서
-  // 허가 보유 업체가 목록에 없으면 이 화면은 제 일을 못 한 것이다.
-  if (pool.length && core.length >= 2) {
-    // 상호만으로 중복을 판단하면 안 된다. 노블테크는 부산·성남·대전·남양주에 각각 있고
-    // 전부 이름이 같다 — 상호가 같다는 이유로 남양주를 빼면 정작 허가를 가진 곳이 사라진다.
-    const have = new Set(cands.map((c) => `${normNm(c.corpNm)}|${locKey(c.addr) || ''}`));
-    const add = [];
-    const seen = new Set();
-    pool.forEach((r) => {
-      const x = mkFields(r);
-      if (!x.nm) return;
-      const k = normNm(x.nm);
-      const dedup = `${k}|${locKey(x.addr) || ''}`;
-      if (k.length < 2 || have.has(dedup) || seen.has(dedup)) return;
-      // 검색어를 품고 있거나 표기가 비슷한 업소명만
-      if (!(k.includes(core) || core.includes(k) || nameSimilarity(core, x.nm) >= 0.8)) return;
-      seen.add(dedup);
-      add.push({ corpNm: x.nm, rep: x.rep, addr: x.addr, lcns: x.lcns, mfds: true, _mkState: '등록', _mkNo: x.lcns });
-    });
-    if (add.length) cands.push(...add.slice(0, 10));
-  }
-  onUpdate();
-
-  // 명단 전체를 이미 훑었다면 더 볼 게 없다. 일부만 봤을 때만 후보별로 한 번 더 확인한다.
-  if (poolFull) return;
-  const rest = cands.filter((c) => c._mkState === '미확인' && c.corpNm).slice(0, 6);
-  if (!rest.length) return;
-  await mapLimit(rest, 2, async (c) => {
-    try {
-      const r = await makerLookup(normNm(c.corpNm) || c.corpNm);
-      mark(c, strictMakerMatch(c, r.items || []), !!r.full);
-    } catch { /* 개별 실패는 미확인 그대로 */ }
-  });
-  onUpdate();
-}
-
 function renderCandidates(name, cands, source, similar) {
   const root = $('#report');
   root.classList.remove('hidden');
@@ -2939,67 +2654,26 @@ function renderCandidates(name, cands, source, similar) {
         + `<span class="candsub">${esc(headSrc)} · 한글 표기 차이(ㅐ↔ㅔ, 된소리, 띄어쓰기)를 감안해 골랐습니다. 대표자·주소로 같은 회사인지 확인하세요</span>`
       : `「${esc(name)}」 ${isMfds ? '식약처 등록업체' : '동명·유사 업체'} <b>${cands.length}건</b> — 조회할 업체를 선택하세요`
         + `<span class="candsub">${esc(headSrc)}${isMfds ? ' · 금융위 법인 미검색이라 식약처 등록명으로 추천' : ''}</span>`));
-
-  // 제조업 등록 요약 — 어느 후보를 골라야 하는지 한 줄로 알려 준다
-  const sum = el('div', 'cand-mksum', isMfds
-    ? '아래는 모두 <b>식약처 화장품제조업 등록업체</b>입니다'
-    : '화장품 제조업 등록 여부를 확인하는 중…');
-  box.appendChild(sum);
-
-  const list = el('div', 'cand-list');
-  box.appendChild(list);
-
-  const paint = () => {
-    list.innerHTML = '';
-    cands.forEach((c) => {
-      const card = el('button', 'cand');
-      const meta = [
-        c.rep ? '대표 ' + esc(c.rep) : '',
-        c.bzno ? '사업자 ' + esc(c.bzno) : '',
-        c.lcns ? '허가 ' + esc(c.lcns) : '',
-        c.addr ? esc(c.addr) : '',
-      ].filter(Boolean).join(' · ');
-      // 제조업 허가 배지 — 확인 전에는 '확인 중', 끝나면 등록/없음으로 바뀐다
-      const mkTag = c._mkState === '등록'
-        ? `<span class="cand-tag cand-mk-ok">✓ 제조업 등록${c._mkNo ? ` ${esc(c._mkNo)}` : ''}</span>`
-        : c._mkState === '없음'
-          ? '<span class="cand-tag cand-mk-no">제조업 등록 없음</span>'
-          : c._mkState === '미확인'
-            ? '<span class="cand-tag cand-mk-wait">제조업 등록 확인 못 함</span>'
-            : '<span class="cand-tag cand-mk-wait">제조업 허가 확인 중…</span>';
-      const tag = mkTag
-        + (c.mfds && !isMfds ? '<span class="cand-src">식약처 명단</span>' : '')
-        + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
-      card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
-      card.addEventListener('click', async () => {
-        root.innerHTML = `<div class="empty">「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…</div>`;
-        try { render(await (c.mfds ? finishLiveMfds(name, c) : finishLive(name, c))); }
-        catch (e) { root.innerHTML = `<div class="empty">조회 실패: ${esc(errText(e))}</div>`; }
-      });
-      list.appendChild(card);
+  cands.forEach((c) => {
+    const card = el('button', 'cand');
+    const meta = [
+      c.rep ? '대표 ' + esc(c.rep) : '',
+      c.bzno ? '사업자 ' + esc(c.bzno) : '',
+      c.lcns ? '허가 ' + esc(c.lcns) : '',
+      c.addr ? esc(c.addr) : '',
+    ].filter(Boolean).join(' · ');
+    const tag = (c.mfds ? '<span class="cand-tag">식약처 등록</span>' : '')
+      + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
+    card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
+    card.addEventListener('click', async () => {
+      root.innerHTML = `<div class="empty">「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…</div>`;
+      try { render(await (c.mfds ? finishLiveMfds(name, c) : finishLive(name, c))); }
+      catch (e) { root.innerHTML = `<div class="empty">조회 실패: ${esc(e.message)}</div>`; }
     });
-  };
-  paint();
+    box.appendChild(card);
+  });
   root.appendChild(box);
   root.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-  // 식약처 명단과 대조해 배지를 채운다. 목록은 이미 떠 있으므로 결과가 오는 대로 갈아 끼운다
-  // — 확인을 기다리느라 선택 자체가 늦어지면 안 된다.
-  if (!isMfds) {
-    annotateMakerStatus(cands, name, () => {
-      const n = cands.filter((c) => c._mkState === '등록').length;
-      const done = cands.every((c) => c._mkState);
-      const added = cands.filter((c) => c.mfds).length;
-      sum.innerHTML = !done ? '화장품 제조업 등록 여부를 확인하는 중…'
-        : n ? `화장품 제조업 등록이 확인된 업체 <b>${n}건</b> — 직접 제조를 맡기려면 이 중에서 고르세요`
-          + (added ? `<br><span class="cand-mkadd">그중 ${added}건은 금융위 법인 검색에는 없고 <b>식약처 제조업 명단에서 찾은 업체</b>입니다</span>` : '')
-        : '이 후보들 중 <b>화장품 제조업 등록이 확인된 업체가 없습니다</b> — 책임판매업만 등록(타사 OEM 위탁)이거나, 등록 업소명이 상호와 다를 수 있습니다';
-      // 후보가 늘었으면 머리글의 건수도 맞춰 준다
-      const cnt = box.querySelector('.candhead b');
-      if (cnt) cnt.textContent = `${cands.length}건`;
-      paint();
-    }).catch(() => { sum.textContent = '제조업 등록 확인에 실패했습니다 — 업체를 선택해 개별 확인하세요'; });
-  }
 }
 
 function setProxyUI() {
@@ -3714,9 +3388,7 @@ function verdictReason(report) {
   const B = report.basic || [], C = report.capacity || [];
   const has = (arr, k) => { const x = arr.find((v) => v.key === k); return x && x.value ? x.value : null; };
   const ups = [], downs = [];
-  const mkv = has(B, '제조업 등록');
-  if (mkv && !/없음/.test(String(mkv))) ups.push('식약처 화장품 제조업 등록');
-  else if (mkv) downs.push('제조업 허가 등록 없음');
+  if (has(B, '제조업 등록')) ups.push('식약처 화장품 제조업 등록');
   if (has(C, 'CGMP 적합업소')) ups.push('CGMP 적합업소');
   if (has(B, '공장/제조소 소재지')) ups.push('공장등록 확인');
   const hire = report.hiring;
@@ -3800,11 +3472,7 @@ function renderVerdict(report) {
   })();
 
   const chips = [
-    // '확인된 없음'과 '조회 못 함'은 다른 말이다. 없음은 빨강, 조회불가는 회색으로 둔다 —
-    // 확인을 못 한 것을 결격으로 읽으면 멀쩡한 업체를 떨어뜨리게 된다.
-    ['제조업 등록',
-      maker ? (/없음/.test(String(maker)) ? '등록없음' : '확인') : '조회불가',
-      maker ? (/없음/.test(String(maker)) ? 'bad' : 'ok') : 'na'],
+    ['제조업 등록', maker ? '확인' : '미확인', maker ? 'ok' : 'bad'],
     ['사업자 상태', /계속/.test(bstt) ? '정상' : (bstt || '미확인'), /계속/.test(bstt) ? 'ok' : 'bad'],
     ['공장등록', fct ? '확인' : '미확인', fct ? 'ok' : 'warn'],
     // CGMP는 없다고 결격은 아니지만 있으면 확실한 강점이라, 보유했을 때만 색을 준다.
@@ -4586,44 +4254,19 @@ function lookup(name, bno) {
   if (isConnected() && !report) {
     const root = $('#report');
     root.classList.remove('hidden');
-    // 조회 결과 처리 — 주소 경로와 상호 경로가 같은 처리를 쓴다
-    const onLive = (res) => {
-      if (res.candidates) renderCandidates(res.name, res.candidates, res.source, res.similar);
-      else render(res.report);
-    };
-    const onLiveErr = (e) => {
-      root.innerHTML =
-        `<div class="empty">실데이터 조회 실패: ${esc(errText(e))}<br>` +
-        `<span style="font-size:12.5px">프록시 주소·키·API 승인을 확인하세요. 데모 데이터로 대체하려면 아래를 누르세요.</span><br><br>` +
-        `<button class="act" id="fallbackBtn">데모 리포트 보기</button></div>`;
-      const fb = $('#fallbackBtn');
-      if (fb) fb.addEventListener('click', () => render(window.generateReport(nm || key)));
-    };
-
-    // 홈페이지 주소를 넣은 경우 — 그대로 상호로 검색하면 반드시 0건이다.
-    // 사이트에서 사업자등록번호·상호를 먼저 읽어 그걸로 조회한다.
-    if (nm && isUrlish(nm) && !bz) {
-      root.innerHTML = `<div class="empty">「${esc(nm)}」 사이트에서 사업자정보를 찾는 중…</div>`;
-      lookupBySite(nm).then((site) => {
-        if (site && (site.bno || site.name)) {
-          const q = [site.name, site.bno].filter(Boolean).join(' ');
-          root.innerHTML = `<div class="empty">${esc(site.host)}에서 `
-            + `${site.name ? `상호 「${esc(site.name)}」` : ''}${site.name && site.bno ? ' · ' : ''}`
-            + `${site.bno ? `사업자 ${esc(site.bno.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3'))}` : ''}`
-            + ` 확인 → 조회 중…</div>`;
-          pushRecent(site.name || site.host); renderRecent();
-          return liveLookup(q).then(onLive).catch(onLiveErr);
-        }
-        root.innerHTML = `<div class="empty">「${esc(nm)}」에서 사업자정보를 찾지 못했습니다`
-          + `${site && site.err ? ` — ${esc(site.err)}` : ''}<br>`
-          + `사이트 하단이나 '오시는 길'에 적힌 <b>상호</b> 또는 <b>사업자등록번호</b>로 다시 검색해 주세요.</div>`;
-      }).catch((e) => { root.innerHTML = `<div class="empty">주소 조회 실패: ${esc(errText(e))}</div>`; });
-      return;
-    }
     root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}${nm && bz ? ` · 사업자 ${bzDisp}` : ''}」</div>`;
     // 업체명 + 사업자번호 병기 → liveLookup이 사업자번호 일치 법인만 선별(교집합)
     const liveQuery = [nm, bz].filter(Boolean).join(' ');
-    liveLookup(liveQuery).then(onLive).catch(onLiveErr);
+    liveLookup(liveQuery)
+      .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates, res.source, res.similar); else render(res.report); })
+      .catch((e) => {
+        root.innerHTML =
+          `<div class="empty">실데이터 조회 실패: ${esc(e.message)}<br>` +
+          `<span style="font-size:12.5px">프록시 주소·키·API 승인을 확인하세요. 데모 데이터로 대체하려면 아래를 누르세요.</span><br><br>` +
+          `<button class="act" id="fallbackBtn">데모 리포트 보기</button></div>`;
+        const fb = $('#fallbackBtn');
+        if (fb) fb.addEventListener('click', () => render(window.generateReport(nm || key)));
+      });
     return;
   }
   // 범용성: 미등록 업체명은 이름 기반으로 데모 리포트 자동 생성

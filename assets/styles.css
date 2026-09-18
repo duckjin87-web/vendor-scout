@@ -1143,19 +1143,3 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 /* 링크가 가리키는 행 — 도착했을 때 어느 줄인지 보이게 */
 .vr-recall:target, .vr-recall:target ~ .vr { scroll-margin-top: 80px; }
 .vr-recall:target { background: var(--risk-bg); box-shadow: inset 2px 0 0 var(--risk); }
-
-/* ── 후보 선택 시 제조업 허가 표시 ──
-   업체를 고르는 단계에서 가장 먼저 알아야 할 게 '화장품을 직접 만들 수 있는 회사인가'다.
-   등록 확인은 초록, 없음은 회색으로 둔다 — 여기서 빨강을 쓰면 후보 목록이 경고판이 된다. */
-.cand-mksum {
-  font-size: 12px; color: var(--muted); margin: -4px 0 10px;
-  padding: 7px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-2);
-}
-.cand-mksum b { color: var(--text); font-weight: 700; }
-.cand .cn .cand-mk-ok   { color: var(--gA); background: var(--gA-bg); }
-.cand .cn .cand-mk-no   { color: var(--muted); background: var(--gD-bg); }
-.cand .cn .cand-mk-wait { color: var(--faint); background: var(--panel-2); font-weight: 500; }
-/* 등록이 확인된 후보는 테두리로도 구분 — 배지만으로는 목록에서 눈에 안 띈다 */
-.cand:has(.cand-mk-ok) { border-left: 3px solid var(--gA); }
-.cand-mkadd { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
-.cand .cn .cand-src { font-size: 10.5px; font-weight: 700; color: var(--gB); background: var(--gB-bg); border-radius: 3px; padding: 1px 7px; margin-left: 6px; white-space: nowrap; }
