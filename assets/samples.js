@@ -173,32 +173,14 @@ function financeBreakNote(history, curYear, emp, bizStt) {
 
 // 레코드에서 사업자등록번호 추출 — 사업자번호 힌트 키 우선, 없으면 ###-##-##### 패턴 스캔.
 // (금융위 법인 미확보 시 식약처/공장 레코드에서 사업자번호를 건지면 국세청·국민연금 재조회 가능)
-function findBzno(rec) {
-  if (!rec) return null;
-  const dash = /(\d{3})-?(\d{2})-?(\d{5})/;
-  // 1) 키에 사업자번호 힌트가 있는 필드 우선
-  for (const [k, v] of Object.entries(rec)) {
-    if (!/사업자|BIZR|BZNO|BSNM|CORP_?NO|business|regist.*no/i.test(k)) continue;
-    const m = String(v == null ? '' : v).match(dash);
-    if (m) return m[1] + m[2] + m[3];
-  }
-  // 2) 값에서 사업자번호 형식(###-##-#####) 스캔 — 대시 있는 경우만(전화·허가번호 오탐 방지)
-  for (const v of Object.values(rec)) {
-    const s = String(v == null ? '' : v);
-    if (/\d{3}-\d{2}-\d{5}/.test(s)) { const m = s.match(dash); if (m) return m[1] + m[2] + m[3]; }
-  }
-  return null;
-}
+// 위와 같은 이유로 app.js의 findBznoIn 하나만 남긴다.
+const findBzno = (rec) => findBznoIn(rec);
 
 // 목록 응답에서 상호가 포함된 레코드 찾기(필드명이 API마다 달라 전체 값 스캔). stripCorp는 런타임(app.js) 전역.
-function matchByName(name, list) {
-  const key = stripCorp(name).replace(/\s/g, '');
-  if (key.length < 2 || !Array.isArray(list)) return null;
-  return list.find((it) => Object.values(it).some((v) => {
-    const gn = stripCorp(String(v == null ? '' : v)).replace(/\s/g, '');
-    return gn.length >= 3 && gn.includes(key);
-  })) || null;
-}
+// app.js의 matchByNameApp과 바이트 단위로 같은 구현이 여기 따로 있었다. 같은 규칙이 두 곳에
+// 있으면 한쪽만 고쳐져 조용히 갈라진다 — 실제로 상호 대조 규칙은 여러 번 손봤다.
+// 구현은 app.js 하나로 두고 여기서는 그걸 부른다(둘 다 로드된 뒤에만 호출된다).
+const matchByName = (name, list) => matchByNameApp(name, list);
 
 
 // ── 방문 이동거리 추정 (한국콜마 세종 기준점) ──
@@ -667,6 +649,88 @@ function floorAreaNote(py) {
   return `약 ${py}평 — 상하차 도크와 자재·완제품 보관 구역을 방문 시 함께 확인하세요.`;
 }
 
+// ── 보고품목 심화 분석 ──
+// 여태 기능성 보고품목에서 읽은 건 보고일과 제형 둘뿐이었다. 같은 응답 안에 제품명과
+// 기능성 종류가 함께 들어 있고, 거기서 '이 회사가 실제로 무엇을 만들어 왔는가'가 나온다.
+// 업체가 말로 하는 실적과 공식 신고를 맞대 볼 수 있는 거의 유일한 공개 자료다.
+
+// 제품명에 붙는 일반어 — 이걸 브랜드로 착각하면 아무 의미 없는 목록이 된다
+const PRD_COMMON = new Set([
+  '크림', '로션', '스킨', '토너', '에센스', '세럼', '앰플', '마스크', '마스크팩', '팩', '젤', '밤',
+  '미스트', '쿠션', '파운데이션', '비비', '씨씨', '선', '선크림', '선블록', '클렌징', '폼', '오일',
+  '아이크림', '핸드크림', '바디로션', '샴푸', '트리트먼트', '컨디셔너', '에멀젼', '수분크림',
+  '미백', '주름', '개선', '기능성', '화장품', '수분', '보습', '영양', '탄력', '재생', '진정',
+  '화이트닝', '안티', '에이징', '리페어', '인텐시브', '프리미엄', '스페셜', '데일리', '모이스처',
+  '콜라겐', '히알루론산', '펩타이드', '나이아신아마이드', '레티놀', '비타민', '세라마이드',
+  '주식회사', '유한회사', '수출용', '국내용', '리뉴얼', '호', '형', '타입', 'spf', 'pa',
+]);
+// 숫자로 시작하거나 용량·규격인 토큰은 브랜드가 아니다(100ml, 50g, 3매, 2호 …)
+const PRD_NOISE_RE = /^[0-9a-z]{1,2}$|^\d|^(no|ver|type)\d*$|^\d+(ml|g|kg|mg|매|호|개|ea|p)$/i;
+
+// 제품명 앞머리에서 브랜드 후보를 뽑는다. 국내 기능성 보고명은 대개
+// "<브랜드> <제품 설명>" 꼴이다 (예: "○○○ 슈퍼바이탈 크림").
+// 한 번만 나온 표기는 버린다 — 반복해서 나오는 것만이 '거래 관계'의 근거가 된다.
+function brandGuess(names, ownName) {
+  const own = stripCorp(String(ownName || '')).replace(/\s/g, '');
+  const cnt = new Map();
+  (names || []).forEach((raw) => {
+    const s = String(raw || '')
+      .replace(/[\[\(【（][^\]\)】）]*[\]\)】）]/g, ' ')   // [수출용] (2호) 같은 부가표기 제거
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!s) return;
+    const tok = s.split(' ').filter(Boolean);
+    // 앞 두 토큰까지만 본다 — 브랜드는 거의 항상 맨 앞에 온다
+    for (const t of tok.slice(0, 2)) {
+      const low = t.toLowerCase();
+      if (t.length < 2 || PRD_COMMON.has(low) || PRD_NOISE_RE.test(low)) continue;
+      if (own && (own.includes(t) || t.includes(own))) continue;   // 제조사 자기 이름은 브랜드가 아니다
+      cnt.set(t, (cnt.get(t) || 0) + 1);
+      break;                                    // 한 제품에서 후보 하나만
+    }
+  });
+  return [...cnt.entries()]
+    .filter(([, n]) => n >= 2)                  // 반복 등장만 채택
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([nm, n]) => ({ name: nm, count: n }));
+}
+
+// 연도별 보고 건수 → 활동성 추이. 재무제표보다 먼저 움직이는 지표다.
+function rptByYear(dates, thisYear) {
+  const by = new Map();
+  (dates || []).forEach((d) => {
+    const y = (String(d || '').match(/(19|20)\d{2}/) || [])[0];
+    if (y) by.set(y, (by.get(y) || 0) + 1);
+  });
+  const years = [];
+  for (let y = thisYear - 5; y <= thisYear; y++) years.push({ year: y, n: by.get(String(y)) || 0 });
+  // 최근 2년 합과 그 앞 2년 합을 견준다 — 한 해 출렁임에 휘둘리지 않게
+  const late = years.slice(-2).reduce((s, x) => s + x.n, 0);
+  const early = years.slice(-4, -2).reduce((s, x) => s + x.n, 0);
+  // '끊겼다'는 판단은 바로 앞 2년이 아니라 기간 전체를 봐야 한다. 앞 2년으로만 재면
+  // 4년 전에 멈춘 업체는 그 구간도 0이라 '변동 없음'으로 나와 버린다.
+  const total = years.reduce((s, x) => s + x.n, 0);
+  let trend = 'flat';
+  if (late === 0 && total > 0) trend = 'stopped';
+  else if (early > 0 && late < early * 0.5) trend = 'down';
+  else if (late > early * 1.5 && late >= 3) trend = 'up';
+  return { years, trend, late, early };
+}
+
+// 기능성 종류 — 자외선차단은 SPF 실측 시험이 붙어 난이도가 한 단 위다
+const FUNC_KINDS = ['미백', '주름개선', '자외선차단', '탈모', '여드름', '아토피', '튼살', '염모', '제모'];
+function rptFunctions(recs) {
+  const hit = new Set();
+  (recs || []).forEach((r) => {
+    const blob = Object.values(r || {}).map((v) => String(v == null ? '' : v)).join(' ');
+    FUNC_KINDS.forEach((k) => { if (blob.includes(k)) hit.add(k); });
+    if (/자외선\s*차단|SPF/i.test(blob)) hit.add('자외선차단');
+  });
+  return FUNC_KINDS.filter((k) => hit.has(k));   // 표시 순서를 고정한다
+}
+
 // 선택된 업체 기준정보 + 재무/식약처/국민연금 응답 → 전체 리포트 조립 (실데이터 + 진단)
 // res = { finance:{ok,data|err}, rpt:{ok,...}, nps:{ok,...} }
 function assembleLiveReport(name, corp, res) {
@@ -695,6 +759,9 @@ function assembleLiveReport(name, corp, res) {
   const mkList = R.maker && R.maker.ok ? listOf(R.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const mk = matchByName(name, mkList);
   const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? mk.PRMISN_NO ?? mk.prmisnNo ?? null) : null;
+  // 허가일자 — 설립일과 크게 벌어져 있으면 업종을 바꿔 들어온 것이다. 반드시 물어야 할 사항.
+  const mkDateRaw = mk ? pickByKey(mk, /PRMISN.*(DE|DT|DAY)|허가일|등록일|LCNS.*(DE|DT)|PRMS.*DE/i) : null;
+  const mkDate = mkDateRaw && /(19|20)\d{6}|(19|20)\d{2}[-.\/]/.test(String(mkDateRaw)) ? fmtDate(String(mkDateRaw).replace(/\D/g, '')) : null;
 
   // 국세청 사업자상태 (odcloud: {data:[{b_stt, tax_type, ...}]})
   const ntsItem = R.nts && R.nts.ok && R.nts.data && Array.isArray(R.nts.data.data) ? R.nts.data.data[0] : null;
@@ -785,8 +852,11 @@ function assembleLiveReport(name, corp, res) {
     f('대표자', repVal, repVal ? (corp?.rep ? 'A' : 'B') : 'D', repSrc, repVal ? today : null, repNote),
     f('설립일 / 등록일', estbVal, estbVal ? (corp?.estbDt ? 'A' : 'C') : 'D', estbSrc, estbVal || null, estbNote),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
-    f('제조업 등록', mk ? `등록${mkNo ? ` (허가 ${mkNo})` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null,
-      mk ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인') : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
+    f('제조업 등록', mk ? `등록${mkNo ? ` (허가 ${mkNo})` : ''}${mkDate ? ` · ${mkDate} 허가` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null,
+      mk ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null,
+        // 허가일이 있으면 '화장품을 몇 년 했는가'가 나온다 — 회사 업력과는 다른 숫자다
+        mkDate ? `화장품 업력 약 ${Math.max(0, new Date().getFullYear() - Number(String(mkDate).slice(0, 4)))}년` : null,
+      ].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인') : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
     f('공장/제조소 소재지', fctAddr || mkAddr || null, (fctAddr || mkAddr) ? 'A' : 'D',
       fctAddr ? '산업단지공단 공장등록' : (mkAddr ? '식약처 화장품제조업 API' : '산업단지공단 공장등록'),
       (fctAddr || mkAddr) ? today : null,
@@ -822,6 +892,22 @@ function assembleLiveReport(name, corp, res) {
   const forms = [...new Set(fresh.map((i) => i.DOSAGE_FORM || i.dosage_form).filter(Boolean))];
   const allForms = [...new Set(rl.map((i) => i.DOSAGE_FORM || i.dosage_form || i.PRDLST_TYPE).filter(Boolean))];
   const rptEmpty = '기능성 보고 이력 없음 — 기능성 미취급 또는 업체명 불일치';
+  // ── 보고품목에서 더 읽어낸다 (제품명·연도·기능성 종류) ──
+  // 필드명이 응답마다 흔들려 키를 훑는다. 어떤 키를 실제로 받았는지도 남겨 둔다 —
+  // 나중에 비어 있을 때 '자료가 없는 것'인지 '키 이름이 다른 것'인지 가려야 한다.
+  const rptNames = rl.map((r) => pickByKey(r, /ITEM_?NAME|PRDLST_?NM|PRDUCT_?NM|PRODUCT|품목명|제품명/i)).filter(Boolean);
+  const rptDates = rl.map((r) => r.REPORT_DAY || r.report_day || r.PRDLST_REPORT_DE
+    || pickByKey(r, /REPORT.*(DAY|DE|DT)|보고일/i)).filter(Boolean);
+  const brands = brandGuess(rptNames, name);
+  const yearStat = rptByYear(rptDates, new Date().getFullYear());
+  const funcKinds = rptFunctions(rl);
+  const rptKeys = rl.length ? Object.keys(rl[0]) : [];    // 응답 필드 목록(진단용)
+  const TREND_TEXT = {
+    up: '최근 신고가 늘고 있습니다 — 수주가 늘었거나 신규 라인 가동 가능성',
+    down: '최근 신고가 눈에 띄게 줄었습니다 — 수주 감소·라인 축소 여부를 확인하세요',
+    stopped: '최근 2년간 신고가 없습니다 — 기능성 생산이 멈췄을 수 있습니다. 현재 가동 여부를 반드시 확인하세요',
+    flat: null,
+  };
 
   // 국민연금 (nps) — {search, detail, count} 형태 (검색→상세 2단계)
   const npsData = R.nps && R.nps.ok ? R.nps.data : null;
@@ -952,7 +1038,14 @@ function assembleLiveReport(name, corp, res) {
     let date = null;
     for (const [k, v] of ent) if (/DE$|_DE|DT$|YMD|DATE|DAY|ORDER|일자|일$/i.test(k) && isDate(v)) { date = String(v).trim(); break; }
     if (!date) for (const [, v] of ent) if (isDate(v)) { date = String(v).trim(); break; }
-    return { product: product || null, reason: reason || null, date: fmtDate(date) || date || null };
+    // 등급은 건수만큼 중요하다. 표시기재 오류(3등급)와 이물·미생물(1·2등급)은 위탁 제조에서
+    // 의미가 완전히 다르다 — 같은 '1건'으로 뭉뚱그리면 판단을 그르친다.
+    const gradeRaw = byKey(/GRAD|등급|CLASS|CLSF/i);
+    const gradeNo = gradeRaw ? (String(gradeRaw).match(/[123]/) || [])[0] : null;
+    const severe = gradeNo === '1' || gradeNo === '2'
+      || /이물|미생물|세균|중금속|유해|기준\s*초과|발암/.test(String(reason || ''));
+    return { product: product || null, reason: reason || null, date: fmtDate(date) || date || null,
+      grade: gradeRaw || null, severe };
   }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 
   const capacity = [
@@ -1045,6 +1138,28 @@ function assembleLiveReport(name, corp, res) {
     f('기능성 보고품목 수', rl.length || null, rl.length ? (fresh.length ? 'A' : 'C') : 'D', '식약처 보고품목 API', rl.length ? today : null,
       rl.length ? `전체 ${rl.length}건 · 최근 5년 ${fresh.length}건${fresh.length ? '' : ' — 최근 신고 없음(과거 이력)'}` : why('rpt', rptEmpty)),
     f('신고 제형 분포', allForms.length ? allForms.join(', ') : null, 'C', '식약처 보고품목 API', allForms.length ? today : null, allForms.length ? 'CAPA 직접 데이터 아님 — 실사 확인' : why('rpt', rptEmpty)),
+    // 연도별 추이 — 재무제표보다 먼저 움직인다. 숫자보다 '방향'이 중요하다.
+    f('보고품목 연도별 추이',
+      yearStat.years.some((y) => y.n) ? yearStat.years.map((y) => `${String(y.year).slice(2)}년 ${y.n}건`).join(' · ') : null,
+      yearStat.years.some((y) => y.n) ? 'A' : 'D', '식약처 보고품목 API',
+      yearStat.years.some((y) => y.n) ? today : null,
+      TREND_TEXT[yearStat.trend] || (yearStat.years.some((y) => y.n) ? '최근 신고 흐름에 큰 변동은 없습니다' : why('rpt', rptEmpty))),
+    // 기능성 종류 — 자외선차단은 SPF 실측 시험이 붙어 기술 난이도가 한 단 위다
+    f('취급 기능성 종류', funcKinds.length ? funcKinds.join(', ') : null,
+      funcKinds.length ? 'A' : 'D', '식약처 보고품목 API', funcKinds.length ? today : null,
+      funcKinds.length
+        ? (funcKinds.includes('자외선차단')
+          ? '자외선차단 품목 보유 — SPF 실측 시험을 수반하므로 품질관리 수준이 상대적으로 높습니다'
+          : '신고 이력이 있는 기능성 범주입니다. 신규 범주를 요청하려면 별도 보고가 필요합니다')
+        : why('rpt', rptEmpty)),
+    // ★ 업체 주장과 맞대 볼 수 있는 거의 유일한 공개 근거
+    f('보고품목 상 반복 브랜드',
+      brands.length ? brands.map((b) => `${b.name}(${b.count}건)`).join(', ') : null,
+      brands.length ? 'C' : 'D', '식약처 보고품목 API (제품명 분석)', brands.length ? today : null,
+      brands.length
+        ? '★ 제품명 앞머리에서 2건 이상 반복된 표기입니다 — 실제 납품 브랜드일 가능성이 높지만 추정입니다. '
+          + '업체가 말하는 거래처와 대조해 보시고, 차이가 크면 그 이유를 물어보세요.'
+        : (rl.length ? '제품명에서 반복되는 브랜드 표기를 찾지 못했습니다 — 자사 브랜드 위주이거나 제품명에 브랜드를 안 쓰는 경우' : why('rpt', rptEmpty))),
     f('CGMP 적합업소', hasCgmp ? '적합 (식약처 GMP 등재)' : null, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 — ISO/할랄/비건은 공개 API 없어 방문 시 인증서 확인' : why('gmp', 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)')),
   ];
 
@@ -1377,7 +1492,32 @@ function assembleLiveReport(name, corp, res) {
   if (recalls.length) {
     const latest = recalls[0];
     const bits = [latest.date, latest.product, latest.reason].filter(Boolean).join(' · ');
-    risk_flags.push({ type: '회수·판매중지', detail: `회수·판매중지 이력 ${recalls.length}건 (최근: ${bits || '상세 확인'}) — 품질·안전 사고 이력. 거래 전 반드시 원인·재발방지 확인` });
+    const sev = recalls.filter((r) => r.severe);
+    risk_flags.push({ type: '회수·판매중지',
+      detail: `회수·판매중지 이력 ${recalls.length}건${sev.length ? ` (그중 중대 ${sev.length}건)` : ''} (최근: ${bits || '상세 확인'}) — 품질·안전 사고 이력. 거래 전 반드시 원인·재발방지 확인` });
+    // 이물·미생물·기준 초과는 표시기재 오류와 급이 다르다 — 위탁 제조에서는 치명적이다
+    if (sev.length) {
+      risk_flags.push({ type: '중대 품질사고',
+        detail: `이물·미생물·기준초과 등 중대 사유 회수가 ${sev.length}건 있습니다 (${sev.slice(0, 2).map((r) => [r.grade, r.reason].filter(Boolean).join(' ')).join(' / ')}) `
+          + `— 표시기재 오류와 달리 제조공정·위생관리 실패입니다. 시정조치 결과와 재발방지 대책 문서를 요구하세요` });
+    }
+  }
+  // 기능성 신고가 끊겼거나 급감 — 재무제표보다 먼저 움직이는 신호다
+  if (yearStat.trend === 'stopped') {
+    risk_flags.push({ type: '생산 활동 중단 의심',
+      detail: `최근 2년간 기능성 보고가 0건입니다 (이전 ${yearStat.early}건). 기능성 라인이 멈췄거나 업체명이 바뀌었을 수 있습니다 — 현재 가동 품목과 최근 납품 실적을 확인하세요` });
+  } else if (yearStat.trend === 'down') {
+    risk_flags.push({ type: '생산 활동 감소',
+      detail: `기능성 보고가 최근 2년 ${yearStat.late}건으로 직전 2년(${yearStat.early}건) 대비 절반 아래입니다 — 수주 감소·라인 축소 여부를 확인하세요` });
+  }
+  // 허가일과 설립일이 크게 벌어지면 업종을 바꿔 들어온 것이다
+  if (mkDate && corp && corp.estbDt) {
+    const yGap = Number(String(mkDate).slice(0, 4)) - Number(String(corp.estbDt).replace(/\D/g, '').slice(0, 4));
+    if (isFinite(yGap) && yGap >= 5) {
+      risk_flags.push({ type: '화장품 업력 짧음',
+        detail: `설립 ${String(corp.estbDt).replace(/\D/g, '').slice(0, 4)}년, 화장품 제조업 허가 ${String(mkDate).slice(0, 4)}년 — ${yGap}년 차이입니다. `
+          + `다른 업종을 하다 화장품에 진입한 경우로, 화장품 업력은 ${new Date().getFullYear() - Number(String(mkDate).slice(0, 4))}년입니다. 기존 거래처와 생산 경험을 확인하세요` });
+    }
   }
 
   return {

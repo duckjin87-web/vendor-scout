@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 148;
+const BUILD = 149;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1247,52 +1247,9 @@ function findBznoIn(rec) {
   return null;
 }
 
-// 사업자정보 집계 사이트(비공식) 검색결과 '제목·요약'에서 대표자·사업자번호 추출 — 페이지 fetch 없이(JS렌더 회피).
-// 예: marketbz 제목 "주식회사 하이브팩토리-최**...8928702413" → 대표자 최**, 사업자번호 8928702413.
-const AGG_HOSTS = /(^|\.)(moneypin\.biz|bizno\.net|nicebizinfo\.|marketbz\.|cretop\.|sbiz24\.|findbiz\.|jaoms\.|ktdb\.|wgbiz\.)/i;
-async function aggLookup(nm) {
-  if (!getProxy() || !nm) return null;
-  const nk = stripCorp(nm).replace(/\s/g, '');
-  let web;
-  try { web = await proxyOnlyGet('naverWeb', { query: `${nm} 화장품`, display: '25' }); } catch { return null; }
-  const items = (web && web.items) || [];
-  let bzno = null, rep = null, host = null, url = null, corpName = null;
-  for (const it of items) {
-    let h = ''; try { h = new URL(it.link).hostname; } catch { continue; }
-    const t = (String(it.title || '') + ' ' + String(it.description || '')).replace(/<\/?b>/g, '');
-    if (nk.length >= 2 && !t.replace(/\s/g, '').includes(nk)) continue; // 상호 불일치 배제
-    const isAgg = AGG_HOSTS.test(h);
-    const bm = t.match(/(\d{3})-(\d{2})-(\d{5})/) || t.match(/(?<!\d)(\d{10})(?!\d)/);
-    const rm = t.match(/대표자?\s*[:\-]?\s*([가-힣]{2,4}\*{0,2})/) || t.match(/[가-힣]{2,}\s*[-·]\s*([가-힣]{1,3}\*{1,2})/);
-    // 집계 도메인이거나, (사업자번호 + 대표자) 둘 다 담긴 신뢰 결과만 채택
-    if (!isAgg && !(bm && rm)) continue;
-    if (!bzno && bm) bzno = bm[0].replace(/\D/g, '');
-    if (!rep && rm) rep = rm[1];
-    // 법인 형태 상호(주식회사/(주)) 포착 → 금융위 재검색용
-    if (!corpName) { const cm = t.match(/((?:주식회사|㈜|\(주\))\s*[가-힣A-Za-z0-9]{2,}|[가-힣A-Za-z0-9]{2,}\s*(?:주식회사|㈜))/); if (cm && cm[1].replace(/\s/g, '').includes(nk)) corpName = cm[1].replace(/\s+/g, ' ').trim(); }
-    if (!host && (bm || rm)) { host = h.replace(/^www\./, ''); url = it.link; } // 실제 값 나온 사이트로 귀속
-    if (bzno && rep && corpName) break;
-  }
-  // 찾은 집계 상세페이지를 fetch해 개업일·업종·전화·영업상태 추가 추출(SSR 사이트면 성공, JS렌더면 제목값만)
-  let opneDe = null, bizType = null, status = null, tel = null;
-  if (url) {
-    try {
-      const page = await proxyOnlyGet('fetchPage', { url });
-      const text = htmlToText((page && page.text) || '');
-      if (text && (nk.length < 2 || text.replace(/\s/g, '').includes(nk))) {
-        const g = (re) => { const m = text.match(re); return m ? m[1].trim() : null; };
-        const od = g(/(?:개업일자?|설립일자?|등록일자?|사업자?\s*등록일)\s*[:：]?\s*(\d{4}[-.]\s?\d{1,2}[-.]\s?\d{1,2})/);
-        opneDe = od ? od.replace(/\s/g, '') : null;
-        // 업종은 집계 페이지 광고/랭킹 위젯 텍스트를 오추출("건설업" 등)할 위험이 커서 추출 안 함(식약처 기준 사용)
-        tel = g(/(?:전화|연락처|대표전화|TEL)\s*[:：]?\s*(0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4})/i) || g(/(0\d{1,2}-\d{3,4}-\d{4})/);
-        status = /폐업일자|폐업\s|폐업$/.test(text) ? '폐업(추정)' : (/계속사업자|정상영업|영업중/.test(text) ? '계속사업자(추정)' : null);
-        if (!bzno) { const m = text.match(/(\d{3})-(\d{2})-(\d{5})/); if (m) bzno = m[0].replace(/\D/g, ''); }
-        if (!rep) { const m = text.match(/(?:대표자명?|대표이사)\s*[:：]?\s*([가-힣]{2,4}\*{0,2})/); if (m) rep = m[1]; }
-      }
-    } catch { /* 페이지 fetch 실패(JS렌더 등) — 제목 추출값만 사용 */ }
-  }
-  return (bzno || rep || corpName || opneDe) ? { host: host || '웹검색', url, bzno, rep, corpName, opneDe, bizType, status, tel } : null;
-}
+// 비공식 사업자정보 집계 사이트(marketbz·bizno 등) 조회 코드가 여기 있었다.
+// 공식 data.go.kr 자료만 신뢰하기로 하면서 호출을 끊었고(bizAgg는 늘 null),
+// 그 뒤로 아무도 부르지 않는 43줄로 남아 있었다. 되살릴 일이 생기면 git 이력에 있다.
 
 // 카카오 이동거리 — 한국콜마(기준점)→방문지.
 //  1순위: 카카오모빌리티 길찾기(실측). 이용신청 안 돼 있으면 실패 → 2순위.
@@ -1576,7 +1533,10 @@ function matchByNameApp(name, list) {
   if (key.length < 2 || !Array.isArray(list)) return null;
   return list.find((it) => Object.values(it).some((v) => {
     const gn = stripCorp(String(v == null ? '' : v)).replace(/\s/g, '');
-    return gn.length >= 3 && gn.includes(key);
+    // 종전 조건은 gn.length >= 3 이었다. 그런데 '주식회사 셀랩'에서 법인격을 떼면 '셀랩'
+    // 두 글자라, 두 글자 상호는 자기 레코드에도 영영 걸리지 못했다(제조업 등록이 통째로 빈 채로).
+    // 값이 검색어보다 짧을 수 없다는 조건이면 충분하고, 그건 includes가 이미 보장한다.
+    return gn.length >= key.length && gn.includes(key);
   })) || null;
 }
 
