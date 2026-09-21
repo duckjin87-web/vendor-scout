@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 147;
+const BUILD = 148;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1031,27 +1031,42 @@ function mergeDeep(primary, secondary) {
 // 국내 화장품사 도메인은 상호의 로마자 축약형인 경우가 많다(바이오코스텍 → biocostec).
 // 엄격한 로마자 변환으로는 매칭이 안 되므로(baio≠bio, koseu≠cos) '자음 골격'으로 비교한다.
 const HAN_CHO = ['g', 'kk', 'n', 'd', 'tt', 'r', 'm', 'b', 'pp', 's', 'ss', '', 'j', 'jj', 'ch', 'k', 't', 'p', 'h'];
+const HAN_JUNG = ['a', 'ae', 'ya', 'yae', 'eo', 'e', 'yeo', 'ye', 'o', 'wa', 'wae', 'oe', 'yo', 'u', 'wo', 'we', 'wi', 'yu', 'eu', 'ui', 'i'];
 const HAN_JONG = ['', 'k', 'k', 'k', 'n', 'n', 'n', 't', 'l', 'k', 'm', 'l', 'l', 'l', 'p', 'l', 'm', 'p', 'p', 't', 't', 'ng', 't', 't', 'k', 't', 'p', 't'];
 function hangulToLatin(s) {
   let out = '';
   for (const ch of String(s || '')) {
-    const c = ch.charCodeAt(0);
-    if (c >= 0xac00 && c <= 0xd7a3) {
-      const i = c - 0xac00;
-      out += HAN_CHO[Math.floor(i / 588)] + 'a' + HAN_JONG[i % 28]; // 모음은 골격 비교에서 무시하므로 자리표시만
-    } else out += ch;
+    const c = ch.charCodeAt(0) - 0xac00;
+    // 모음 자리에 'a'를 박아 넣던 것을 실제 모음으로 옮긴다. 옛 방식은 '아이큐어'처럼
+    // 초성이 전부 ㅇ(무음)인 상호를 골격 한 글자로 뭉개 버려 비교 자체가 불가능했다.
+    if (c >= 0 && c < 11172) out += HAN_CHO[Math.floor(c / 588)] + HAN_JUNG[Math.floor((c % 588) / 28)] + HAN_JONG[c % 28];
+    else out += ch;
   }
   return out.toLowerCase();
 }
-// 자음만 남기고 표기 흔들림을 정규화: c/q→k, x→ks, ph/f→p, th→t, z→j, 중복 제거
-function consonantSkeleton(s) {
-  return String(s || '').toLowerCase()
-    .replace(/ph|f/g, 'p').replace(/th/g, 't').replace(/ch/g, 'c')
-    .replace(/x/g, 'ks').replace(/[cq]/g, 'k').replace(/z/g, 'j')
-    .replace(/[^a-z]/g, '')
-    .replace(/[aeiouwy]/g, '')
-    .replace(/(.)\1+/g, '$1');
+// ── 자음 골격 ──
+// 한글 표기와 회사가 고른 영문 표기는 같은 소리를 다르게 적는다. 한 갈래로 모을 수 없는
+// 대응은 갈래를 나눠 전부 만들어 두고, 어느 하나라도 맞으면 같은 이름으로 본다.
+//   ㅅ ↔ c(셀랩=cellab) · th(제니스=zenith)   ㄹ ↔ r/l(초성r·종성l이지만 같은 소리)
+//   받침은 소리가 중화된다(랩→p인데 영문은 lab) → b/d/g와 p/t/k를 같은 것으로 본다
+function skeletonForms(s) {
+  const base = String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+  const forms = new Set();
+  for (const th of ['t', 's']) {
+    for (const c of ['k', 's']) {
+      const v = base
+        .replace(/ph|f/g, 'p').replace(/th/g, th).replace(/ch/g, 'c')
+        .replace(/x/g, 'ks').replace(/q/g, 'k').replace(/c/g, c).replace(/z/g, 'j')
+        .replace(/b/g, 'p').replace(/d/g, 't').replace(/g/g, 'k')
+        .replace(/[aeiouwy]/g, '')
+        .replace(/r/g, 'l')
+        .replace(/(.)\1+/g, '$1');
+      if (v.length >= 2) forms.add(v);
+    }
+  }
+  return forms;
 }
+const consonantSkeleton = (s) => [...skeletonForms(s)][0] || '';
 // 두 골격의 최장 공통 연속부분 길이
 function lcsLen(a, b) {
   let best = 0;
@@ -1066,13 +1081,18 @@ function lcsLen(a, b) {
 }
 function domainAffinity(korName, host) {
   const dom = String(host || '').replace(/^www\./, '').split('.')[0];
-  const a = consonantSkeleton(hangulToLatin(stripCorp(korName)));
-  const b = consonantSkeleton(dom);
-  if (a.length < 3 || b.length < 3) return false;
-  if (a.includes(b) || b.includes(a)) return true;
-  // 상호 일부만 딴 도메인(한국콜마 → kolmar)도 인정: 공통부분 3자 이상 + 짧은 쪽의 절반 이상
-  const n = lcsLen(a, b);
-  return n >= 3 && n >= Math.min(a.length, b.length) * 0.5;
+  const A = skeletonForms(hangulToLatin(stripCorp(korName)));
+  const B = skeletonForms(dom);
+  for (const a of A) {
+    for (const b of B) {
+      if (a.length < 3 || b.length < 3) continue;
+      if (a.includes(b) || b.includes(a)) return true;
+      // 상호 일부만 딴 도메인(한국콜마 → kolmar)도 인정: 공통부분 3자 이상 + 짧은 쪽의 절반 이상
+      const n = lcsLen(a, b);
+      if (n >= 3 && n >= Math.min(a.length, b.length) * 0.5) return true;
+    }
+  }
+  return false;
 }
 
 async function findHomepage(nm, corp, hpHints) {
@@ -1135,6 +1155,15 @@ async function findHomepage(nm, corp, hpHints) {
     return { proposed: null, candidates: [], err: webErr,
       reason: why ? `검색결과가 모두 제외 대상이었습니다 (${why}) — 자체 홈페이지가 없는 업체일 수 있습니다` : '검색결과 없음' };
   }
+  // ── 대조할 후보 고르기 ──
+  // 여태 '먼저 도착한 순서'로 12개를 잘랐다. 웹문서 질의 8개가 각 20건을 주니 호스트가
+  // 12개를 넘기기 일쑤인데, 그러면 뒤쪽 질의에서 나온 진짜 홈페이지가 열어 보지도 못하고
+  // 잘려 나간다. 페이지를 열기 전에도 알 수 있는 단서로 먼저 줄을 세우고 자른다.
+  const nameForRank = stripCorp(nm).replace(/\s/g, '');
+  const VIA_RANK = { factory: 0, hire: 1, local: 2, web: 3 };   // 출처 자체가 근거인 것부터
+  const preScore = (c) => (domainAffinity(nm, c.host) ? 2 : 0)
+    + (nameForRank && String(c.title || '').replace(/\s/g, '').includes(nameForRank) ? 1 : 0);
+  cands.sort((a, b) => (VIA_RANK[a.via] ?? 9) - (VIA_RANK[b.via] ?? 9) || preScore(b) - preScore(a));
   cands.splice(12);                          // 대조 비용 상한 — 노이즈를 걸러낸 뒤라 이 정도면 충분
 
   const nameCore = stripCorp(nm).replace(/\s/g, '');
