@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 149;
+const BUILD = 150;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2991,39 +2991,45 @@ function renderHiring(h) {
     html += `<div class="hire-none">뚜렷한 신호 없음 — 반복 공고나 급증 패턴이 확인되지 않았습니다.</div>`;
   }
 
-  // 연도별 분포 — 3개년 흐름을 한눈에
+  // ── 좌우 2단 ──
+  // 왼쪽은 '공고가 몇 건이었나'(사실), 오른쪽은 '그래서 무슨 뜻인가'(해석)로 나눈다.
+  // 세로로 길게 늘어놓으면 건수를 보다가 해석까지 스크롤해야 해서 둘을 맞대 보기 어려웠다.
+  let left = '', right = '';
+
+  // [좌] 연도별 분포 — 3개년 흐름을 한눈에
   if (yrs.length) {
-    html += `<div class="hire-sec">연도별 공고 <em>날짜가 확인된 ${h.dated}건 기준</em></div><div class="hire-bars">`
+    left += `<div class="hire-sec">연도별 공고 <em>날짜가 확인된 ${h.dated}건 기준</em></div><div class="hire-bars">`
       + yrs.map((y) => `<div class="hbar"><i>${esc(y)}</i>`
         + `<span style="width:${Math.round((h.byYear[y] / maxN) * 100)}%"></span><b>${h.byYear[y]}건</b></div>`).join('')
       + '</div>';
   }
-  // 직종 분포 — 어느 자리가 반복되는지가 이탈 해석의 핵심
+  // [좌] 직종 분포 — 어느 자리가 반복되는지가 이탈 해석의 핵심. 건수와 같은 '공고' 이야기다.
   const roles = Object.entries(h.byRole).sort((a, b) => b[1] - a[1]);
   if (roles.length) {
-    html += `<div class="hire-sec">모집 직종</div><div class="hire-roles">`
+    left += `<div class="hire-sec">모집 직종</div><div class="hire-roles">`
       + roles.map(([r, n]) => `<span class="hrole">${esc(r)}<b>${n}</b></span>`).join('') + '</div>';
   }
-  // 인력 관측치 대조 — 채용사이트 공시 사원수 ↔ 연금 가입자수
+
+  // [우] 인력 관측치 대조 — 채용사이트 공시 사원수 ↔ 연금 가입자수
   if (h.headTrend) {
     const t = h.headTrend;
-    html += `<div class="hire-sec">인력 관측치 대조 <em>출처가 다른 두 시점</em></div><div class="hire-head">`
+    right += `<div class="hire-sec">인력 관측치 대조 <em>출처가 다른 두 시점</em></div><div class="hire-head">`
       + `<div><i>${esc(t.site.host)}</i><b>${t.site.count}명</b><u>${esc(t.site.asOf || '기준일 미상')}</u></div>`
       + `<div class="arrow">→</div>`
       + `<div><i>국민연금</i><b>${t.nps.count}명</b><u>${esc(t.nps.asOf || '')}</u></div>`
       + `<div class="delta ${t.diff > 0 ? 'up' : t.diff < 0 ? 'down' : ''}">${t.diff > 0 ? '+' : ''}${t.diff}명</div>`
       + '</div>';
   }
+  // [우] 채용 강도
   if (h.intensity) {
     const i = h.intensity;
-    html += `<div class="hire-sec">채용 강도 <em>회전율 대용치</em></div>`
+    right += `<div class="hire-sec">채용 강도 <em>회전율 대용치</em></div>`
       + `<div class="hire-int">재직자 ${i.emp}명 대비 연평균 공고 <b>${i.perYear}건</b> = <b>${i.ratio}%</b> · ${esc(i.band)}</div>`;
   }
-  // 급여 수준 — 공시에는 없고 채용 사이트에만 있는 몇 안 되는 실질 정보.
-  // 인력 관측치 바로 아래에 붙인다(같은 '사람' 이야기라 떨어뜨려 놓을 이유가 없다).
+  // [우] 급여 수준 — 공시에는 없고 채용 사이트에만 있는 몇 안 되는 실질 정보
   const prof = h.extProfile || [];
   if (prof.length) {
-    html += `<div class="hire-sec">급여 수준 <em>채용사이트 게재값 · 공시 아님</em></div><div class="pf-kv">`
+    right += `<div class="hire-sec">급여 수준 <em>채용사이트 게재값 · 공시 아님</em></div><div class="pf-kv">`
       + prof.map((r) => {
         const alt = r.agree ? '' : `<u>${esc(r.sources.map((s) => `${s.host} ${s.value}`).join(' / '))}</u>`;
         return `<div class="pf-k">${esc(r.key)}</div>`
@@ -3031,6 +3037,13 @@ function renderHiring(h) {
           + `<small>${esc(r.sources.map((s) => s.host).join(', '))}</small>${alt}</div>`;
       }).join('')
       + '</div>';
+  }
+  // 한쪽이 비면 2단으로 둘 이유가 없다 — 남은 쪽을 폭 전체로 편다.
+  if (left && right) html += `<div class="hire-split"><div class="hire-col">${left}</div><div class="hire-col">${right}</div></div>`;
+  else if (left || right) html += left || right;
+  // 오른쪽이 통째로 빌 수도 있다(연금·채용사이트 값 미확보). 왜 비었는지는 말해 준다.
+  if (left && !right) {
+    html += `<div class="hire-warn">인력 관측치·채용 강도·급여 수준은 국민연금 가입자수나 채용사이트 기업정보가 있어야 계산됩니다 — 이번에는 확보하지 못했습니다.</div>`;
   }
 
   // 근거 원문 — 추정의 출처를 사용자가 직접 열어볼 수 있어야 한다

@@ -858,6 +858,16 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .hire-none { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
 .hire-sec { font-size: 11.5px; font-weight: 800; color: var(--muted); margin: 13px 0 7px; padding-top: 11px; border-top: 1px dashed var(--border); }
 .hire-sec em { font-style: normal; font-weight: 500; color: var(--faint); font-size: 10.5px; margin-left: 5px; }
+/* 좌우 2단 — 왼쪽은 공고 건수(사실), 오른쪽은 해석. 둘을 나란히 놓아야 맞대 볼 수 있다. */
+.hire-split { display: grid; grid-template-columns: 1fr 1fr; gap: 0 26px; align-items: start; }
+/* 각 단의 첫 제목은 위 구분선을 지운다 — 2단이 되면 선이 가운데서 끊겨 어색해진다 */
+.hire-split .hire-col > .hire-sec:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.hire-col { min-width: 0; }   /* 긴 값이 칸을 밀어내지 않게 */
+/* 좁은 화면·인쇄에서는 한 단으로 되돌린다 */
+@media (max-width: 720px) {
+  .hire-split { grid-template-columns: 1fr; gap: 0; }
+  .hire-split .hire-col:last-child > .hire-sec:first-child { margin-top: 13px; padding-top: 11px; border-top: 1px dashed var(--border); }
+}
 .hire-sig { display: grid; gap: 8px; }
 .hire-sig .hs { border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; background: var(--panel-2); border-left: 3px solid var(--gD); }
 .hire-sig .hs.high { border-left-color: var(--risk); background: var(--risk-bg); }
@@ -868,10 +878,12 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .hire-sig .hs i { font-style: normal; display: block; font-size: 12.5px; line-height: 1.5; }
 .hire-sig .hs em { font-style: normal; display: block; font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
 .hire-bars { display: grid; gap: 5px; }
-.hbar { display: flex; align-items: center; gap: 9px; font-size: 12px; }
-.hbar i { font-style: normal; color: var(--muted); flex: 0 0 42px; font-variant-numeric: tabular-nums; }
+/* 막대는 고정 3열로 둔다. flex로 두면 칸이 좁아질 때 막대가 줄어들면서 건수 라벨이
+   두 줄로 접히고("3 / 건"), 막대 길이도 비율과 어긋난다. 2단으로 나눈 뒤 실제로 그랬다. */
+.hbar { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 9px; font-size: 12px; }
+.hbar i { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
 .hbar span { height: 9px; border-radius: 5px; background: #7c5cff; min-width: 4px; }
-.hbar b { font-weight: 700; font-variant-numeric: tabular-nums; }
+.hbar b { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .hire-roles { display: flex; flex-wrap: wrap; gap: 6px; }
 .hrole { font-size: 12px; border: 1px solid var(--border); border-radius: 3px; padding: 4px 11px; background: var(--panel-2); }
 .hrole b { margin-left: 6px; font-weight: 800; color: #7c5cff; }
