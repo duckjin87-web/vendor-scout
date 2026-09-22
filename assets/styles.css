@@ -18,8 +18,10 @@
   --gD: #9aa1ab; --gD-bg: #eef0f2;
   --risk: #c0392b; --risk-bg: #fdecea;
 }
+/* 어두운 배색 한 벌 — OS 설정을 따를 때와 사용자가 직접 고를 때 둘 다 같은 값을 쓴다.
+   OS가 어둡더라도 사용자가 밝게(light)를 고르면 그 뜻을 우선한다. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0e1116; --panel: #171b22; --panel-2: #1c212a;
     --border: #2a303a; --text: #e6e9ee; --muted: #9aa3b1; --faint: #6b7482;
     --accent: #5b8cff; --accent-soft: #1b2740;
@@ -28,6 +30,15 @@
     --gC: #e0a94a; --gC-bg: #38290f; --gD: #6b7482; --gD-bg: #232a34;
     --risk: #ff7a6b; --risk-bg: #3a1a17;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1116; --panel: #171b22; --panel-2: #1c212a;
+  --border: #2a303a; --text: #e6e9ee; --muted: #9aa3b1; --faint: #6b7482;
+  --accent: #5b8cff; --accent-soft: #1b2740;
+  --shadow: none; --rule: #3a414d;
+  --gA: #46c88a; --gA-bg: #123528; --gB: #6ea0ff; --gB-bg: #16233d;
+  --gC: #e0a94a; --gC-bg: #38290f; --gD: #6b7482; --gD-bg: #232a34;
+  --risk: #ff7a6b; --risk-bg: #3a1a17;
 }
 
 * { box-sizing: border-box; }
@@ -45,7 +56,9 @@ a:hover { text-decoration: underline; }
 
 /* Header */
 .topbar { border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 10; }
-.topbar .wrap { display: flex; align-items: center; gap: 10px; min-height: 60px; padding-top: 8px; padding-bottom: 8px; }
+/* 줄바꿈을 허용한다 — 버튼이 하나 늘자 좁은 화면에서 '실데이터 연결'이 화면 밖으로
+   밀려나 가로 스크롤이 생겼다. 버튼들은 줄이 바뀌어도 되지만 잘려서는 안 된다. */
+.topbar .wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-height: 60px; padding-top: 8px; padding-bottom: 8px; }
 .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; }
 .logo .mark {
   width: 30px; height: 30px; border-radius: 8px; flex: 0 0 auto;
@@ -177,6 +190,21 @@ a:hover { text-decoration: underline; }
 .proxybtn:hover { border-color: var(--accent); color: var(--accent); }
 .proxybtn.on { color: var(--gA); border-color: var(--gA); background: var(--gA-bg); }
 
+/* 테마 선택 — 밝게 / 어둡게 / 기기 설정 따름 */
+.themesel {
+  display: inline-flex; flex: 0 0 auto; margin-right: 8px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--panel); overflow: hidden;
+}
+.thbtn {
+  font-size: 11.5px; font-weight: 600; line-height: 1; color: var(--muted); background: none;
+  border: 0; padding: 6px 9px; cursor: pointer; transition: all .15s; font-family: inherit;
+  white-space: nowrap;
+}
+.thbtn + .thbtn { border-left: 1px solid var(--border); }
+.thbtn:hover { color: var(--accent); }
+.thbtn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+@media print { .themesel { display: none !important; } }
+
 /* Blocks */
 .blocks { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .block { background: var(--panel); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
@@ -254,7 +282,8 @@ a:hover { text-decoration: underline; }
 .oembox .ot-tag.ot-oem { background: var(--gA-bg); color: var(--gA); }
 .oembox .ot-tag.ot-etc { background: var(--panel-2); color: var(--muted); }
 .oembox .ot-hint { font-size: 11.5px; color: var(--muted); margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--border); line-height: 1.4; }
-@media (prefers-color-scheme: dark) { .oembox .ot-tag.ot-report { background: #312e81; color: #c7d2fe; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .oembox .ot-tag.ot-report { background: #312e81; color: #c7d2fe; } }
+:root[data-theme="dark"] .oembox .ot-tag.ot-report { background: #312e81; color: #c7d2fe; }
 
 /* 🔀 교차검증 자동진단 패널 */
 .crossdiag { margin: 0 0 14px; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: var(--panel); }
@@ -448,7 +477,9 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 
 /* 인쇄 / PDF 저장 — 방문용 리포트만 깔끔하게 남긴다 */
 @media print {
-  :root {
+  /* 화면 테마와 무관하게 종이는 흰색이다. :root[data-theme=…]가 :root보다 우선순위가
+     높아서, 같은 강도로 받아 주지 않으면 어두운 배경이 그대로 인쇄된다. */
+  :root, :root[data-theme="dark"], :root[data-theme="light"] {
     --bg: #fff; --panel: #fff; --panel-2: #fff; --border: #ccc; --text: #000;
     --muted: #333; --faint: #666; --shadow: none;
   }
@@ -860,12 +891,20 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .hire-sec em { font-style: normal; font-weight: 500; color: var(--faint); font-size: 10.5px; margin-left: 5px; }
 /* 좌우 2단 — 왼쪽은 공고 건수(사실), 오른쪽은 해석. 둘을 나란히 놓아야 맞대 볼 수 있다. */
 .hire-split { display: grid; grid-template-columns: 1fr 1fr; gap: 0 26px; align-items: start; }
+/* 두 단을 가르는 세로 구분선. 칸 사이 여백 한가운데에 둔다(26px 간격의 절반 = 13px).
+   테두리로 그리면 단 높이가 서로 달라 선이 짧은 쪽에 맞춰 끊긴다 — 배경으로 깔아 끝까지 긋는다. */
+.hire-split {
+  background-image: linear-gradient(var(--rule), var(--rule));
+  background-size: 1px calc(100% - 4px);
+  background-position: calc(50% - 0.5px) 2px;
+  background-repeat: no-repeat;
+}
 /* 각 단의 첫 제목은 위 구분선을 지운다 — 2단이 되면 선이 가운데서 끊겨 어색해진다 */
 .hire-split .hire-col > .hire-sec:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .hire-col { min-width: 0; }   /* 긴 값이 칸을 밀어내지 않게 */
 /* 좁은 화면·인쇄에서는 한 단으로 되돌린다 */
 @media (max-width: 720px) {
-  .hire-split { grid-template-columns: 1fr; gap: 0; }
+  .hire-split { grid-template-columns: 1fr; gap: 0; background-image: none; }   /* 한 단이면 가를 선이 없다 */
   .hire-split .hire-col:last-child > .hire-sec:first-child { margin-top: 13px; padding-top: 11px; border-top: 1px dashed var(--border); }
 }
 .hire-sig { display: grid; gap: 8px; }

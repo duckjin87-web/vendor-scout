@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 150;
+const BUILD = 151;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -53,6 +53,29 @@ function staticHit(key) {
 // ── 실데이터 연결 (프록시 경유) ──
 // data.go.kr·네이버는 브라우저 직접 호출이 CORS로 막힌다. 프록시(Vercel /api/proxy 또는 Worker)
 // 주소만 저장해 두고, 모든 조회를 프록시로 중계한다. API 키는 프록시 서버(환경변수)에만 있고 여기엔 없다.
+// ── 화면 테마 ──
+// 'auto'는 저장하지 않고 속성을 지운다 — 그래야 기기 설정이 바뀔 때 따라 움직인다.
+// (첫 그림 전 적용은 index.html 인라인 스크립트가 맡는다. 여기는 전환·버튼 상태만.)
+const THEME_KEY = 'vs_theme';
+const getTheme = () => { try { const t = localStorage.getItem(THEME_KEY); return t === 'dark' || t === 'light' ? t : 'auto'; } catch { return 'auto'; } };
+function setTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'dark' || mode === 'light') {
+    root.setAttribute('data-theme', mode);
+    try { localStorage.setItem(THEME_KEY, mode); } catch { /* 저장 못 해도 이번 세션은 적용된다 */ }
+  } else {
+    root.removeAttribute('data-theme');
+    try { localStorage.removeItem(THEME_KEY); } catch {}
+  }
+  syncThemeUI();
+}
+function syncThemeUI() {
+  const cur = getTheme();
+  document.querySelectorAll('[data-set-theme]').forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.getAttribute('data-set-theme') === cur));
+  });
+}
+
 const PROXY_KEY = 'vs_proxy';
 const _ls = (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
 const _sls = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch {} };
@@ -4288,6 +4311,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // ?proxy= 로 들어오면 저장 (프록시 자동 연결)
   const pParam = new URLSearchParams(location.search).get('proxy');
   if (pParam !== null) { setProxy(pParam.trim()); }
+
+  // 테마 버튼 — 밝게 / 어둡게 / 기기 설정 따름
+  document.querySelectorAll('[data-set-theme]').forEach((b) => {
+    b.addEventListener('click', () => setTheme(b.getAttribute('data-set-theme')));
+  });
+  syncThemeUI();
 
   const proxyBtn = $('#proxyBtn');
   if (proxyBtn) {
