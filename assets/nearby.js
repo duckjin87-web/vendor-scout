@@ -1,25 +1,22 @@
 // nearby.js — 근처 업체 탭
-// 방문할 업체를 기점으로 주변 화장품 제조업체를 지도와 목록으로 보여준다.
-// 한 번 가는 길에 들를 만한 곳을 같이 보고, 허가 여부까지 확인한 뒤 동선을 짜게 하려는 것이다.
+// 조회한 업체(기점)의 주소를 기준으로, 식약처 '화장품 제조업' 허가 업체 중 가까운 곳을
+// 지도와 목록으로 보여준다. 방문 가는 길에 들를 만한 곳을 보고 동선을 짜려는 것이다.
 //
 // 화면 — 시안 A(지도 중심)와 B(리스트·동선)를 합친다
-//   지도(A): 기점 ◆, 반경 링(선택 반경·절반), 허가 ● / 명단에 없음 ○ 핀, 선택 업체 카드
-//   목록(B): 전체 · 제조업 허가 · 명단에 없음 탭, 지역 단계별 묶음, 펼치면 동선 담기·사전검증 리포트
+//   머리줄: 조회 업체명 (기준 주소) · [주소 수정] — 기준이 틀렸으면 고쳐서 다시 찾는다
+//   지도(A): 기점 ◆, 반경 링, 제조업 허가 ● / CGMP 적합 ●, 선택 업체 카드(상세 주소·차량 이동시간)
+//   목록(B): 전체 · CGMP 적합 · 위치 미확인 탭, 지역 단계별 묶음, 펼치면 동선 담기·사전검증 리포트
 //
-// ── 위치를 믿는 방법 ──
-// 처음 판에서는 주소를 좌표로 바꾼 결과를 그대로 썼다. 그런데 카카오 주소검색은 번지까지
-// 못 맞추면 '파주시'처럼 시·군 중심점을 돌려준다. 그 점을 업체 위치로 찍어서, 파주시의 명단
-// 업체 수십 곳이 모두 같은 2.9km에 몰렸고 동선도 엉뚱한 곳을 물었다.
-// 이제는 두 단계로 좁힌다.
-//   ① 글자 주소로 먼저 가른다 — 기점과 같은 읍·면·동 → 같은 시·군·구 → 같은 시·도 → 인접 시·도.
-//      요청 없이 되고, 목록도 이 단계로 묶어 보여 준다.
-//   ② 좌표는 '번지까지 맞은 결과(ROAD_ADDR·REGION_ADDR)'만 쓴다. 그리고 그 결과의 시·도·시·군이
-//      글자 주소와 같아야 한다(교차검증). 못 맞으면 업체 이름으로 지도에서 한 번 더 찾는다.
-//      그래도 안 되면 지도에 찍지 않고 '위치 미확인'으로 목록에만 둔다 — 틀린 점을 찍느니 안 찍는다.
-//
-// 데이터 — 요청 수를 먼저 생각했다
-//   카카오 장소검색(주변 '화장품 제조/화장품 공장/코스메틱') · 식약처 제조업 명단 전체(세션 캐시)
-//   · CGMP 명단 · 명단 업체 주소→좌표(가까운 단계부터 30곳씩, 결과는 브라우저에 저장)
+// ── 어떻게 찾나 ──
+// 업체의 출처는 식약처 화장품제조업 명단 하나다. 카카오 장소검색으로 긁어 온 업체는 목록에
+// 올리지 않는다(허가 없는 판매점·물류창고가 섞였다). 카카오는 '위치를 찾는 도구'로만 쓴다.
+//   ① 주소로 먼저 좁힌다 — 기점과 같은 읍·면·동 → 같은 시·군·구 → 같은 시·도 → 인접 시·도.
+//      글자 주소만으로 되므로 요청이 없다. 먼 시·군은 그 시·군의 중심 좌표로 거리를 가늠해
+//      반경 밖이면 좌표 변환을 하지 않는다(중심점은 순서·거르기에만 쓰고 화면에 찍지 않는다).
+//   ② 업체 좌표는 '번지까지 맞은 결과'만 쓴다. 결과의 시·도·시·군이 글자 주소와 달라도 버린다.
+//      못 맞으면 업체 이름으로 카카오 지도에서 찾되 시·군까지 같아야 쓴다.
+//      끝내 못 맞으면 지도에 찍지 않고 '위치 미확인'으로 목록에만 둔다.
+//   ③ 이동시간은 목록에서는 직선거리로 추정하고, 업체를 고르면 카카오내비 실측으로 바꾼다.
 //
 // 이 파일은 app.js 뒤에 로드되며 app.js의 전역($, el, esc, proxyOnlyGet, proxyGet, pickByKey,
 // stripCorp, visitAddress, lookup, mapLimit, BUILD)과 samples.js의 listOf·haversineKm를 쓴다.
@@ -28,16 +25,17 @@
 const NB = {
   RADII: [10, 30, 50],
   DEFAULT_RADIUS: 30,
-  MAX_KM: 50,                                   // 한 번 받아 두고 반경 전환은 화면에서만 거른다
-  QUERIES: ['화장품 제조', '화장품 공장', '코스메틱'],
-  MAX_PAGES: 3,                                 // 카카오 장소검색 상한(15건 × 3쪽)
-  GEO_BATCH: 30,                                // 명단 업체 좌표 변환 — 한 번에 이만큼
-  NAME_RETRY: 10,                               // 번지가 안 맞은 가까운 업체를 이름으로 다시 찾는 수
+  MAX_KM: 50,
+  GEO_BATCH: 30,          // 먼 단계(같은 시·도 이상) 업체 좌표 변환 — 한 번에 이만큼
+  NEAR_CAP: 150,          // 같은 시·군 이내는 자동으로 전부 확인하되 안전 상한
+  NAME_RETRY: 12,         // 번지가 안 맞은 가까운 업체를 이름으로 다시 찾는 수
+  SGG_CAP: 40,            // 한 번에 중심 좌표를 구할 시·군 수(결과는 저장돼 다음부터 요청 없음)
   MFDS_PAGE: 500,
   MFDS_MAX_PAGES: 12,
 };
+const NB_ORIGIN_KEY = 'vs_nb_origin';   // 업체별로 사용자가 고친 기준 주소
 
-// 인접 시·도 — 50km 반경은 도 경계를 쉽게 넘는다(세종 기점이면 청주·천안·대전)
+// 인접 시·도 — 50km 반경은 도 경계를 쉽게 넘는다
 const NB_ADJ = {
   서울: ['경기', '인천'], 부산: ['경남', '울산'], 대구: ['경북', '경남'], 인천: ['서울', '경기'],
   광주: ['전남'], 대전: ['세종', '충남', '충북'], 울산: ['부산', '경남', '경북'],
@@ -59,8 +57,7 @@ function nbSido(addr) {
   return null;
 }
 // 글자 주소 → { sido, sgg(시·군·구 첫 토큰), emd(읍·면·동) }.
-// '청주시 흥덕구'처럼 시 아래 구가 붙으면 시까지를 같은 시·군으로 본다.
-// 세종은 시·군·구가 없다 — sgg는 비고 바로 읍·면·동이 온다.
+// '청주시 흥덕구'처럼 시 아래 구가 붙으면 시까지를 같은 시·군으로 본다. 세종은 시·군·구가 없다.
 function nbAddrParts(addr) {
   const toks = String(addr || '').replace(/\([^)]*\)/g, ' ').trim().split(/\s+/).filter(Boolean);
   const sido = nbSido(addr);
@@ -95,7 +92,6 @@ function nbTierLabel(st, t) {
 }
 
 // 상호 정규화 — 법인격·괄호·공백을 떼고, 끝에 붙은 사업장 구분(공장·본사·연구소…)을 지운다.
-// '코스맥스 평택공장'과 '코스맥스(주)'가 같은 회사로 모이게 하려는 것이다.
 const NB_SITE_TOKEN = /(제?\d*공장|본사|연구소|연구센터|사업장|지점|센터|사무소|캠퍼스|\d+동|R&D센터)$/i;
 function nbNorm(s) {
   const toks = stripCorp(String(s || ''))
@@ -106,32 +102,30 @@ function nbNorm(s) {
 }
 const nbNameHit = (a, b) => !!a && !!b && (a === b || (Math.min(a.length, b.length) >= 3 && (a.startsWith(b) || b.startsWith(a))));
 
-// 카카오 장소 중 '만드는 곳'만 남긴다. 화장품 가게·미용실·병원·물류창고가 섞여 나오기 때문이다.
-const NB_EXCLUDE_CAT = /가정,생활|쇼핑|뷰티,미용|음식점|카페|숙박|교육|학원|병원|의원|약국|편의점|마트|백화점|면세|부동산|주차장|문화,예술|여행|스포츠|레저|물류|창고|택배|운송|도매|유통/;
-const NB_RETAIL_NAME = /올리브영|아리따움|이니스프리|토니모리|더페이스샵|에뛰드|미샤|네이처리퍼블릭|롭스|랄라블라|세포라|시코르|아모레스토어|물류센터|\S+점$/;
-const NB_MAKER_CAT = /제조|산업|공장|회사|화학|바이오|연구|기업/;
-const NB_MAKER_NAME = /코스메틱|화장품|cosmetic|코스|바이오|랩|lab|뷰티|팜|케미|화학|메디|사이언스/i;
-function nbLooksMaker(p) {
-  const cat = String(p.category_name || ''), nm = String(p.place_name || '');
-  if (NB_EXCLUDE_CAT.test(cat)) return 'category';
-  if (NB_RETAIL_NAME.test(nm)) return 'retail';
-  if (NB_MAKER_CAT.test(cat) || NB_MAKER_NAME.test(nm)) return null;
-  return 'unrelated';
+// ── 이동시간 ──
+// 목록은 요청 없이 추정한다: 직선 × 1.3(도로 우회) ÷ 거리대별 평균속도 + 진출입 3분.
+// 가까운 길은 시내·국도라 느리고, 멀수록 고속도로 비중이 커진다.
+function nbEstMin(km) {
+  const road = km * 1.3;
+  const kmh = road < 15 ? 35 : road < 40 ? 50 : 65;
+  return Math.round((road / kmh) * 60) + 3;
 }
+const nbFmtMin = (m) => (m < 60 ? `${m}분` : `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ''}`);
+const nbFmtKm = (km) => (km < 10 ? km.toFixed(1) : String(Math.round(km)));
 
 // ── 주소 → 좌표 (번지까지 맞은 결과만) ──
-// 저장 키를 바꾼다(vs_geo → vs_geo2). 옛 캐시에는 시·군 중심점이 업체 위치처럼 들어가 있다.
+// 저장 키 vs_geo2. 옛 vs_geo에는 시·군 중심점이 업체 위치처럼 들어가 있어 지운다.
 const NB_GEO_KEY = 'vs_geo2';
 try { localStorage.removeItem('vs_geo'); } catch { /* 무시 */ }
-function nbGeoGet(addr) {
-  try { const m = JSON.parse(localStorage.getItem(NB_GEO_KEY) || '{}'); return m[addr] || null; } catch { return null; }
+function nbGeoGet(k) {
+  try { const m = JSON.parse(localStorage.getItem(NB_GEO_KEY) || '{}'); return m[k] || null; } catch { return null; }
 }
-function nbGeoSet(addr, g) {
+function nbGeoSet(k, g) {
   try {
     const m = JSON.parse(localStorage.getItem(NB_GEO_KEY) || '{}');
-    m[addr] = g;
+    m[k] = g;
     const keys = Object.keys(m);
-    if (keys.length > 1500) keys.slice(0, keys.length - 1500).forEach((k) => { delete m[k]; });
+    if (keys.length > 2500) keys.slice(0, keys.length - 2500).forEach((x) => { delete m[x]; });
     localStorage.setItem(NB_GEO_KEY, JSON.stringify(m));
   } catch { /* 저장 못 해도 이번 조회는 된다 */ }
 }
@@ -154,9 +148,11 @@ const NB_EXACT = ['ROAD_ADDR', 'REGION_ADDR'];
 function nbGeoFromDoc(d) {
   const reg = d.address || d.road_address || {};
   const r3 = String((d.address && d.address.region_3depth_name) || (d.road_address && d.road_address.region_3depth_name) || '');
-  return { lat: Number(d.y), lng: Number(d.x), exact: NB_EXACT.includes(d.address_type), type: d.address_type || '',
+  const ra = d.road_address, ja = d.address;
+  const road = ra && ra.address_name ? `${ra.address_name}${ra.building_name ? ` (${ra.building_name})` : ''}` : '';
+  return { lat: Number(d.y), lng: Number(d.x), exact: NB_EXACT.includes(d.address_type),
     sido: nbSido(reg.region_1depth_name || ''), sgg: String(reg.region_2depth_name || '').split(' ')[0] || '',
-    emd: r3.split(' ')[0] || '' };
+    emd: r3.split(' ')[0] || '', road, jibun: (ja && ja.address_name) || d.address_name || '' };
 }
 // expect = 글자 주소에서 뽑은 {sido, sgg}. 좌표 결과의 행정구역이 이것과 달라도 버린다(교차검증).
 async function nbGeocode(addr, expect) {
@@ -173,17 +169,30 @@ async function nbGeocode(addr, expect) {
   let res;
   if (g && isFinite(g.lat) && isFinite(g.lng)) {
     const bad = expect && ((expect.sido && g.sido && expect.sido !== g.sido) || (expect.sgg && g.sgg && expect.sgg !== g.sgg));
-    res = bad ? { status: 'mismatch', got: nbRegionText(g) } : { status: 'exact', lat: g.lat, lng: g.lng, emd: g.emd, sgg: g.sgg, sido: g.sido };
+    res = bad ? { status: 'mismatch', got: nbRegionText(g) }
+      : { status: 'exact', lat: g.lat, lng: g.lng, sido: g.sido, sgg: g.sgg, emd: g.emd, road: g.road, jibun: g.jibun };
   } else {
-    // 동·시 단위까지만 맞음 — 좌표는 버리고 어디까지 맞았는지만 남긴다
-    res = { status: 'region', got: loose ? nbRegionText(loose) : '' };
+    res = { status: 'region', got: loose ? nbRegionText(loose) : '' };   // 동·시 단위까지만 맞음 — 좌표는 버린다
   }
   nbGeoSet(addr, res);
   return res;
 }
+// 시·군 중심 좌표 — 먼 시·군을 좌표 변환할지 말지 가르는 데만 쓴다(화면에 찍지 않는다)
+async function nbSggCenter(sido, sgg) {
+  const k = `sgg|${sido} ${sgg}`;
+  const c = nbGeoGet(k);
+  if (c) return c;
+  let res = { none: true };
+  try {
+    const d = (((await proxyOnlyGet('kakaoGeocode', { query: `${sido} ${sgg}` })) || {}).documents || [])[0];
+    if (d && isFinite(Number(d.y))) res = { lat: Number(d.y), lng: Number(d.x) };
+  } catch { return null; }   // 네트워크 실패는 저장하지 않는다(다음에 다시)
+  nbGeoSet(k, res);
+  return res;
+}
 // 번지가 안 맞은 업체는 이름으로 지도에서 찾는다. 이름과 시·군이 모두 맞는 장소만 쓴다.
 async function nbFindByName(st, v) {
-  const q = stripCorp(v.mfdsName || v.name).replace(/\([^)]*\)/g, ' ').trim();
+  const q = stripCorp(v.name).replace(/\([^)]*\)/g, ' ').trim();
   if (q.length < 2) return null;
   let docs = [];
   try {
@@ -196,7 +205,7 @@ async function nbFindByName(st, v) {
     if (v.parts.sgg && p.sgg && p.sgg !== v.parts.sgg) continue;
     const lat = Number(d.y), lng = Number(d.x);
     if (!isFinite(lat) || !isFinite(lng)) continue;
-    return { lat, lng, emd: p.emd, phone: d.phone || '', url: d.place_url || '' };
+    return { lat, lng, emd: p.emd, road: d.road_address_name || '', jibun: d.address_name || '', phone: d.phone || '', url: d.place_url || '' };
   }
   return null;
 }
@@ -234,7 +243,6 @@ function nbMfdsAll() {
       catch { failed++; return []; }
     });
     got.forEach((g) => raw.push(...g));
-    // 명단을 끝까지 봤을 때만 '명단에 없음'이라고 말할 수 있다
     const full = !failed && (total != null ? raw.length >= total * 0.98 : raw.length < NB.MFDS_PAGE);
     // 같은 업체·같은 주소가 여러 번 실린 경우 한 건으로
     const seen = new Set(); const list = [];
@@ -265,105 +273,75 @@ function nbGmpAll() {
   return _nbGmpP;
 }
 
-// 카카오 장소 ↔ 식약처 명단. 이름이 맞고, 시·도와 시·군까지 같아야 같은 업체로 본다.
-function nbMatchMfds(item, list) {
-  let pre = null;
-  for (const r of list) {
-    const p = r.parts;
-    if (item.parts.sido && p.sido && item.parts.sido !== p.sido) continue;
-    if (item.parts.sgg && p.sgg && item.parts.sgg !== p.sgg) continue;
-    if (r.key === item.key) return r;
-    if (!pre && nbNameHit(r.key, item.key)) pre = r;
-  }
-  return pre;
+// ── 기준 주소 ──
+function nbOriginOverride(vid) {
+  try { return (JSON.parse(localStorage.getItem(NB_ORIGIN_KEY) || '{}') || {})[vid] || null; } catch { return null; }
 }
-
-// ── 데이터 수집 ──
-// 기점도 같은 기준으로 잡는다. 번지까지 맞으면 그 좌표, 아니면 리포트의 방문 좌표를 쓰되 표시한다.
-async function nbCenter(report) {
+function nbSetOriginOverride(vid, addr) {
+  try {
+    const m = JSON.parse(localStorage.getItem(NB_ORIGIN_KEY) || '{}') || {};
+    if (addr) m[vid] = addr; else delete m[vid];
+    localStorage.setItem(NB_ORIGIN_KEY, JSON.stringify(m));
+  } catch { /* 저장 못 해도 이번 조회는 된다 */ }
+}
+function nbReportAddr(report) {
   const m = report.meta || {};
-  const addr = m.visit_addr || visitAddress(report);
+  return m.visit_addr || visitAddress(report) || '';
+}
+// 기점 좌표 — 번지까지 맞아야 한다. 아니면 리포트의 방문 좌표로 가되 경고하고 수정을 권한다.
+async function nbCenter(st) {
+  const m = st.report.meta || {};
+  const addr = st.originAddr;
   if (!addr && !(m.visit_coord && isFinite(m.visit_coord.lat))) {
-    throw new Error('방문지 주소가 없어 주변을 찾을 수 없습니다 — 공장·본점 주소가 확인된 업체에서 쓸 수 있습니다');
+    throw new Error('기준 주소가 없습니다 — 위의 [주소 수정]으로 방문할 주소를 넣어 주세요');
   }
   const text = nbAddrParts(addr);
   const g = addr ? await nbGeocode(addr, text).catch(() => null) : null;
   if (g && g.status === 'exact') {
-    return { lat: g.lat, lng: g.lng, addr, exact: true, loc: { sido: g.sido || text.sido, sgg: g.sgg || text.sgg, emd: g.emd || text.emd } };
+    return { lat: g.lat, lng: g.lng, addr, road: g.road || g.jibun || addr, exact: true,
+      loc: { sido: g.sido || text.sido, sgg: g.sgg || text.sgg, emd: g.emd || text.emd } };
   }
-  if (m.visit_coord && isFinite(m.visit_coord.lat) && isFinite(m.visit_coord.lng)) {
-    return { lat: m.visit_coord.lat, lng: m.visit_coord.lng, addr, exact: false, loc: text };
+  if (!st.originEdited && m.visit_coord && isFinite(m.visit_coord.lat) && isFinite(m.visit_coord.lng)) {
+    return { lat: m.visit_coord.lat, lng: m.visit_coord.lng, addr, road: addr, exact: false, loc: text };
   }
-  throw new Error(`방문지 주소를 번지까지 좌표로 바꾸지 못했습니다 (${addr}) — 거리를 재면 틀리므로 근처 업체를 표시하지 않습니다`);
+  throw new Error(`'${addr}'을(를) 번지까지 찾지 못했습니다 — 도로명(○○로 12)이나 지번(○○리 123)까지 넣어 주세요`);
+}
+// 사용자가 고친 주소 확인 — 주소로 안 되면 장소 이름으로도 찾아 본다(예: 회사 이름 + 지역)
+async function nbResolveOrigin(text) {
+  const g = await nbGeocode(text, null).catch(() => null);
+  if (g && g.status === 'exact') return { addr: text, shown: g.road || g.jibun || text };
+  let docs = [];
+  try { docs = ((await proxyOnlyGet('kakaoKeyword', { query: text, size: '1' })) || {}).documents || []; } catch { docs = []; }
+  const d = docs[0];
+  if (d && (d.road_address_name || d.address_name)) {
+    const a = d.road_address_name || d.address_name;
+    const g2 = await nbGeocode(a, null).catch(() => null);
+    if (g2 && g2.status === 'exact') return { addr: a, shown: `${d.place_name} · ${a}` };
+  }
+  return null;
 }
 
-async function nbKakao(st) {
-  const out = new Map();
-  const diag = { calls: 0, raw: 0, excl: { category: 0, retail: 0, unrelated: 0 }, errors: [] };
-  await mapLimit(NB.QUERIES, 2, async (q) => {
-    for (let page = 1; page <= NB.MAX_PAGES; page++) {
-      let d;
-      try {
-        d = await proxyOnlyGet('kakaoKeyword', { query: q, x: String(st.center.lng), y: String(st.center.lat),
-          sort: 'distance', page: String(page), size: '15' });
-        diag.calls++;
-      } catch (e) { diag.errors.push(`${q}: ${e.message}`); break; }
-      const docs = (d && d.documents) || [];
-      diag.raw += docs.length;
-      let lastKm = 0;
-      for (const p of docs) {
-        const lat = Number(p.y), lng = Number(p.x);
-        if (!isFinite(lat) || !isFinite(lng)) continue;
-        const km = haversineKm(st.center.lat, st.center.lng, lat, lng);
-        lastKm = km;
-        if (km > NB.MAX_KM) continue;
-        const why = nbLooksMaker(p);
-        if (why) { diag.excl[why]++; continue; }
-        if (out.has(p.id)) continue;
-        const key = nbNorm(p.place_name);
-        if (st.vendorKey && nbNameHit(key, st.vendorKey) && km < 1) continue;     // 기점 자신
-        const parts = nbAddrParts(p.address_name || p.road_address_name || '');
-        out.set(p.id, { id: `k${p.id}`, name: p.place_name, key, addr: p.road_address_name || p.address_name || '', parts,
-          tier: nbTier(st.loc, parts), lat, lng, km, geo: 'place',
-          type: String(p.category_name || '').split('>').pop().trim() || '업종 미상',
-          phone: p.phone || '', url: p.place_url || '', src: 'kakao', reg: undefined, cgmp: false });
-      }
-      if (!docs.length || (d.meta && d.meta.is_end) || lastKm > NB.MAX_KM) break;
-    }
-  });
-  return { items: [...out.values()], diag };
-}
-
-function nbAnnotate(st) {
-  const M = st.mfds, G = st.gmp;
-  st.items.forEach((it) => {
-    if (it.src === 'mfds') return;
-    if (M) {
-      const hit = nbMatchMfds(it, M.list);
-      if (hit) { it.reg = true; it.lcns = hit.lcns; it.mfdsName = hit.nm; it.rep = hit.rep; st.matched.add(hit); }
-      else it.reg = M.full ? false : null;
-    } else if (st.mfdsErr) it.reg = null;
-    if (G) it.cgmp = G.has(it.key) || (it.mfdsName ? G.has(nbNorm(it.mfdsName)) : false);
-  });
-}
-
-// 명단 업체 중 기점과 같은 시·도·인접 시·도인 것을 모두 목록에 올린다(아직 좌표 없음).
-// 글자 주소만으로 단계가 정해지므로 요청이 없다. 좌표는 가까운 단계부터 차례로 붙인다.
-function nbSeedMfds(st) {
-  if (!st.mfds) return;
+// ── 데이터 수집 ──
+// 명단 업체 중 기점과 같은 시·도·인접 시·도인 것을 목록 후보로 올린다(아직 좌표 없음).
+function nbSeed(st) {
   const near = new Set([st.loc.sido, ...(NB_ADJ[st.loc.sido] || [])].filter(Boolean));
+  st.items = [];
   st.mfds.list.forEach((r, i) => {
-    if (!r.addr || !r.parts.sido || !near.has(r.parts.sido) || st.matched.has(r)) return;
-    if (st.vendorKey && nbNameHit(r.key, st.vendorKey) && nbTier(st.loc, r.parts) <= 1) return;   // 기점 자신
-    st.items.push({ id: `m${i}`, name: r.nm, key: r.key, addr: r.addr, parts: { ...r.parts },
-      tier: nbTier(st.loc, r.parts), lat: null, lng: null, km: null, geo: 'pending',
-      type: '식약처 제조업 명단', phone: '', url: '', src: 'mfds', reg: true, lcns: r.lcns, rep: r.rep, mfdsName: r.nm,
+    if (!r.addr || !r.parts.sido || !near.has(r.parts.sido)) return;
+    const tier = nbTier(st.loc, r.parts);
+    // 조회 업체 자신은 뺀다. 기준 주소를 옮겨도 마찬가지다(다른 시로 옮기면 멀리서 자기 자신이 나왔다).
+    // 같은 시·군 안에서는 '에이디인터내셔날 제2공장'처럼 접두까지 보고, 그 밖에서는 이름이 똑같을 때만 —
+    // '코스맥스'로 조회했다고 먼 곳의 '코스맥스엔비티'까지 지우면 안 된다.
+    if (st.vendorKey && (r.key === st.vendorKey || (tier <= 1 && nbNameHit(r.key, st.vendorKey)))) return;
+    st.items.push({ id: `m${i}`, name: r.nm, key: r.key, addr: r.addr, parts: { ...r.parts }, tier,
+      lat: null, lng: null, km: null, geo: 'pending', phone: '', url: '', lcns: r.lcns, rep: r.rep,
       cgmp: st.gmp ? st.gmp.has(r.key) : false });
   });
 }
 function nbApplyGeo(st, v, g) {
   if (g && g.status === 'exact') {
     v.lat = g.lat; v.lng = g.lng; v.km = haversineKm(st.center.lat, st.center.lng, g.lat, g.lng); v.geo = 'exact';
+    v.mapAddr = g.road || g.jibun || '';
     if (g.emd && !v.parts.emd) v.parts.emd = g.emd;
   } else {
     v.geo = g && g.status === 'mismatch' ? 'mismatch' : 'region';
@@ -371,61 +349,86 @@ function nbApplyGeo(st, v, g) {
   }
   v.tier = nbTier(st.loc, v.parts);
 }
-async function nbGeocodeBatch(st) {
-  const pend = () => st.items.filter((v) => v.src === 'mfds' && v.geo === 'pending');
-  // 저장해 둔 결과는 요청 없이 먼저 붙인다
-  for (const v of pend()) { const c = nbGeoGet(v.addr); if (c) nbApplyGeo(st, v, c); }
-  const batch = pend().sort((a, b) => a.tier - b.tier).slice(0, NB.GEO_BATCH);
+// 먼 단계(같은 시·도 이상) 업체는 시·군 중심으로 거리를 가늠해 반경 밖이면 건너뛴다
+async function nbRankFar(st) {
+  const far = st.items.filter((v) => v.geo === 'pending' && v.tier >= 2 && v.sggKm == null);
+  const keys = [...new Set(far.map((v) => `${v.parts.sido}|${v.parts.sgg}`))]
+    .sort((a, b) => (a.startsWith(st.loc.sido + '|') ? 0 : 1) - (b.startsWith(st.loc.sido + '|') ? 0 : 1));
+  let asked = 0;
+  for (const k of keys) {
+    const [sido, sgg] = k.split('|');
+    const cached = nbGeoGet(`sgg|${sido} ${sgg}`);
+    if (!cached && asked >= NB.SGG_CAP) continue;
+    if (!cached) asked++;
+    const c = cached || await nbSggCenter(sido, sgg);
+    if (!c) continue;
+    const km = c.none ? Infinity : haversineKm(st.center.lat, st.center.lng, c.lat, c.lng);
+    far.filter((v) => `${v.parts.sido}|${v.parts.sgg}` === k).forEach((v) => {
+      v.sggKm = km;
+      if (km > NB.MAX_KM + 15) v.geo = 'far';     // 그 시·군 중심이 반경에서 한참 멀다 — 좌표 변환하지 않는다
+    });
+  }
+}
+async function nbGeocodeList(st, list) {
   let done = 0;
-  await mapLimit(batch, 3, async (v) => {
+  await mapLimit(list, 3, async (v) => {
     const g = await nbGeocode(v.addr, v.parts).catch(() => null);
     nbApplyGeo(st, v, g);
-    if (++done % 6 === 0) { st.phase = `인근 업체 위치 확인 ${done}/${batch.length}`; nbPaint(st); }
+    if (++done % 8 === 0) { st.phase = `업체 위치 확인 ${done}/${list.length}`; nbPaint(st); }
   });
-  // 번지가 안 맞은 가까운(같은 시·군 이내) 업체는 이름으로 지도에서 한 번 더
-  const retry = st.items.filter((v) => v.src === 'mfds' && (v.geo === 'region' || v.geo === 'mismatch') && v.tier <= 1 && !v.nameTried)
+}
+async function nbNameRetry(st) {
+  const retry = st.items.filter((v) => (v.geo === 'region' || v.geo === 'mismatch') && v.tier <= 1 && !v.nameTried)
     .slice(0, NB.NAME_RETRY);
   await mapLimit(retry, 2, async (v) => {
     v.nameTried = true;
     const hit = await nbFindByName(st, v).catch(() => null);
     if (!hit) return;
     v.lat = hit.lat; v.lng = hit.lng; v.km = haversineKm(st.center.lat, st.center.lng, hit.lat, hit.lng);
-    v.geo = 'name'; v.phone = v.phone || hit.phone; v.url = v.url || hit.url;
+    v.geo = 'name'; v.phone = v.phone || hit.phone; v.url = v.url || hit.url; v.mapAddr = hit.road || hit.jibun || '';
     if (hit.emd && !v.parts.emd) v.parts.emd = hit.emd;
     v.tier = nbTier(st.loc, v.parts);
   });
-  st.geoRemain = pend().length;
+}
+// 한 차례: 저장된 좌표 먼저 → 같은 시·군 이내 전부 → 먼 단계 가까운 시·군부터 GEO_BATCH곳
+async function nbGeocodeRound(st) {
+  const pending = () => st.items.filter((v) => v.geo === 'pending');
+  for (const v of pending()) { const c = nbGeoGet(v.addr); if (c) nbApplyGeo(st, v, c); }
+  const near = pending().filter((v) => v.tier <= 1).slice(0, NB.NEAR_CAP);
+  if (near.length) await nbGeocodeList(st, near);
+  await nbNameRetry(st);
+  st.phase = '먼 지역은 시·군 단위로 거리를 가늠하는 중'; nbPaint(st);
+  await nbRankFar(st);
+  const far = pending().filter((v) => v.tier >= 2 && v.sggKm != null && v.sggKm !== Infinity)
+    .sort((a, b) => a.sggKm - b.sggKm).slice(0, NB.GEO_BATCH);
+  if (far.length) await nbGeocodeList(st, far);
+  st.geoRemain = pending().filter((v) => v.tier >= 2).length;
 }
 
 async function nbLoad(st) {
-  st.loading = true; st.error = null; nbPaint(st);
+  st.loading = true; st.error = null; st.items = []; st.sel = null; st.open = null; st.route = [];
+  st.drawnRadius = null;
+  nbPaint(st);
   try {
-    st.center = await nbCenter(st.report);
+    st.center = await nbCenter(st);
     st.loc = st.center.loc;
-  } catch (e) { st.loading = false; st.error = e.message; nbPaint(st); return; }
-  // 어느 단계에서 예외가 나도 '찾는 중'에 멈춰 있지 않게 한다 — 받은 만큼은 보여 준다
+  } catch (e) { st.center = null; st.loading = false; st.error = e.message; nbPaint(st); return; }
   try {
-    st.phase = '카카오 지도에서 주변 업체를 찾는 중';
-    nbPaint(st);
-    try {
-      const k = await nbKakao(st);
-      st.items = k.items; st.kdiag = k.diag;
-    } catch (e) { st.kdiag = { errors: [e.message] }; }
-    st.phase = '식약처 제조업 명단과 대조하는 중';
+    st.phase = '식약처 화장품 제조업 명단을 받는 중';
     nbPaint(st);
     const [m, g] = await Promise.allSettled([nbMfdsAll(), nbGmpAll()]);
-    if (m.status === 'fulfilled') st.mfds = m.value; else st.mfdsErr = String(m.reason && m.reason.message || m.reason);
+    if (m.status === 'fulfilled') st.mfds = m.value;
+    else { st.error = `식약처 제조업 명단을 받지 못했습니다 (${String(m.reason && m.reason.message || m.reason)})`; return; }
     if (g.status === 'fulfilled') st.gmp = g.value; else st.gmpErr = String(g.reason && g.reason.message || g.reason);
-    nbAnnotate(st);
-    nbSeedMfds(st);
-    st.phase = '명단 업체 위치를 번지 단위로 확인하는 중';
+    nbSeed(st);
+    st.phase = '가까운 지역부터 업체 위치를 번지 단위로 확인하는 중';
     nbPaint(st);
-    await nbGeocodeBatch(st).catch(() => {});
+    await nbGeocodeRound(st);
   } catch (e) {
     st.note = e && e.message ? e.message : String(e);
   } finally {
     st.loading = false; st.phase = null;
-    if (!st.sel) { const first = nbVisible(st).find(nbPlaced); if (first) st.sel = first.id; }
+    if (!st.error && !st.sel) { const first = nbVisible(st).find(nbPlaced); if (first) nbSelect(st, first.id, { quiet: true }); }
     nbPaint(st);
   }
 }
@@ -434,78 +437,125 @@ async function nbLoad(st) {
 const nbStates = new Map();       // vendor_id → 상태(탭을 오가도, 리포트를 다시 그려도 유지)
 const _nbActiveTab = new Map();   // vendor_id → 'report' | 'nearby'
 
-// 지도에 찍을 수 있는가 — 장소 좌표이거나, 번지까지 맞았거나, 이름·시군으로 지도에서 찾은 것
-const nbPlaced = (v) => v.geo === 'place' || v.geo === 'exact' || v.geo === 'name';
-// 목록에 올릴 것: 좌표가 있으면 반경 안, 좌표가 없으면 같은 시·군 이내(단계로 가까움이 확인된 것)
+// 지도에 찍을 수 있는가 — 번지까지 맞았거나, 이름·시군으로 지도에서 찾은 것
+const nbPlaced = (v) => v.geo === 'exact' || v.geo === 'name';
+// 목록: 좌표가 있으면 반경 안, 좌표가 없으면 같은 시·군 이내(주소로 가까움이 확인된 것)
 function nbVisible(st) {
-  return st.items.filter((v) => (nbPlaced(v) ? v.km <= st.radius : v.tier <= 1))
+  return st.items.filter((v) => (nbPlaced(v) ? v.km <= st.radius : (v.tier <= 1 && v.geo !== 'far')))
     .sort((a, b) => a.tier - b.tier || (a.km ?? 1e9) - (b.km ?? 1e9) || String(a.name).localeCompare(String(b.name)));
 }
 function nbFiltered(st) {
   const vis = nbVisible(st);
-  return st.filter === 'reg' ? vis.filter((v) => v.reg === true)
-    : st.filter === 'new' ? vis.filter((v) => v.reg !== true) : vis;
+  return st.filter === 'gmp' ? vis.filter((v) => v.cgmp)
+    : st.filter === 'unplaced' ? vis.filter((v) => !nbPlaced(v)) : vis;
 }
-const nbCls = (v) => (v.reg === true ? 'reg' : v.reg === false ? 'new' : 'unk');
-function nbStatusText(st, v) {
-  if (v.reg === true) return `식약처 화장품제조업 허가${v.lcns ? ` ${v.lcns}` : ''}`;
-  if (v.reg === false) return '식약처 제조업 명단에 없음';
-  return st.mfdsErr ? '명단 조회 실패 — 확인 불가' : (st.mfds && !st.mfds.full ? '명단 일부만 받음 — 확인 불가' : '확인 중');
-}
+const nbCls = (v) => (v.cgmp ? 'gmp' : 'reg');
 function nbGeoText(v) {
-  return v.geo === 'place' ? '카카오 지도에 등록된 위치'
-    : v.geo === 'exact' ? '식약처 주소를 번지까지 확인'
-      : v.geo === 'name' ? '식약처 주소가 번지까지 안 맞아 업체 이름·시군으로 지도에서 찾음'
-        : v.geo === 'mismatch' ? `주소를 좌표로 바꾸니 다른 지역(${v.geoNote || '?'})이 나와 표시하지 않음`
-          : v.geo === 'region' ? `번지까지 안 맞음${v.geoNote ? ` (${v.geoNote}까지만 확인)` : ''} — 지도에 표시하지 않음`
-            : '위치 확인 전';
+  return v.geo === 'exact' ? '식약처 등록 주소를 번지까지 확인'
+    : v.geo === 'name' ? '등록 주소가 번지까지 안 맞아 업체 이름·시군으로 지도에서 찾음'
+      : v.geo === 'mismatch' ? `등록 주소를 좌표로 바꾸니 다른 지역(${v.geoNote || '?'})이 나와 지도에 표시하지 않음`
+        : v.geo === 'region' ? `번지까지 안 맞음${v.geoNote ? ` (${v.geoNote}까지만 확인)` : ''} — 지도에 표시하지 않음`
+          : '위치 확인 전';
 }
-const nbFmtKm = (km) => (km < 10 ? km.toFixed(1) : String(Math.round(km)));
+// 이동 — 실측이 있으면 실측, 없으면 추정
+const NB_SAME_KM = 0.15;   // 이보다 가까우면 기점과 같은 부지로 본다
+function nbDriveText(v) {
+  if (!nbPlaced(v)) return '';
+  if (v.km < NB_SAME_KM) return '기점과 같은 위치';
+  if (v.drive && v.drive.min != null) return `차량 ${nbFmtMin(v.drive.min)} · 도로 ${nbFmtKm(v.drive.km)}km`;
+  return `차량 약 ${nbFmtMin(nbEstMin(v.km))}`;
+}
 function nbKakaoRoute(st, stops) {
   const pt = (n, lat, lng) => `${encodeURIComponent(String(n).replace(/[,/]/g, ' '))},${lat},${lng}`;
   return 'https://map.kakao.com/link/by/car/'
     + [pt(`${st.vendorName}(기점)`, st.center.lat, st.center.lng), ...stops.map((s) => pt(s.name, s.lat, s.lng))].join('/');
 }
+// 선택한 업체의 실제 차량 이동시간 — 카카오내비 길찾기(업체당 한 번, 결과는 기억)
+function nbDrive(st, v) {
+  if (!v || !nbPlaced(v) || v.drive || v.driveP || !st.center || v.km < NB_SAME_KM) return;
+  v.driveP = proxyOnlyGet('kakaoDirections', { origin: `${st.center.lng},${st.center.lat}`, destination: `${v.lng},${v.lat}` })
+    .then((d) => {
+      const r = d && d.routes && d.routes[0];
+      v.drive = r && (r.result_code == null || r.result_code === 0) && r.summary
+        ? { min: Math.round(r.summary.duration / 60), km: r.summary.distance / 1000,
+          toll: r.summary.fare && Number(r.summary.fare.toll) > 0 ? Number(r.summary.fare.toll) : null }
+        : { err: (r && r.result_msg) || '경로를 찾지 못함' };
+    })
+    .catch((e) => { v.drive = { err: e.message }; })
+    .finally(() => { v.driveP = null; nbPaint(st); });
+}
 // 동선 순서 — 기점에서 가장 가까운 곳부터 차례로(탐욕 근사). 좌표가 확인된 곳만.
 function nbRouteOrder(st) {
   const left = st.items.filter((v) => st.route.includes(v.id) && nbPlaced(v));
-  const out = []; let cur = st.center; let dist = 0;
+  const out = []; let cur = st.center; let dist = 0, min = 0;
   while (left.length) {
     let bi = 0, bd = Infinity;
     left.forEach((v, i) => { const d = haversineKm(cur.lat, cur.lng, v.lat, v.lng); if (d < bd) { bd = d; bi = i; } });
-    const v = left.splice(bi, 1)[0]; out.push(v); dist += bd; cur = v;
+    const v = left.splice(bi, 1)[0]; out.push(v); dist += bd; min += nbEstMin(bd); cur = v;
   }
-  return { stops: out, km: dist };
+  return { stops: out, km: dist, min };
+}
+
+function nbHeadHtml(st) {
+  const addrShown = st.center ? (st.center.road || st.center.addr) : (st.originAddr || '주소 없음');
+  const edited = !!nbOriginOverride(st.vid);
+  if (st.editing) {
+    return `<form class="nb-oform" data-form="origin">`
+      + `<label for="nbOriginIn"><b>${esc(st.vendorName)}</b> 기준 주소 수정</label>`
+      + `<div class="nb-orow"><input id="nbOriginIn" class="nb-oin" type="text" value="${esc(st.originAddr || '')}" placeholder="예: 경기도 파주시 탄현면 방촌로 100" autocomplete="off">`
+      + `<button type="submit" class="nb-btn dark">이 주소로 다시 찾기</button>`
+      + `<button type="button" class="nb-btn" data-act="cancel-origin">취소</button></div>`
+      + (st.editErr ? `<div class="nb-oerr">${esc(st.editErr)}</div>` : '<div class="nb-ohint">도로명(○○로 12)이나 지번(○○리 123)까지 넣으면 정확합니다. 회사·건물 이름으로도 찾아 봅니다.</div>')
+      + `</form>`;
+  }
+  return `<div class="nb-origin-line"><b class="nb-oname">${esc(st.vendorName)}</b>`
+    + `<span class="nb-oaddr">(${esc(addrShown)})</span>`
+    + (st.center && !st.center.exact ? '<span class="nb-owarn">번지 미확인</span>' : '')
+    + (edited ? '<span class="nb-oedited">수정한 주소</span>' : '')
+    + `<button type="button" class="nb-btn sm" data-act="edit-origin">주소 수정</button>`
+    + (edited ? `<button type="button" class="nb-btn sm" data-act="reset-origin">원래 주소로</button>` : '')
+    + `</div><small class="nb-osub">이 주소 기준 · 식약처 화장품 제조업 허가 업체</small>`;
 }
 
 function nbSheetHtml(st) {
   const vis = nbVisible(st);
-  const placed = vis.filter(nbPlaced);
-  const regN = vis.filter((v) => v.reg === true).length;
-  const unplaced = vis.length - placed.length;
-  let h = `<div class="nb-sum">반경 ${st.radius}km · 제조업 허가 <b>${regN}</b>곳 · 전체 <b>${vis.length}</b>곳`
-    + (unplaced ? ` <span class="nb-sum-warn">(위치 미확인 ${unplaced}곳은 지도에 없음)</span>` : '') + '</div>';
+  const placed = vis.filter(nbPlaced).length, gmpN = vis.filter((v) => v.cgmp).length;
+  let h = `<div class="nb-sum">반경 ${st.radius}km · 제조업 허가 업체 <b>${vis.length}</b>곳 (CGMP ${gmpN})`
+    + (vis.length - placed ? ` <span class="nb-sum-warn">· 위치 미확인 ${vis.length - placed}곳은 지도에 없음</span>` : '') + '</div>';
   const s = st.items.find((v) => v.id === st.sel);
   if (!s || !vis.includes(s)) return h + `<div class="nb-empty">${vis.length ? '지도나 목록에서 업체를 고르세요.' : '이 반경 안에서 찾은 업체가 없습니다. 반경을 넓혀 보세요.'}</div>`;
-  const badge = s.reg === true ? '<span class="nb-badge reg">제조업 허가</span>'
-    : s.reg === false ? '<span class="nb-badge new">명단에 없음</span>' : '<span class="nb-badge unk">허가 확인 불가</span>';
   const tel = s.phone ? `<a href="tel:${esc(s.phone.replace(/[^\d+]/g, ''))}">${esc(s.phone)}</a>` : '—';
-  const placed1 = nbPlaced(s);
-  const mapUrl = s.url || (placed1
+  const pl = nbPlaced(s);
+  const mapUrl = s.url || (pl
     ? `https://map.kakao.com/link/map/${encodeURIComponent(s.name.replace(/[,/]/g, ' '))},${s.lat},${s.lng}`
     : `https://map.kakao.com/link/search/${encodeURIComponent(s.addr || s.name)}`);
-  h += `<div class="nb-selhead"><div class="nb-selname"><b>${esc(s.name)}</b>${badge}${s.cgmp ? '<span class="nb-badge gmp">CGMP</span>' : ''}</div>`
-    + `<div class="nb-seld">${placed1 ? `${nbFmtKm(s.km)}<small>km</small>` : '<small>거리 미확인</small>'}</div></div>`
-    + `<div class="nb-selsub">${esc(nbTierLabel(st, s.tier))} · ${esc(nbRegionText(s.parts) || '')}</div>`
+  // 이동: 직선 · 추정 → 실측이 오면 바꿔 적는다
+  let move = '—';
+  if (pl && s.km < NB_SAME_KM) move = '기점과 같은 위치(같은 부지·건물로 보입니다)';
+  else if (pl) {
+    const est = `직선 ${nbFmtKm(s.km)}km · 차량 약 ${nbFmtMin(nbEstMin(s.km))}(추정)`;
+    move = s.drive && s.drive.min != null
+      ? `<b>차량 ${nbFmtMin(s.drive.min)}</b> · 도로 ${nbFmtKm(s.drive.km)}km${s.drive.toll ? ` · 통행료 ${s.drive.toll.toLocaleString()}원` : ''}<small>카카오내비 실측 · ${esc(est)}</small>`
+      : s.driveP ? `${esc(est)}<small>카카오내비 실측 확인 중…</small>`
+        : s.drive && s.drive.err ? `${esc(est)}<small>실측 불가(${esc(s.drive.err)}) — 추정치입니다</small>` : esc(est);
+  }
+  const mapAddrRow = s.mapAddr && s.mapAddr.replace(/\s/g, '') !== String(s.addr || '').replace(/\s/g, '')
+    ? `<dt>지도 위치</dt><dd>${esc(s.mapAddr)}</dd>` : '';
+  h += `<div class="nb-selhead"><div class="nb-selname"><b>${esc(s.name)}</b><span class="nb-badge reg">제조업 허가</span>${s.cgmp ? '<span class="nb-badge gmp">CGMP</span>' : ''}</div>`
+    + `<div class="nb-seld">${pl ? `${nbFmtKm(s.km)}<small>km</small>` : '<small>거리 미확인</small>'}</div></div>`
+    + `<div class="nb-seladdr">${esc(s.addr || '')}</div>`
     + `<dl class="nb-selbox">`
-    + `<dt>식약처 제조업</dt><dd class="${nbCls(s)}">${esc(nbStatusText(st, s))}${s.mfdsName && s.mfdsName !== s.name ? `<small>명단상 이름 ${esc(s.mfdsName)}</small>` : ''}</dd>`
+    + `<dt>이동</dt><dd class="nb-move">${move}</dd>`
+    + `<dt>허가</dt><dd>${esc(s.lcns ? `식약처 화장품제조업 ${s.lcns}` : '식약처 화장품제조업 명단 등재')}</dd>`
+    + (s.rep ? `<dt>대표자</dt><dd>${esc(s.rep)}</dd>` : '')
     + `<dt>CGMP</dt><dd>${s.cgmp ? '적합업소' : (st.gmp ? '명단에 없음' : '확인 불가')}</dd>`
     + `<dt>전화</dt><dd>${tel}</dd>`
-    + `<dt>주소</dt><dd>${esc(s.addr || '—')}</dd>`
-    + `<dt>위치 근거</dt><dd class="${placed1 ? '' : 'unk'}">${esc(nbGeoText(s))}</dd>`
+    + `<dt>지역</dt><dd>${esc(nbTierLabel(st, s.tier))}</dd>`
+    + mapAddrRow
+    + `<dt>위치 근거</dt><dd class="${pl ? '' : 'unk'}">${esc(nbGeoText(s))}</dd>`
     + `</dl>`
     + `<div class="nb-selacts">`
-    + (placed1 ? `<a class="nb-btn" href="${esc(nbKakaoRoute(st, [s]))}" target="_blank" rel="noopener">길찾기</a>`
+    + (pl ? `<a class="nb-btn" href="${esc(nbKakaoRoute(st, [s]))}" target="_blank" rel="noopener">길찾기</a>`
       : `<button type="button" class="nb-btn" disabled title="위치가 번지까지 확인되지 않았습니다">길찾기</button>`)
     + `<a class="nb-btn" href="${esc(mapUrl)}" target="_blank" rel="noopener">카카오맵</a>`
     + `<button type="button" class="nb-btn dark" data-act="report" data-id="${esc(s.id)}">사전검증 리포트</button>`
@@ -514,22 +564,24 @@ function nbSheetHtml(st) {
 }
 
 function nbRowHtml(st, v) {
-  const open = st.open === v.id, inRoute = st.route.includes(v.id), placed = nbPlaced(v);
+  const open = st.open === v.id, inRoute = st.route.includes(v.id), pl = nbPlaced(v);
   const tel = v.phone ? ` · <a href="tel:${esc(v.phone.replace(/[^\d+]/g, ''))}">${esc(v.phone)}</a>` : '';
-  const dist = placed ? `<b>${nbFmtKm(v.km)}</b><i>km</i>` : `<b class="nb-dq">—</b><i>${v.geo === 'pending' ? '확인 전' : '미확인'}</i>`;
-  return `<div class="nb-row${open ? ' open' : ''}${st.sel === v.id ? ' sel' : ''}${placed ? '' : ' unplaced'}" data-row="${esc(v.id)}">`
+  const dist = pl ? `<b>${nbFmtKm(v.km)}</b><i>km</i>` : `<b class="nb-dq">—</b><i>${v.geo === 'pending' ? '확인 전' : '미확인'}</i>`;
+  return `<div class="nb-row${open ? ' open' : ''}${st.sel === v.id ? ' sel' : ''}${pl ? '' : ' unplaced'}" data-row="${esc(v.id)}">`
     + `<button type="button" class="nb-rowbtn" data-act="pick" data-id="${esc(v.id)}" aria-expanded="${open}">`
     + `<span class="nb-d">${dist}</span>`
     + `<span class="nb-main"><span class="nb-nm"><span class="nb-mark ${nbCls(v)}"></span>${esc(v.name)}</span>`
-    + `<span class="nb-sub">${esc(nbRegionText(v.parts) || '')}${v.parts && v.parts.sido ? ' · ' : ''}${esc(v.type)}</span></span>`
-    + (v.cgmp ? '<span class="nb-chip">CGMP</span>' : '<span class="nb-chip off">—</span>')
+    + `<span class="nb-sub">${esc(v.addr || nbRegionText(v.parts))}</span>`
+    + (pl ? `<span class="nb-time">${esc(nbDriveText(v))}</span>` : '')
+    + `</span>`
+    + (v.cgmp ? '<span class="nb-chip">CGMP</span>' : '')
     + (inRoute ? '<span class="nb-inroute" title="동선에 담음">동선</span>' : '')
     + `</button>`
-    + (open ? `<div class="nb-more"><div class="nb-facts">${esc(nbStatusText(st, v))}${v.cgmp ? ' · CGMP 적합' : ''}${tel}</div>`
-      + `<div class="nb-addr">${esc(v.addr || '')}</div>`
-      + `<div class="nb-geo${placed ? '' : ' warn'}">위치 근거: ${esc(nbGeoText(v))}</div>`
+    + (open ? `<div class="nb-more"><div class="nb-facts">${esc(v.lcns ? `허가 ${v.lcns}` : '제조업 허가')}${v.rep ? ` · 대표 ${esc(v.rep)}` : ''}${v.cgmp ? ' · CGMP 적합' : ''}${tel}</div>`
+      + (v.mapAddr && v.mapAddr.replace(/\s/g, '') !== String(v.addr || '').replace(/\s/g, '') ? `<div class="nb-addr">지도 위치: ${esc(v.mapAddr)}</div>` : '')
+      + `<div class="nb-geo${pl ? '' : ' warn'}">위치 근거: ${esc(nbGeoText(v))}</div>`
       + `<div class="nb-acts">`
-      + (placed
+      + (pl
         ? `<button type="button" class="nb-btn${inRoute ? '' : ' blue'}" data-act="route" data-id="${esc(v.id)}">${inRoute ? '동선에서 빼기' : '동선에 추가'}</button>`
         : `<button type="button" class="nb-btn" disabled title="위치가 번지까지 확인되지 않아 동선에 넣지 않습니다">동선에 추가 불가</button>`)
       + `<button type="button" class="nb-btn" data-act="report" data-id="${esc(v.id)}">사전검증 리포트</button></div></div>` : '')
@@ -538,10 +590,8 @@ function nbRowHtml(st, v) {
 
 function nbListHtml(st) {
   const vis = nbVisible(st);
-  const n = { all: vis.length, reg: vis.filter((v) => v.reg === true).length };
-  n.new = n.all - n.reg;
-  const newLabel = st.mfds && st.mfds.full ? '명단에 없음' : '허가 미확인';
-  const tabs = [['all', '전체', n.all], ['reg', '제조업 허가', n.reg], ['new', newLabel, n.new]]
+  const n = { all: vis.length, gmp: vis.filter((v) => v.cgmp).length, unplaced: vis.filter((v) => !nbPlaced(v)).length };
+  const tabs = [['all', '전체', n.all], ['gmp', 'CGMP 적합', n.gmp], ['unplaced', '위치 미확인', n.unplaced]]
     .map(([id, l, c]) => `<button type="button" class="nb-tab" data-act="filter" data-f="${id}" aria-pressed="${st.filter === id}">${l} <b>${c}</b></button>`).join('');
   const rows = nbFiltered(st);
   // 지역 단계별로 묶는다 — 같은 읍·면·동 → 같은 시·군 → 같은 시·도 → 인접 시·도
@@ -549,43 +599,35 @@ function nbListHtml(st) {
   let lastTier = -1;
   rows.forEach((v) => {
     if (v.tier !== lastTier) {
-      const cnt = rows.filter((x) => x.tier === v.tier).length;
-      const unp = rows.filter((x) => x.tier === v.tier && !nbPlaced(x)).length;
-      body += `<div class="nb-grp"><b>${esc(nbTierLabel(st, v.tier))}</b><span>${cnt}곳${unp ? ` · 위치 미확인 ${unp}` : ''}</span></div>`;
+      const grp = rows.filter((x) => x.tier === v.tier);
+      const unp = grp.filter((x) => !nbPlaced(x)).length;
+      body += `<div class="nb-grp"><b>${esc(nbTierLabel(st, v.tier))}</b><span>${grp.length}곳${unp ? ` · 위치 미확인 ${unp}` : ''}</span></div>`;
       lastTier = v.tier;
     }
     body += nbRowHtml(st, v);
   });
   if (!rows.length) body = `<div class="nb-empty">${st.loading ? '찾는 중…' : '해당하는 업체가 없습니다.'}</div>`;
   if (!st.loading && st.geoRemain > 0) {
-    body += `<button type="button" class="nb-more-btn" data-act="more">명단 업체 ${Math.min(NB.GEO_BATCH, st.geoRemain)}곳 위치 더 확인 <small>남은 ${st.geoRemain}곳 · 가까운 지역부터 · 주소 변환 요청이 나갑니다</small></button>`;
+    body += `<button type="button" class="nb-more-btn" data-act="more">다른 시·군 업체 ${Math.min(NB.GEO_BATCH, st.geoRemain)}곳 위치 더 확인 <small>남은 ${st.geoRemain}곳 · 가까운 시·군부터 · 주소 변환 요청이 나갑니다</small></button>`;
   }
   const r = nbRouteOrder(st);
   const foot = `<div class="nb-route"><div><small>오늘 동선</small><b>기점 포함 ${r.stops.length + 1}곳</b>`
-    + (r.stops.length ? `<small>직선 합계 약 ${Math.round(r.km)}km · ${esc(r.stops.map((s) => s.name).join(' → '))}</small>` : '<small>목록에서 업체를 펼쳐 동선에 추가하세요 (위치가 확인된 곳만)</small>')
+    + (r.stops.length ? `<small>직선 합계 약 ${Math.round(r.km)}km · 차량 약 ${nbFmtMin(r.min)}(추정) · ${esc(r.stops.map((s) => s.name).join(' → '))}</small>` : '<small>목록에서 업체를 펼쳐 동선에 추가하세요 (위치가 확인된 곳만)</small>')
     + `</div>`
     + (r.stops.length ? `<button type="button" class="nb-btn" data-act="clear">비우기</button>`
       + `<a class="nb-btn dark" href="${esc(nbKakaoRoute(st, r.stops.slice(0, 6)))}" target="_blank" rel="noopener">카카오맵 경로 보기</a>` : '')
     + `</div>`
     + (r.stops.length > 6 ? '<div class="nb-note">카카오맵 경로는 기점 포함 7곳까지만 넘깁니다 — 앞의 6곳까지 열립니다.</div>' : '');
-  return `<div class="nb-tabs" role="group" aria-label="허가 여부로 거르기">${tabs}</div><div class="nb-rows">${body}</div>${foot}`;
+  return `<div class="nb-tabs" role="group" aria-label="거르기">${tabs}</div><div class="nb-rows">${body}</div>${foot}`;
 }
 
 function nbStatusLine(st) {
   const bits = [];
-  if (st.center && !st.center.exact) bits.push('<b class="nb-warn">기점 위치가 번지까지 확인되지 않아 거리가 부정확할 수 있습니다</b>');
-  if (st.kdiag) {
-    if (st.kdiag.errors && st.kdiag.errors.length && !st.kdiag.calls) bits.push(`카카오 장소검색 실패(${esc(st.kdiag.errors[0])})`);
-    else if (st.kdiag.calls) bits.push(`카카오 지도 ${st.items.filter((v) => v.src === 'kakao').length}곳`
-      + (st.kdiag.excl ? ` <span title="판매점·미용실·물류창고 등 제외">(제외 ${st.kdiag.excl.category + st.kdiag.excl.retail + st.kdiag.excl.unrelated})</span>` : ''));
-  }
-  if (st.mfds) bits.push(`식약처 명단 ${st.mfds.list.length.toLocaleString()}곳 대조${st.mfds.full ? '' : ' (일부만 받음 — 명단에 없다고 단정하지 않습니다)'}`);
-  else if (st.mfdsErr) bits.push('식약처 명단 조회 실패 — 허가 여부 확인 불가');
-  const m = st.items.filter((v) => v.src === 'mfds');
-  if (m.length) {
-    const c = (g) => m.filter((v) => v.geo === g).length;
-    bits.push(`명단 업체 위치: 번지 확인 ${c('exact')} · 이름으로 찾음 ${c('name')} · 번지 불일치 ${c('region') + c('mismatch')} · 확인 전 ${c('pending')}`);
-  }
+  if (st.center && !st.center.exact) bits.push('<b class="nb-warn">기준 주소가 번지까지 확인되지 않아 거리가 부정확할 수 있습니다 — 주소 수정을 권합니다</b>');
+  if (st.mfds) bits.push(`식약처 화장품 제조업 명단 ${st.mfds.list.length.toLocaleString()}곳 중 기점 주변 시·도 ${st.items.length.toLocaleString()}곳 대조`
+    + (st.mfds.full ? '' : ' (명단 일부만 받음)'));
+  const c = (g) => st.items.filter((v) => v.geo === g).length;
+  if (st.items.length) bits.push(`위치: 번지 확인 ${c('exact')} · 이름으로 찾음 ${c('name')} · 번지 불일치 ${c('region') + c('mismatch')} · 반경 밖 시·군 ${c('far')} · 확인 전 ${c('pending')}`);
   if (st.gmpErr) bits.push('CGMP 명단 조회 실패');
   return bits.join(' · ');
 }
@@ -595,15 +637,16 @@ function nbPaint(st) {
   if (!pane || !pane.isConnected) return;
   if (!pane.querySelector('.nb')) {
     pane.innerHTML = `<div class="nb">`
-      + `<div class="nb-head"><div class="nb-title"><b>근처 제조업체</b><small class="nb-origin"></small></div>`
-      + `<div class="nb-legend"><span><i class="nb-mark reg"></i>제조업 허가</span><span><i class="nb-mark new"></i>명단에 없음</span><span><i class="nb-mark unk"></i>확인 불가</span></div>`
+      + `<div class="nb-head"><div class="nb-title"></div>`
+      + `<div class="nb-legend"><span><i class="nb-mark reg"></i>제조업 허가</span><span><i class="nb-mark gmp"></i>CGMP 적합</span></div>`
       + `<div class="nb-seg" role="group" aria-label="반경">${NB.RADII.map((r) => `<button type="button" data-act="radius" data-r="${r}">${r}km</button>`).join('')}</div></div>`
       + `<div class="nb-body"><div class="nb-mapcol"><div class="nb-map" role="region" aria-label="근처 업체 지도"></div><div class="nb-sheet"></div></div>`
       + `<div class="nb-listcol"></div></div>`
       + `<div class="nb-status"></div></div>`;
   }
-  pane.querySelector('.nb-origin').textContent = st.center
-    ? `기점 ${st.vendorName} · ${nbRegionText(st.loc) || st.center.addr || ''}` : `기점 ${st.vendorName}`;
+  const title = pane.querySelector('.nb-title');
+  // 주소를 고치는 중에는 머리줄을 다시 그리지 않는다(입력하던 글자가 날아간다)
+  if (!(st.editing && title.querySelector('form'))) title.innerHTML = nbHeadHtml(st);
   pane.querySelectorAll('.nb-seg button').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.r) === st.radius)));
   const status = pane.querySelector('.nb-status');
   if (st.error) {
@@ -613,10 +656,10 @@ function nbPaint(st) {
     nbDrawMapSafe(st);
     return;
   }
-  pane.querySelector('.nb-sheet').innerHTML = st.center ? nbSheetHtml(st) : '<div class="nb-empty">방문지 위치를 확인하는 중…</div>';
+  pane.querySelector('.nb-sheet').innerHTML = st.center ? nbSheetHtml(st) : '<div class="nb-empty">기준 주소의 위치를 확인하는 중…</div>';
   pane.querySelector('.nb-listcol').innerHTML = nbListHtml(st);
   status.innerHTML = (st.phase ? `<span class="nb-spin" aria-hidden="true"></span>${esc(st.phase)} · ` : '') + nbStatusLine(st)
-    + ' · 거리는 직선거리입니다';
+    + ' · 거리는 직선, 이동시간은 추정(업체를 고르면 카카오내비 실측)입니다';
   nbDrawMapSafe(st);
 }
 // 지도가 어떤 이유로 못 그려져도 목록·데이터 수집은 계속 가야 한다. 여기서 막는다.
@@ -651,7 +694,8 @@ const nbCssVar = (n, fb) => (getComputedStyle(document.documentElement).getPrope
 
 function nbDrawMap(st) {
   const box = st.pane && st.pane.querySelector('.nb-map');
-  if (!box || !st.center || st.pane.hidden) return;
+  if (!box || st.pane.hidden) return;
+  if (!st.center) { if (st.layer) st.layer.clearLayers(); return; }
   if (!window.L) {
     box.classList.add('loading');
     nbLoadLeaflet().then(() => nbDrawMap(st)).catch((e) => { box.innerHTML = `<div class="nb-empty err">${esc(e.message)}</div>`; });
@@ -681,36 +725,62 @@ function nbDrawMap(st) {
   st.layer.clearLayers();
   L.circle(c, { radius: st.radius * 1000, color: reg, weight: 1.5, opacity: 0.55, dashArray: '5 5', fillColor: reg, fillOpacity: 0.05, interactive: false }).addTo(st.layer);
   L.circle(c, { radius: st.radius * 500, color: reg, weight: 1, opacity: 0.35, dashArray: '3 5', fill: false, interactive: false }).addTo(st.layer);
-  // 반경 라벨 — 링의 위쪽 끝에
   const up = (km) => [st.center.lat + km / 111.32, st.center.lng];
   L.marker(up(st.radius), { interactive: false, keyboard: false, icon: L.divIcon({ className: 'nb-rlabel', html: `<span>${st.radius}km</span>`, iconSize: [48, 18], iconAnchor: [24, 9] }) }).addTo(st.layer);
   L.marker(up(st.radius / 2), { interactive: false, keyboard: false, icon: L.divIcon({ className: 'nb-rlabel half', html: `<span>${st.radius / 2}km</span>`, iconSize: [48, 18], iconAnchor: [24, 9] }) }).addTo(st.layer);
-  // 기점
+  // 원을 새로 그렸으면(주소를 고쳤으면) 기점도 새 위치로 옮긴다
+  if (st.drawnCenter !== `${c[0]},${c[1]}`) { st.drawnRadius = null; st.drawnCenter = `${c[0]},${c[1]}`; }
   L.marker(c, { keyboard: false, zIndexOffset: 1000, icon: L.divIcon({ className: 'nb-origin-pin', html: `<span class="nb-dia"></span><span class="nb-plabel strong">${esc(st.vendorName)} · 기점</span>`, iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(st.layer);
-  // 업체 핀 — 반경 안의 것만. 많으면 이름은 고른 것만 붙인다(겹쳐서 읽을 수 없다)
+  // 시점을 먼저 맞춘다 — 이름표 겹침은 화면 좌표로 따지므로 줌이 정해진 뒤여야 한다
+  // (원의 getBounds()는 그리기 직후 불안정해서 좌표에서 바로 계산한다)
+  if (st.drawnRadius !== st.radius) { map.fitBounds(L.latLng(c).toBounds(st.radius * 2000), { padding: [8, 8], animate: false }); st.drawnRadius = st.radius; }
   // 지도에는 위치가 확인된 업체만 찍는다 — 시·군 중심점 같은 추정 위치는 찍지 않는다
   const vis = nbVisible(st).filter(nbPlaced);
-  const showAll = vis.length <= 12;
+  // 이름표 겹침 피하기 — 이미 붙인 이름표(기점 포함)와 상자가 겹치면 그 핀은 이름을 붙이지 않는다.
+  // 고른 업체는 반드시 붙이되, 오른쪽이 막히면 왼쪽에 붙인다.
+  const boxes = [];
+  // 상자 위치는 CSS와 같아야 한다: 핀 상자(32px, 가운데 기준)에서 오른쪽 이름표는 left:26px → 핀+10,
+  // 왼쪽 이름표는 right:26px → 핀−10에서 끝난다. 기점은 18px 상자에 left:24px → 기점+15.
+  // 글자 폭은 넉넉히(12px/자) 잡고 사이를 4px 띄운다.
+  const boxOf = (pt, text, left, origin) => {
+    const w = Math.min(180, String(text).length * 12 + 4);
+    const x0 = origin ? pt.x + 15 : left ? pt.x - 10 - w : pt.x + 10;
+    return { x0: x0 - 2, x1: x0 + w + 2, y0: pt.y - 10, y1: pt.y + 10 };
+  };
+  const hit = (b) => boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+  const cp = map.latLngToContainerPoint(c);
+  boxes.push(boxOf(cp, `${st.vendorName} · 기점`, false, true));
+  boxes.push({ x0: cp.x - 10, x1: cp.x + 10, y0: cp.y - 10, y1: cp.y + 10 });   // 기점 마름모 자체
+  vis.forEach((v) => { const q = map.latLngToContainerPoint([v.lat, v.lng]); boxes.push({ x0: q.x - 7, x1: q.x + 7, y0: q.y - 7, y1: q.y + 7, pin: true }); });
+  const order = vis.slice().sort((a, b) => (b.id === st.sel) - (a.id === st.sel) || a.km - b.km);   // 고른 것 먼저
+  const labelSide = new Map();
+  order.forEach((v) => {
+    const pt = map.latLngToContainerPoint([v.lat, v.lng]);
+    for (const left of [false, true]) {
+      const bx = boxOf(pt, v.name, left);
+      if (!hit(bx)) { boxes.push(bx); labelSide.set(v.id, left ? 'left' : 'right'); return; }
+    }
+    if (v.id === st.sel) labelSide.set(v.id, 'left');   // 둘 다 막혀도 고른 것은 붙인다
+  });
   vis.forEach((v) => {
     const on = v.id === st.sel;
-    // 기점 바로 옆 핀의 이름은 기점 이름과 겹친다 — 고른 것만 붙이고, 가까이 보려면 10km로
-    const crowd = !on && v.km < st.radius * 0.12;
-    const label = ((showAll || on) && !crowd) ? `<span class="nb-plabel${on ? ' strong' : ''}">${esc(v.name)}</span>` : '';
+    const side = labelSide.get(v.id);
+    const label = side ? `<span class="nb-plabel${on ? ' strong' : ''}${side === 'left' ? ' left' : ''}">${esc(v.name)}</span>` : '';
     const m = L.marker([v.lat, v.lng], {
       title: v.name, alt: v.name, riseOnHover: true, zIndexOffset: on ? 900 : 0,
       icon: L.divIcon({ className: 'nb-pinwrap', html: `<span class="nb-pin ${nbCls(v)}${on ? ' on' : ''}"></span>${label}`, iconSize: [32, 32], iconAnchor: [16, 16] }),
     }).addTo(st.layer);
     m.on('click', () => nbSelect(st, v.id, { fromMap: true }));
   });
-  // 원의 getBounds()는 지도 투영에 기대서 그리기 직후엔 불안정하다. 좌표에서 바로 계산한다.
-  if (st.drawnRadius !== st.radius) { map.fitBounds(L.latLng(c).toBounds(st.radius * 2000), { padding: [8, 8] }); st.drawnRadius = st.radius; }
 }
 
 function nbSelect(st, id, opts = {}) {
   st.sel = id;
   if (opts.fromMap) st.open = id;
-  nbPaint(st);
   const v = st.items.find((x) => x.id === id);
+  nbDrive(st, v);                                        // 고른 업체만 실측 이동시간을 묻는다
+  if (opts.quiet) return;
+  nbPaint(st);
   if (v && st.map && !opts.fromMap && nbPlaced(v)) st.map.panTo([v.lat, v.lng]);
   if (opts.fromMap) {
     const row = st.pane.querySelector(`[data-row="${CSS.escape(id)}"]`);
@@ -718,7 +788,43 @@ function nbSelect(st, id, opts = {}) {
   }
 }
 
+// ── 기준 주소 수정 ──
+function nbForceHead(st) {
+  const title = st.pane && st.pane.querySelector('.nb-title');
+  if (!title) return;
+  const prev = title.querySelector('.nb-oin');
+  const keep = prev ? prev.value : null;
+  title.innerHTML = nbHeadHtml(st);
+  const i = title.querySelector('.nb-oin');
+  if (i) { if (keep != null) i.value = keep; i.focus(); }
+}
+async function nbSubmitOrigin(st, text) {
+  const t = String(text || '').trim();
+  if (!t) { st.editErr = '주소를 입력해 주세요'; nbForceHead(st); return; }
+  st.editErr = null;
+  const btn = st.pane.querySelector('.nb-oform [type=submit]');
+  if (btn) { btn.disabled = true; btn.textContent = '주소 확인 중…'; }
+  const r = await nbResolveOrigin(t).catch(() => null);
+  if (!r) {
+    st.editErr = `'${t}'을(를) 번지까지 찾지 못했습니다. 도로명이나 지번까지 넣어 주세요.`;
+    nbForceHead(st);
+    return;
+  }
+  nbSetOriginOverride(st.vid, r.addr);
+  st.originAddr = r.addr; st.originEdited = true; st.editing = false; st.editErr = null;
+  nbLoad(st);
+}
+
 function nbBind(st) {
+  st.pane.addEventListener('submit', (e) => {
+    const f = e.target.closest('[data-form="origin"]');
+    if (!f) return;
+    e.preventDefault();
+    nbSubmitOrigin(st, (f.querySelector('.nb-oin') || {}).value);
+  });
+  st.pane.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && st.editing && e.target.closest('.nb-oform')) { st.editing = false; st.editErr = null; nbForceHead(st); }
+  });
   st.pane.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
     if (!b || !st.pane.contains(b)) return;
@@ -728,13 +834,23 @@ function nbBind(st) {
     else if (act === 'pick') { st.open = st.open === id ? null : id; nbSelect(st, id); }
     else if (act === 'route') { st.route = st.route.includes(id) ? st.route.filter((x) => x !== id) : st.route.concat(id); nbPaint(st); }
     else if (act === 'clear') { st.route = []; nbPaint(st); }
-    else if (act === 'more') { st.loading = true; st.phase = '명단 업체 위치를 더 확인하는 중'; nbPaint(st); nbGeocodeBatch(st).finally(() => { st.loading = false; st.phase = null; nbPaint(st); }); }
+    else if (act === 'more') {
+      st.loading = true; st.phase = '다른 시·군 업체 위치를 더 확인하는 중'; nbPaint(st);
+      nbGeocodeRound(st).finally(() => { st.loading = false; st.phase = null; nbPaint(st); });
+    }
+    else if (act === 'edit-origin') { st.editing = true; st.editErr = null; nbForceHead(st); }
+    else if (act === 'cancel-origin') { st.editing = false; st.editErr = null; nbForceHead(st); }
+    else if (act === 'reset-origin') {
+      nbSetOriginOverride(st.vid, null);
+      st.originAddr = nbReportAddr(st.report); st.originEdited = false; st.editing = false;
+      nbLoad(st);
+    }
     else if (act === 'report') {
       const v = st.items.find((x) => x.id === id);
       if (!v) return;
-      const q = document.getElementById('q'); if (q) q.value = v.mfdsName || v.name;
+      const q = document.getElementById('q'); if (q) q.value = v.name;
       const bz = document.getElementById('bno'); if (bz) bz.value = '';
-      lookup(v.mfdsName || v.name, '');
+      lookup(v.name, '');
     }
   });
 }
@@ -744,8 +860,10 @@ function nbOpen(pane, report) {
   let st = nbStates.get(vid);
   if (!st) {
     const name = String((report.meta && report.meta.vendor_name) || '');
+    const over = nbOriginOverride(vid);
     st = { vid, report, vendorName: stripCorp(name) || name, vendorKey: nbNorm(name), radius: NB.DEFAULT_RADIUS,
-      filter: 'all', sel: null, open: null, route: [], items: [], matched: new Set(),
+      filter: 'all', sel: null, open: null, route: [], items: [],
+      originAddr: over || nbReportAddr(report), originEdited: !!over,
       loading: false, started: false };
     nbStates.set(vid, st);
   }
