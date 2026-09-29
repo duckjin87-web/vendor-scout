@@ -207,10 +207,14 @@ function handleKakao(url, env, kind) {
   if (!env.KAKAO_REST_KEY) return jsonRes({ error: 'KAKAO_REST_KEY 미설정' }, 500);
   const q = new URLSearchParams();
   for (const [k, v] of url.searchParams) if (k !== 'service' && v) q.set(k, v);
+  // keyword: 좌표 주변 장소 검색(근처 업체 탭). 주소검색과 같은 카카오 로컬 API라 키·승인이 같다.
   const base = kind === 'geocode'
     ? 'https://dapi.kakao.com/v2/local/search/address.json'
-    : 'https://apis-navi.kakaomobility.com/v1/directions';
-  return relay(`${base}?${q}`, kind === 'geocode' ? '카카오 주소검색' : '카카오 길찾기', {
+    : kind === 'keyword'
+      ? 'https://dapi.kakao.com/v2/local/search/keyword.json'
+      : 'https://apis-navi.kakaomobility.com/v1/directions';
+  const label = kind === 'geocode' ? '카카오 주소검색' : kind === 'keyword' ? '카카오 장소검색' : '카카오 길찾기';
+  return relay(`${base}?${q}`, label, {
     headers: { Authorization: `KakaoAK ${env.KAKAO_REST_KEY}` },
   });
 }
@@ -296,6 +300,7 @@ export default async function handler(req) {
     if (service === 'siteExtract')     return handleSiteExtract(url, env);
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
     if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
+    if (service === 'kakaoKeyword')    return handleKakao(url, env, 'keyword');
     if (DATAGO[service])               return handleDataGo(url, service, env);
 
     return jsonRes({ error: `unknown service: ${service}` }, 400);

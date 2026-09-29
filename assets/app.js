@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 151;
+const BUILD = 152;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4180,6 +4180,9 @@ function render(report, opts = {}) {
     '<span class="item"><b>신뢰도</b></span>' +
     ['A', 'B', 'C', 'D'].map((g) => `<span class="item"><span class="dot badge-${g}"></span>${g} · ${GRADE_LABEL[g]}</span>`).join('');
   root.appendChild(lg);
+
+  // 리포트 내용을 '사전검증 리포트' 탭으로 감싸고 옆에 '근처 업체' 탭을 붙인다(nearby.js)
+  if (typeof mountReportTabs === 'function') mountReportTabs(root, report, actions);
 
   // 조회 리포트 저장 — 새로고침/재방문 시 복원용 (새 조회 전까지 유지)
   saveLastReport(report);
