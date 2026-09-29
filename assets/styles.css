@@ -1328,6 +1328,21 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 .nb-more-btn { font: inherit; display: block; width: calc(100% - 32px); margin: 12px 16px; padding: 10px; border: 1px dashed var(--border); border-radius: 8px; background: none; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; }
 .nb-more-btn small { display: block; font-weight: 500; color: var(--muted); font-size: 11px; margin-top: 2px; }
 
+/* 지역 단계 묶음 — 같은 읍·면·동 → 같은 시·군 → 같은 시·도 → 인접 시·도 */
+.nb-grp { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 10px 16px 6px; background: var(--bg);
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1; }
+.nb-grp b { font-size: 12px; font-weight: 800; color: var(--text); }
+.nb-grp span { font-size: 11px; color: var(--muted); }
+/* 위치가 번지까지 확인되지 않은 업체 — 거리 대신 '—', 동선에 넣지 않는다 */
+.nb-row.unplaced .nb-d b.nb-dq { color: var(--faint); }
+.nb-row.unplaced .nb-d i { font-size: 10px; line-height: 1.2; white-space: nowrap; }
+.nb-geo { font-size: 11.5px; color: var(--muted); }
+.nb-geo.warn { color: var(--gC); }
+.nb-sum-warn { color: var(--gC); }
+.nb-warn { color: var(--gC); font-weight: 700; }
+.nb-btn[disabled] { opacity: .45; cursor: not-allowed; }
+.nb-btn[disabled]:hover { border-color: var(--border); }
+
 /* 오늘 동선 */
 .nb-route { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--rule); background: var(--panel); }
 .nb-route > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
