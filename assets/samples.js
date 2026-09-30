@@ -1071,23 +1071,36 @@ function assembleLiveReport(name, corp, res) {
           ? `지자체 공장정보 페이지 게재값입니다(공공 API에는 없음). 변경됐을 수 있으니 방문 전 통화로 확인하세요.`
             + `${pubBizFacts.link ? ` 근거: ${pubBizFacts.link}` : ''}`
           : why('factory', '공장등록 응답과 웹 어디에서도 연락처를 찾지 못했습니다'))),
-    // 건평 — 방문 전 물류 동선을 가늠하는 유일한 공개 수치다
-    f('공장 건축면적 (건평)',
-      fctFloor ? `약 ${fctFloor.py.toLocaleString()}평 (${fctFloor.m2.toLocaleString()}㎡)` : null,
-      fctFloor ? 'A' : 'D', '산업단지공단 공장등록', fctFloor ? (fctRegDe || today) : null,
-      fctFloor
-        ? `★ 공장등록증 신고값의 ${fctFloor.label}입니다(${fctDetailUsed ? `${fctDetailUsed} 오퍼레이션 · ` : ''}응답 항목 ${fctFloor.key}). `
-          + `${floorAreaNote(fctFloor.py)}`
-          + (fctLand ? ` 부지면적은 약 ${fctLand.py.toLocaleString()}평(${fctLand.m2.toLocaleString()}㎡)입니다.` : '')
-          + ' 등록·변경 시점 스냅샷이라 증축·이전이 반영되지 않았을 수 있습니다.'
-        // 못 찾았을 때 '없다'로만 끝내면 API가 안 주는 건지 우리가 못 읽는 건지 알 수 없다.
-      // 응답에 실제로 어떤 항목이 왔는지 적어 둔다(국민연금 결측 안내와 같은 방식).
-      : why('factory', fctHit
-        ? `공장등록 응답에서 면적 항목을 찾지 못했습니다. 생산정보 응답 항목: ${Object.keys(fctHit).join(', ').slice(0, 220)}`
-          + ` / 용지·시설·기본 오퍼레이션 응답: ${fctDetail.length
-            ? fctDetail.map((g) => `${g.op}[${g.key}] ${g.err ? '오류 → ' + String(g.err).slice(0, 180) : g.items.length + '건'}`).join(' / ')
-            : '호출 안 됨'}`
-        : '공장등록 조회 결과가 없어 면적을 확인할 수 없습니다')),
+    // 건평 — 방문 전 물류 동선을 가늠하는 유일한 공개 수치다.
+    // 산단공 공장등록은 우리가 받을 수 있는 응답에 면적이 없어, 국토부 건축물대장에서 가져온다.
+    (() => {
+      const B = R.bld && R.bld.ok ? R.bld.data : null;
+      if (B && B.arch) {
+        const py = (m2) => Math.round(m2 / PYEONG);
+        const facNote = B.factoryCount
+          ? `건물 ${B.bldgCount}동 중 공장 용도 ${B.factoryCount}동(공장 건축면적 약 ${py(B.factoryArch).toLocaleString()}평)`
+          : `건물 ${B.bldgCount}동 · 용도 ${B.purposes.join('·') || '미상'} — 대장상 '공장' 용도가 아닙니다. 창고·근린생활시설 등을 공장으로 쓰는지 방문 시 확인하세요`;
+        return f('공장 건축면적 (건평)',
+          `건축면적 약 ${py(B.arch).toLocaleString()}평 (${Math.round(B.arch).toLocaleString()}㎡)`
+            + (B.tot ? ` · 연면적 약 ${py(B.tot).toLocaleString()}평` : ''),
+          'A', '국토부 건축물대장', today,
+          `★ ${B.jibun} 지번의 건축물대장(${B.src}) 값입니다. ${facNote}.`
+            + (B.plat ? ` 대지면적 약 ${py(B.plat).toLocaleString()}평.` : '')
+            + (B.firstApr ? ` 사용승인 ${B.firstApr.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')}.` : '')
+            + (B.collective ? ' ⚠ 지식산업센터 등 집합건물입니다 — 이 면적은 건물 전체이고 업체가 쓰는 호실 면적은 훨씬 작습니다. 전용면적을 따로 물어보세요.' : '')
+            + ` ${floorAreaNote(py(B.arch))}`
+            + ' 같은 공장이 여러 필지에 걸쳐 있으면 이 지번 몫만 잡힙니다.');
+      }
+      if (fctFloor) {
+        return f('공장 건축면적 (건평)', `약 ${fctFloor.py.toLocaleString()}평 (${fctFloor.m2.toLocaleString()}㎡)`, 'A', '산업단지공단 공장등록', fctRegDe || today,
+          `★ 공장등록 신고값의 ${fctFloor.label}입니다. ${floorAreaNote(fctFloor.py)}`);
+      }
+      // 못 찾았을 때 '없다'로만 끝내면 API가 안 주는 건지 우리가 못 읽는 건지 모른다 — 사유를 적는다
+      const why2 = R.bld && !R.bld.ok ? R.bld.err : '공장 주소가 없어 건축물대장을 조회하지 못했습니다';
+      return f('공장 건축면적 (건평)', null, 'D', '국토부 건축물대장', null,
+        `${why2}${R.bld && R.bld.queried ? ` (조회 주소: ${R.bld.queried})` : ''}`
+          + (/활용신청|NOT_REGISTERED/i.test(String(why2)) ? ' — data.go.kr에서 「국토교통부_건축HUB_건축물대장정보 서비스」를 활용신청해 주세요(기존 인증키 그대로 사용).' : ''));
+    })(),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     // ★ 월 갱신 지표 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 가장 최신 근거
@@ -1524,6 +1537,7 @@ function assembleLiveReport(name, corp, res) {
     meta: {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
       version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
+      bld: R.bld ? (R.bld.ok ? R.bld.data : { err: R.bld.err, queried: R.bld.queried }) : null,
       max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
       no_corp: !hasCorp, // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회 안내용
       biz_agg: agg ? { host: agg.host, url: agg.url } : null, // 외부 집계 보강 출처(비공식)

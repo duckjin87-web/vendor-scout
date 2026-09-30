@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 154;
+const BUILD = 155;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -186,6 +186,9 @@ const PARAM_MAP = {
   maker:     { name: 'bssh_nm', rows: 'numOfRows' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
   factory:   { name: 'cmpnyNm', rows: 'numOfRows' }, // 산단공 공장등록 — 회사명 검색
+  // 건축물대장 — 법정동코드(시군구 5 + 법정동 5)와 지번(본번·부번 4자리)으로 찾는다
+  bldTitle: { sigunguCd: 'sigunguCd', bjdongCd: 'bjdongCd', platGbCd: 'platGbCd', bun: 'bun', ji: 'ji', rows: 'numOfRows' },
+  bldRecap: { sigunguCd: 'sigunguCd', bjdongCd: 'bjdongCd', platGbCd: 'platGbCd', bun: 'bun', ji: 'ji', rows: 'numOfRows' },
   factoryBass:  { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
   factoryLand:  { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
   factoryFclty: { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
@@ -1299,6 +1302,83 @@ async function kakaoGeocodeFlex(addr) {
   }
   return null;
 }
+// ── 건축물대장 — 공장 면적 ──
+// 주소 → 카카오 주소검색으로 법정동코드(b_code)·지번(본번/부번)·산 여부를 얻고 →
+// 건축물대장 표제부(동별)와 총괄표제부(대지 전체)를 함께 부른다.
+// 공장등록이 없는 임대·소규모 공장도 건물만 있으면 나온다.
+const bldPad4 = (v) => (String(v == null ? '' : v).replace(/\D/g, '') || '0').padStart(4, '0').slice(-4);
+function bldAddrVariants(a) {
+  const out = [];
+  const push = (x) => { x = String(x || '').replace(/\s+/g, ' ').replace(/[,\s]+$/, '').trim(); if (x && !out.includes(x)) out.push(x); };
+  const base = String(a || '').replace(/\s+/g, ' ').trim();
+  push(base);
+  const noParen = base.replace(/\([^)]*\)/g, ' ').replace(/외\s*\d+\s*필지/g, ' ');
+  const road = noParen.match(/^(.*?\S(?:로|길)\s*\d+(?:-\d+)?)(?=\D|$)/); if (road) push(road[1]);
+  const lot = noParen.match(/^(.*?\S(?:동|리|가)\s*(?:산\s*)?\d+(?:-\d+)?)(?=\D|$)/); if (lot) push(lot[1]);
+  return out.slice(0, 3);
+}
+async function bldAddrKey(addr) {
+  for (const q of bldAddrVariants(addr)) {
+    let docs = [];
+    try { docs = ((await proxyOnlyGet('kakaoGeocode', { query: q })) || {}).documents || []; } catch (e) { if (/401|403|KEY|키/.test(e.message)) throw e; }
+    // 번지까지 맞은 결과만 — 동 단위 결과의 법정동코드로 부르면 엉뚱한 번지의 건물이 나온다
+    const d = docs.find((x) => (x.address_type === 'ROAD_ADDR' || x.address_type === 'REGION_ADDR') && x.address && x.address.b_code && x.address.main_address_no);
+    if (!d) continue;
+    const a = d.address;
+    return { sigunguCd: String(a.b_code).slice(0, 5), bjdongCd: String(a.b_code).slice(5, 10),
+      platGbCd: a.mountain_yn === 'Y' ? '1' : '0', bun: bldPad4(a.main_address_no), ji: bldPad4(a.sub_address_no),
+      jibun: a.address_name, road: d.road_address ? d.road_address.address_name : '' };
+  }
+  return null;
+}
+const bldNum = (v) => { const n = Number(String(v == null ? '' : v).replace(/,/g, '')); return isFinite(n) && n > 0 ? n : 0; };
+async function bldAreaLookup(addr) {
+  if (!getProxy()) throw new Error('프록시 미설정');
+  if (!addr) throw new Error('공장 주소 없음');
+  const k = await bldAddrKey(addr);
+  if (!k) throw new Error(`주소를 지번(법정동·번지)으로 바꾸지 못했습니다 — ${addr}`);
+  const params = { sigunguCd: k.sigunguCd, bjdongCd: k.bjdongCd, platGbCd: k.platGbCd, bun: k.bun, ji: k.ji, rows: '100' };
+  const [t, r] = await Promise.allSettled([proxyGet('bldTitle', params), proxyGet('bldRecap', params)]);
+  if (t.status === 'rejected' && r.status === 'rejected') throw new Error(`건축물대장 조회 실패 — ${t.reason && t.reason.message || t.reason}`);
+  const items = (d) => listOf(d, ['response.body.items.item', 'body.items.item', 'body.items']).filter((x) => x && typeof x === 'object');
+  const titles = (t.status === 'fulfilled' ? items(t.value) : []).map((x) => ({
+    name: x.bldNm || '', dong: x.dongNm || '', purpose: x.mainPurpsCdNm || '', etc: x.etcPurps || '',
+    arch: bldNum(x.archArea), tot: bldNum(x.totArea), plat: bldNum(x.platArea),
+    floors: Number(x.grndFlrCnt) || null, under: Number(x.ugrndFlrCnt) || null,
+    apr: String(x.useAprDay || '').trim(), kind: x.mainAtchGbCdNm || '', regKind: x.regstrKindCdNm || '', strct: x.strctCdNm || '' }));
+  const recap = r.status === 'fulfilled' ? items(r.value)[0] : null;
+  if (!titles.length && !recap) throw new Error(`건축물대장에 이 지번(${k.jibun})의 건물이 없습니다 — 신축·미등재이거나 공장이 다른 필지에 있을 수 있습니다`);
+  const sum = (arr, f) => arr.reduce((a, x) => a + x[f], 0);
+  const isFactory = (x) => /공장|제조/.test(`${x.purpose} ${x.etc}`);
+  const fac = titles.filter(isFactory);
+  // 총괄표제부가 있으면 대지 전체 합계를 쓰고, 없으면 동별을 더한다
+  const arch = recap && bldNum(recap.archArea) ? bldNum(recap.archArea) : sum(titles, 'arch');
+  const tot = recap && bldNum(recap.totArea) ? bldNum(recap.totArea) : sum(titles, 'tot');
+  const plat = (recap && bldNum(recap.platArea)) || Math.max(0, ...titles.map((x) => x.plat));
+  const aprs = (fac.length ? fac : titles).map((x) => x.apr).filter((x) => /^\d{8}$/.test(x)).sort();
+  return {
+    jibun: k.jibun, road: k.road, arch, tot, plat,
+    factoryArch: sum(fac, 'arch'), factoryTot: sum(fac, 'tot'),
+    bldgCount: titles.length, factoryCount: fac.length,
+    purposes: [...new Set(titles.map((x) => x.purpose).filter(Boolean))],
+    collective: titles.some((x) => /집합/.test(x.regKind)),      // 지식산업센터 등 — 면적이 건물 전체다
+    firstApr: aprs[0] || null,
+    bldgs: titles.slice(0, 12),
+    src: recap ? '총괄표제부+표제부' : '표제부',
+  };
+}
+// 비교 기준 — 한국콜마 기준점(세종) 건축물대장. 자주 바뀌지 않아 30일간 저장해 둔다.
+const REF_BLD_KEY = 'vs_ref_bld';
+async function refBldArea() {
+  try {
+    const c = JSON.parse(localStorage.getItem(REF_BLD_KEY) || 'null');
+    if (c && c.addr === KOLMAR_ADDR && Date.now() - c.at < 30 * 864e5 && c.data) return c.data;
+  } catch { /* 없음 */ }
+  const data = await bldAreaLookup(KOLMAR_ADDR);
+  try { localStorage.setItem(REF_BLD_KEY, JSON.stringify({ addr: KOLMAR_ADDR, at: Date.now(), data })); } catch {}
+  return data;
+}
+
 async function kakaoTravel(destAddr) {
   if (!getProxy()) throw new Error('프록시 미설정');
   if (!destAddr) throw new Error('방문 주소 없음');
@@ -2533,28 +2613,15 @@ async function recallLookup() {
 // 공장관리번호(fctryManageNo)로 찾는 게 자연스럽고, 그 번호는 생산정보 응답에 들어 있다.
 // 그래서 관리번호를 먼저 얻은 뒤 그것을 키로 상세를 부른다. 키가 문제가 아닐 수도 있으므로
 // 상호로도 한 번 더 시도하고, 실패하면 상류가 보낸 오류 본문을 그대로 남긴다.
-const FACTORY_OPS = ['factoryLand', 'factoryFclty', 'factoryBass'];
-async function factoryDetail(nm, manageNo) {
-  const attempts = [];
-  FACTORY_OPS.forEach((op) => {
-    if (manageNo) attempts.push({ op, key: 'fctryManageNo', params: { manageNo: String(manageNo) } });
-    attempts.push({ op, key: 'cmpnyNm', params: { name: nm } });
-  });
-  const got = await mapLimit(attempts, 3, async (a2) => {
-    try {
-      const d = await proxyGet(a2.op, { ...a2.params, rows: '50' });
-      for (const path of ['response.body.items.item', 'body.items.item', 'body.items', 'items']) {
-        let cur = d, ok = true;
-        for (const seg of path.split('.')) { if (cur && typeof cur === 'object' && seg in cur) cur = cur[seg]; else { ok = false; break; } }
-        if (ok && cur != null) return { op: a2.op, key: a2.key, items: Array.isArray(cur) ? cur : [cur].filter(Boolean) };
-      }
-      return { op: a2.op, key: a2.key, items: [] };
-    } catch (e) { return { op: a2.op, key: a2.key, err: (e && e.message) || String(e), items: [] }; }
-  });
-  return got.filter(Boolean);
-}
+// ※ 여기서 산단공 '용지·시설·기본' 오퍼레이션 셋(getFctryLand/Fclty/BassService_v2)을 불러
+//   면적을 찾으려 했는데, 이 이름들은 추정이었고 매번 HTTP 400으로 실패했다(조회 1회당 헛요청 6건).
+//   받을 수 있는 생산정보에는 면적 항목이 아예 없다. 면적은 건축물대장(bldAreaLookup)으로 옮겼다.
 
-// 생산정보를 먼저 받아 공장관리번호를 얻고, 그것으로 상세(면적)를 조회한다.
+// factoryWithDetail은 응답을 { prod, detail, manageNo }로 감싸 준다. 여기서 감싼 채로 목록을 찾으면
+// 늘 빈 배열이 된다 — 실제로 그래서 공장 주소가 방문 주소로 한 번도 쓰이지 않았고(방문거리·면적이
+// 본점 주소 기준으로 계산됨), 공장 레코드에서 사업자번호를 되찾는 보완도 죽어 있었다.
+const factoryProd = (d) => (d && d.prod ? d.prod : d);
+// 산단공 공장등록 생산정보(주소·대표자·전화·종업원수·생산품). 면적은 여기 없다.
 async function factoryWithDetail(nm) {
   const prod = await proxyGet('factory', { name: nm, rows: '30' });
   let items = [];
@@ -2564,8 +2631,7 @@ async function factoryWithDetail(nm) {
     if (ok && cur != null) { items = Array.isArray(cur) ? cur : [cur].filter(Boolean); break; }
   }
   const mn = (items.find((x) => x && x.fctryManageNo) || {}).fctryManageNo || null;
-  const detail = await factoryDetail(nm, mn).catch(() => []);
-  return { prod, detail, manageNo: mn };
+  return { prod, detail: [], manageNo: mn };
 }
 
 // 2단계: 선택된 업체의 재무·식약처·국민연금·제조업 병렬 조회 → 진단 포함 조립
@@ -2603,7 +2669,7 @@ async function finishLive(name, corp) {
   // ── 2차 보완 — 1차에서 확보한 사업자번호로 막혔던 소스 재조회(서로 보완해 채우기) ──
   if (!corp.bzno) {
     const mkR = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
-    const fcR = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
+    const fcR = res.factory && res.factory.ok ? listOf(factoryProd(res.factory.data), ['response.body.items.item', 'body.items', 'items']) : [];
     const aggBzno = res.bizAgg && res.bizAgg.ok && res.bizAgg.data ? res.bizAgg.data.bzno : null;
     // ★ 상호 일치 레코드에서만 사업자번호 추출 — maker/factory API가 상호 필터링을 안 하므로
     //    전체를 훑으면 '남의 회사' 사업자번호를 잡아 국세청 재조회가 오염됨(할루시네이션 방지).
@@ -2633,7 +2699,7 @@ async function finishLive(name, corp) {
   }
 
   // 카카오 실측 이동거리 — 공장(산단공) > 식약처 제조소 > 본점 순으로 방문지 선택.
-  const fList = res.factory && res.factory.ok ? listOf(res.factory.data, ['response.body.items.item', 'body.items', 'items']) : [];
+  const fList = res.factory && res.factory.ok ? listOf(factoryProd(res.factory.data), ['response.body.items.item', 'body.items', 'items']) : [];
   const fHit = matchByNameApp(name, fList) || (fList.length === 1 ? fList[0] : null); // 상호 일치 건만(단건이면 그대로)
   const fAddr = fHit ? (fHit.rnAdres ?? fHit.lnmAdres ?? fHit.lotNoAddr ?? fHit.roadNmAddr ?? fHit.adres ?? fHit.ADRES ?? fHit.fctryAddr ?? null) : null;
   const mList = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
@@ -2641,12 +2707,16 @@ async function finishLive(name, corp) {
   const mkHit = matchByNameApp(name, mList); // 상호 일치 건만(남의 회사 주소 오염 방지)
   const mAddr = mkHit ? (mkHit.ADDR ?? mkHit.SITE_ADDR ?? mkHit.LOCP_ADDR ?? mkHit.locplc ?? Object.values(mkHit).find(looksAddr) ?? null) : null;
   const visitAddr = fAddr || mAddr || corp.addr || null;
-  let travel = null, kakaoErr = null;
-  try { travel = await kakaoTravel(visitAddr); }
-  catch (e) { kakaoErr = e && e.message ? e.message : String(e); }
+  // 방문 거리와 공장 면적(건축물대장)은 같은 주소로 부르므로 함께 돌린다
+  const [trR, bldR] = await Promise.allSettled([kakaoTravel(visitAddr), bldAreaLookup(visitAddr)]);
+  const travel = trR.status === 'fulfilled' ? trR.value : null;
+  const kakaoErr = trR.status === 'rejected' ? (trR.reason && trR.reason.message ? trR.reason.message : String(trR.reason)) : null;
   res.kakao = travel
     ? { ok: true, data: travel }
     : { ok: false, err: `${kakaoErr || '실패'} — 추정치 대체` };
+  res.bld = bldR.status === 'fulfilled'
+    ? { ok: true, data: { ...bldR.value, queried: visitAddr } }
+    : { ok: false, err: bldR.reason && bldR.reason.message ? bldR.reason.message : String(bldR.reason), queried: visitAddr };
 
   return window.assembleLiveReport(corp.corpNm || name, corp, res);
 }
@@ -3927,6 +3997,88 @@ document.addEventListener('click', (e) => {
   if (t) setTimeout(() => t.focus(), 260);
 });
 
+// ── 공장 규모 비교(모션 그래픽) — 이 업체 vs 한국콜마 기준점 ──
+// 숫자 둘을 나란히 두면 '얼마나 작은지'가 감으로 안 온다. 면적에 비례한 정사각형 두 개를
+// 겹쳐 그리면 한눈에 보인다(한 변은 면적의 제곱근에 비례). 막대로 건축·연·대지면적도 견준다.
+// 움직임은 처음 화면에 들어올 때 한 번만, 움직임 줄이기 설정이면 바로 최종 모습. 인쇄도 최종 모습.
+const FIELD_M2 = 7140;                         // 축구장(105m × 68m)
+const toPy = (m2) => Math.round(m2 / 3.305785);
+function renderAreaCompare(report) {
+  const B = report.meta && report.meta.bld;
+  if (!B || !B.arch) return null;
+  const box = el('div', 'block full cat-prod ac');
+  box.innerHTML = `<h3>공장 규모 비교<span class="cnt">건축물대장 · 한국콜마 기준점 대비</span></h3>`
+    + `<div class="ac-body"><div class="ac-wait">한국콜마 기준값을 불러오는 중…</div></div>`;
+  const body = box.querySelector('.ac-body');
+  const paint = (R) => {
+    const me = { arch: B.arch, tot: B.tot, plat: B.plat };
+    const rf = R ? { arch: R.arch, tot: R.tot, plat: R.plat } : null;
+    const nm = esc(stripCorp(report.meta.vendor_name || '') || '이 업체');
+    let head = '', squares = '', bars = '';
+    if (rf && rf.arch) {
+      const r = me.arch / rf.arch;
+      head = r < 1
+        ? `<b>${nm}</b>의 건축면적은 한국콜마 기준점의 <em>약 ${r < 0.1 ? (r * 100).toFixed(1) : Math.round(r * 100)}%</em>`
+          + (r < 0.5 ? ` · <em>1/${Math.round(1 / r)}</em> 규모` : '') + '입니다'
+        : `<b>${nm}</b>의 건축면적은 한국콜마 기준점의 <em>약 ${r.toFixed(1)}배</em>입니다`;
+      // 정사각형 — 큰 쪽이 240px, 작은 쪽은 면적비의 제곱근만큼
+      const big = Math.max(me.arch, rf.arch), S = 240;
+      const side = (a) => Math.max(3, S * Math.sqrt(a / big));
+      const sK = side(rf.arch), sM = side(me.arch);
+      squares = `<svg class="ac-sq" viewBox="0 0 ${S + 20} ${S + 20}" role="img" aria-label="면적 비교: 한국콜마 ${toPy(rf.arch).toLocaleString()}평, ${nm} ${toPy(me.arch).toLocaleString()}평">`
+        + `<rect class="ac-k" x="10" y="${10 + S - sK}" width="${sK}" height="${sK}"></rect>`
+        + `<rect class="ac-m" x="10" y="${10 + S - sM}" width="${sM}" height="${sM}"></rect>`
+        + `<text class="ac-tk" x="${10 + sK - 8}" y="${10 + S - sK + 18}" text-anchor="end">한국콜마</text>`
+        + (sM > 70 ? `<text class="ac-tm" x="18" y="${10 + S - 10}">${nm}</text>` : `<text class="ac-tm out" x="${10 + sM + 6}" y="${10 + S - 4}">${nm}</text>`)
+        + `</svg>`;
+      const rows = [['건축면적', 'arch', '바닥에 닿은 건물 면적 — 흔히 말하는 건평'], ['연면적', 'tot', '모든 층을 더한 면적 — 실제로 쓰는 공간'], ['대지면적', 'plat', '부지 전체 — 차량 진입·적재 여유']];
+      bars = rows.filter(([, k]) => me[k] || rf[k]).map(([lab, k, hint], i) => {
+        const mx = Math.max(me[k] || 0, rf[k] || 0) || 1;
+        const w = (v) => `${Math.max(0.6, (v / mx) * 100).toFixed(2)}%`;
+        return `<div class="ac-row" style="--d:${i * 140}ms"><div class="ac-lab"><b>${lab}</b><small>${hint}</small></div>`
+          + `<div class="ac-bars"><div class="ac-bar m"><span style="--w:${w(me[k] || 0)}"></span><i data-n="${toPy(me[k] || 0)}">${me[k] ? toPy(me[k]).toLocaleString() + '평' : '—'}</i></div>`
+          + `<div class="ac-bar k"><span style="--w:${w(rf[k] || 0)}"></span><i data-n="${toPy(rf[k] || 0)}">${rf[k] ? toPy(rf[k]).toLocaleString() + '평' : '—'}</i></div></div></div>`;
+      }).join('');
+    } else {
+      head = `<b>${nm}</b>의 건축면적은 약 <em>${toPy(me.arch).toLocaleString()}평</em>입니다`
+        + `<small class="ac-warn">한국콜마 기준값을 가져오지 못해 비교는 생략했습니다${R === false ? '' : ''}</small>`;
+    }
+    const fields = me.arch / FIELD_M2;
+    const kf = rf && rf.arch ? rf.arch / FIELD_M2 : null;
+    const analog = `<div class="ac-analog">축구장(7,140㎡)으로 치면 <b>${nm} ${fields < 1 ? `약 ${Math.round(fields * 100)}%` : `약 ${fields.toFixed(1)}개`}</b>`
+      + (kf ? ` · 한국콜마 기준점 <b>약 ${kf.toFixed(1)}개</b>` : '') + '</div>';
+    const legend = rf ? `<div class="ac-leg"><span class="m"></span>${nm}<span class="k"></span>한국콜마 기준점(${esc(R.jibun || KOLMAR_ADDR)})</div>` : '';
+    body.innerHTML = `<div class="ac-head">${head}</div>`
+      + `<div class="ac-grid">${squares ? `<div class="ac-left">${squares}</div>` : ''}<div class="ac-right">${bars}${analog}${legend}</div></div>`
+      + `<div class="ac-foot">국토부 건축물대장 기준 — ${esc(B.jibun)} 지번${B.collective ? ' · ⚠ 집합건물이라 건물 전체 면적입니다(업체 전용면적 아님)' : ''}. `
+      + '한국콜마는 방문거리 기준점과 같은 세종 주소의 지번 몫입니다(여러 필지에 걸친 공장은 일부만 잡힙니다).</div>';
+    animateAreaCompare(box);
+  };
+  refBldArea().then(paint).catch(() => paint(false));
+  return box;
+}
+function animateAreaCompare(box) {
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) { box.classList.add('go', 'still'); return; }
+  const run = () => {
+    box.classList.add('go');
+    // 숫자 올라가기 — 막대가 자라는 동안 같은 속도로
+    box.querySelectorAll('.ac-bar i[data-n]').forEach((i) => {
+      const n = Number(i.dataset.n); if (!n) return;
+      const t0 = performance.now(), dur = 900;
+      const step = (t) => {
+        const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+        i.textContent = `${Math.round(n * e).toLocaleString()}평`;
+        if (p < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+  };
+  if (!('IntersectionObserver' in window)) { requestAnimationFrame(run); return; }
+  const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { io.disconnect(); requestAnimationFrame(run); } }, { threshold: 0.25 });
+  io.observe(box);
+}
+
 function render(report, opts = {}) {
   currentReport = report;
   const root = $('#report');
@@ -4069,6 +4221,9 @@ function render(report, opts = {}) {
   const blocks = el('div', 'blocks');
   blocks.appendChild(block('기업 기본정보', '', visible(report.basic), 'basic'));
   blocks.appendChild(block('생산역량 · 인원', '', visible(report.capacity), 'prod'));
+  // 공장 규모 비교 — 건축물대장 면적을 한국콜마 기준점과 견준다(면적이 잡힌 경우에만)
+  const areaCmp = renderAreaCompare(report);
+  if (areaCmp) blocks.appendChild(areaCmp);
   if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
   // 🧑‍🏭 채용공고 추적 — 재무 뒤(재무가 오래된 업체의 '현재 활동'을 보는 자리이므로 나란히)
   if (!excl.has('hiring')) {

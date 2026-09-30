@@ -83,6 +83,37 @@ async function relay(target, label, init) {
   return jsonRes({ error: `${label} 상류 HTTP ${lastStatus || ''}`.trim(), upstreamStatus: lastStatus, detail: cleanUpstreamDetail(lastBody, lastStatus) }, 502);
 }
 
+// ── 건축물대장(국토교통부) — 공장 건축면적·연면적·대지면적 ──
+// 산단공 공장등록 API는 우리가 받을 수 있는 오퍼레이션(생산정보)에 면적이 없다. 건축물대장은
+// 주소(법정동코드+지번)만 있으면 공장등록 여부와 상관없이 어느 건물이든 면적을 준다.
+// 국토부가 서비스를 '건축HUB'로 옮기는 중이라 새 주소를 먼저 부르고, 실패하면 옛 주소로 한 번 더.
+const BLD = {
+  bldTitle: ['https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo', 'https://apis.data.go.kr/1613000/BldRgstService_v2/getBrTitleInfo'],
+  bldRecap: ['https://apis.data.go.kr/1613000/BldRgstHubService/getBrRecapTitleInfo', 'https://apis.data.go.kr/1613000/BldRgstService_v2/getBrRecapTitleInfo'],
+};
+async function handleBld(url, service, env) {
+  if (!env.DATA_GO_KR_API_KEY) return jsonRes({ error: 'DATA_GO_KR_API_KEY 미설정' }, 500);
+  const q = new URLSearchParams();
+  for (const k of ['sigunguCd', 'bjdongCd', 'platGbCd', 'bun', 'ji', 'numOfRows', 'pageNo']) {
+    const v = url.searchParams.get(k); if (v) q.set(k, v);
+  }
+  if (!/^\d{5}$/.test(q.get('sigunguCd') || '') || !/^\d{5}$/.test(q.get('bjdongCd') || '')) return jsonRes({ error: '시군구코드·법정동코드(각 5자리) 필요' }, 400);
+  q.set('serviceKey', env.DATA_GO_KR_API_KEY);
+  q.set('_type', 'json');
+  if (!q.has('numOfRows')) q.set('numOfRows', '100');
+  if (!q.has('pageNo')) q.set('pageNo', '1');
+  let last = null;
+  for (const base of BLD[service]) {
+    const r = await relay(`${base}?${q}`, `건축물대장(${service})`);
+    const body = await r.clone().text().catch(() => '');
+    // 200이어도 본문이 미승인·오류일 수 있다 — 정상 코드가 보일 때만 채택
+    const okBody = r.status === 200 && /"resultCode"\s*:\s*"?(00|0)"?\s*[,}]|<resultCode>00<\/resultCode>/.test(body);
+    if (okBody) return r;
+    last = r;
+  }
+  return last;
+}
+
 // json 지정에 `type` 파라미터를 쓰는 서비스(식약처 1471000 · 산단공 공장등록 v2).
 const NEEDS_TYPE = new Set(['rpt', 'maker', 'gmp', 'factory', 'factoryBass', 'factoryLand', 'factoryFclty', 'recall']);
 // 국민연금은 V2(camelCase) 엔드포인트 사용 — V1(getBassInfoSearch)은 폐기되어 500.
@@ -301,6 +332,7 @@ export default async function handler(req) {
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
     if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
     if (service === 'kakaoKeyword')    return handleKakao(url, env, 'keyword');
+    if (BLD[service])                  return handleBld(url, service, env);
     if (DATAGO[service])               return handleDataGo(url, service, env);
 
     return jsonRes({ error: `unknown service: ${service}` }, 400);
