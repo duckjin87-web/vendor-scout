@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 156;
+const BUILD = 157;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1283,21 +1283,50 @@ function findBznoIn(rec) {
 // 좌표 변환(주소검색)까지 실패하면 throw → 상태 패널에 사유 표시(키·재배포 확인).
 const KOLMAR_ADDR = '세종특별자치시 전의면 산단길 22-17'; // 한국콜마 기준점
 let _kolmarCoord = null; // 세션 내 캐시(기준점 좌표는 고정)
-async function kakaoGeocode(addr) {
+// ── 주소 품질 ──
+// 식약처 제조업 레코드는 주소가 여러 칸(기본·상세)으로 나뉘어 올 때가 있다. 첫 칸만 집으면
+// '세종특별자치시' 한 단어가 방문 주소가 되고, 그 좌표(시 중심점)로 방문거리 38km가 계산됐다
+// (실제 한국콜마 공장은 기준점에서 몇 km 거리). 주소 칸을 모두 모아 이어 붙인다.
+function joinAddrFields(rec) {
+  if (!rec || typeof rec !== 'object') return null;
+  const parts = [];
+  Object.entries(rec).forEach(([k, v]) => {
+    if (!/ADDR|ADRES|주소|소재지|LOCP|SITE/i.test(k) || /ZIP|POST|우편|TEL|FAX/i.test(k)) return;
+    const t = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+    if (!t || parts.some((p) => p.includes(t))) return;
+    for (let i = parts.length - 1; i >= 0; i--) if (t.includes(parts[i])) parts.splice(i, 1);   // 더 긴 쪽이 이긴다
+    parts.push(t);
+  });
+  if (!parts.length) return null;
+  // 시·도로 시작하는 칸을 앞에 — 기본주소 + 상세주소 순서가 되게
+  // '전동면'이 '전'(전북·전남)으로 시작한다고 시·도로 오인하지 않게 시·도 이름을 온전히 적는다
+  const SIDO_HEAD = /^(서울|부산|대구|인천|광주광역|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주)/;
+  parts.sort((a, b) => (SIDO_HEAD.test(b) ? 1 : 0) - (SIDO_HEAD.test(a) ? 1 : 0));
+  return parts.join(' ');
+}
+// 방문지로 쓸 만한 주소인가 — 시·도 이름만 있거나 번지 숫자가 없으면 좌표가 시·동 중심으로 떨어진다
+const isFullAddr = (a) => { const t = String(a || '').trim(); return t.length >= 8 && /\d/.test(t) && /[가-힣]+(로|길|동|리|가)\s*\d|[가-힣]+(로|길)\d/.test(t); };
+const pickFullAddr = (...cands) => cands.find(isFullAddr) || cands.find((a) => a && String(a).trim()) || null;
+
+async function kakaoGeocode(addr, opts = {}) {
   const data = await proxyOnlyGet('kakaoGeocode', { query: addr }); // 실패 시 proxyErrMsg 전파(401 등)
-  const doc = data && data.documents && data.documents[0];
+  const docs = (data && data.documents) || [];
+  // 번지까지 맞은 결과(ROAD_ADDR·REGION_ADDR)를 먼저 쓴다. 시·동까지만 맞은 결과는 그 지역의
+  // 중심점이라, 거리를 재면 틀린다 — exact면 아예 받지 않는다.
+  const doc = docs.find((d) => d.address_type === 'ROAD_ADDR' || d.address_type === 'REGION_ADDR')
+    || (opts.exact ? null : docs[0]);
   if (!doc) return null;
   const lng = Number(doc.x), lat = Number(doc.y);
   return (isFinite(lng) && isFinite(lat)) ? { lng, lat } : null;
 }
 // 지저분한 주소(괄호·"834층" 같은 상세)를 점진적으로 단순화하며 좌표변환 시도
-async function kakaoGeocodeFlex(addr) {
+async function kakaoGeocodeFlex(addr, opts = {}) {
   const base = String(addr || '');
   const noParen = base.replace(/\([^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
   const noDetail = noParen.replace(/[\s,·]*\d*\s*(층|호|호실)\D*$/, '').trim();
   for (const a of [...new Set([base, noParen, noDetail])]) {
     if (!a) continue;
-    const r = await kakaoGeocode(a).catch(() => null);
+    const r = await kakaoGeocode(a, opts).catch(() => null);
     if (r) return r;
   }
   return null;
@@ -1367,15 +1396,32 @@ async function bldAreaLookup(addr) {
     src: recap ? '총괄표제부+표제부' : '표제부',
   };
 }
-// 비교 기준 — 한국콜마 기준점(세종) 건축물대장. 자주 바뀌지 않아 30일간 저장해 둔다.
-const REF_BLD_KEY = 'vs_ref_bld';
+// 비교 기준 — 한국콜마 세종. 공장이 여러 필지·주소에 걸쳐 있어 한 지번만 보면 실제보다 한참 작다.
+// 방문거리 기준점 주소에 더해, 공식 기록에 나온 한국콜마(주) 주소를 모두 합산한다:
+//   산단공 공장등록 소재지(노장공단길 23) · 금융위 본점 주소(덕고개길 12-11)
+// 같은 지번은 한 번만 센다. 결과는 30일간 저장해 둔다(자주 바뀌지 않는다).
+const KOLMAR_BLD_ADDRS = [KOLMAR_ADDR, '세종특별자치시 전동면 노장공단길 23', '세종특별자치시 전의면 덕고개길 12-11'];
+const REF_BLD_KEY = 'vs_ref_bld2';
+try { localStorage.removeItem('vs_ref_bld'); } catch { /* 옛 단일 지번 캐시 */ }
 async function refBldArea() {
+  const sig = KOLMAR_BLD_ADDRS.join('|');
   try {
     const c = JSON.parse(localStorage.getItem(REF_BLD_KEY) || 'null');
-    if (c && c.addr === KOLMAR_ADDR && Date.now() - c.at < 30 * 864e5 && c.data) return c.data;
+    if (c && c.sig === sig && Date.now() - c.at < 30 * 864e5 && c.data) return c.data;
   } catch { /* 없음 */ }
-  const data = await bldAreaLookup(KOLMAR_ADDR);
-  try { localStorage.setItem(REF_BLD_KEY, JSON.stringify({ addr: KOLMAR_ADDR, at: Date.now(), data })); } catch {}
+  const got = await mapLimit(KOLMAR_BLD_ADDRS, 2, (addr) => bldAreaLookup(addr).then((d) => ({ addr, d })).catch((e) => ({ addr, err: e.message })));
+  const seen = new Set(); const ok = [];
+  got.forEach((g) => { if (g.d && g.d.arch && !seen.has(g.d.jibun)) { seen.add(g.d.jibun); ok.push(g); } });
+  if (!ok.length) throw new Error(got.map((g) => g.err).filter(Boolean)[0] || '한국콜마 건축물대장 조회 실패');
+  const sum = (k) => ok.reduce((a2, g) => a2 + (g.d[k] || 0), 0);
+  const data = {
+    arch: sum('arch'), tot: sum('tot'), plat: sum('plat'), factoryArch: sum('factoryArch'),
+    bldgs: ok.flatMap((g) => g.d.bldgs || []),
+    parts: ok.map((g) => ({ addr: g.addr, jibun: g.d.jibun, arch: g.d.arch, tot: g.d.tot })),
+    failed: got.filter((g) => g.err).map((g) => ({ addr: g.addr, err: g.err })),
+    jibun: ok.map((g) => g.d.jibun).join(' · '),
+  };
+  try { localStorage.setItem(REF_BLD_KEY, JSON.stringify({ sig, at: Date.now(), data })); } catch {}
   return data;
 }
 
@@ -1384,8 +1430,8 @@ async function kakaoTravel(destAddr) {
   if (!destAddr) throw new Error('방문 주소 없음');
   if (!_kolmarCoord) _kolmarCoord = await kakaoGeocode(KOLMAR_ADDR); // 실패(401 등) 시 여기서 throw
   if (!_kolmarCoord) throw new Error('기준점(한국콜마) 좌표 변환 실패');
-  const dest = await kakaoGeocodeFlex(destAddr);
-  if (!dest) throw new Error(`방문지 좌표 변환 실패: ${destAddr}`);
+  const dest = await kakaoGeocodeFlex(destAddr, { exact: true });
+  if (!dest) throw new Error(`방문지 주소가 번지까지 확인되지 않아 거리를 재지 않았습니다: ${destAddr}`);
 
   // 1순위: 모빌리티 실측
   try {
@@ -2705,8 +2751,10 @@ async function finishLive(name, corp) {
   const mList = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
   const mkHit = matchByNameApp(name, mList); // 상호 일치 건만(남의 회사 주소 오염 방지)
-  const mAddr = mkHit ? (mkHit.ADDR ?? mkHit.SITE_ADDR ?? mkHit.LOCP_ADDR ?? mkHit.locplc ?? Object.values(mkHit).find(looksAddr) ?? null) : null;
-  const visitAddr = fAddr || mAddr || corp.addr || null;
+  const mAddr = mkHit ? (joinAddrFields(mkHit) || Object.values(mkHit).find(looksAddr) || null) : null;
+  // 번지까지 있는 주소를 방문지로 — 공장(산단공) > 식약처 제조소 > 본점 순으로 보되 '세종특별자치시'
+  // 처럼 시·도만 있는 주소는 건너뛴다
+  const visitAddr = pickFullAddr(fAddr, mAddr, corp.addr);
   // 방문 거리와 공장 면적(건축물대장)은 같은 주소로 부르므로 함께 돌린다
   const [trR, bldR] = await Promise.allSettled([kakaoTravel(visitAddr), bldAreaLookup(visitAddr)]);
   const travel = trR.status === 'fulfilled' ? trR.value : null;
@@ -4076,24 +4124,58 @@ function acBind3d(box) {
 }
 
 function renderAreaCompare(report) {
-  const B = report.meta && report.meta.bld;
-  if (!B || !B.arch) return null;
+  const M = report.meta || {};
+  if (!M.live) return null;                          // 데모 리포트에는 띄우지 않는다
   const box = el('div', 'block full cat-prod ac');
-  box.innerHTML = `<h3>공장 규모 비교<span class="cnt">건축물대장 · 한국콜마 기준점 대비</span></h3>`
+  box.innerHTML = `<h3>공장 규모 비교<span class="cnt">건축물대장 · 한국콜마 세종 대비</span></h3>`
     + `<div class="ac-body"><div class="ac-wait">한국콜마 기준값을 불러오는 중…</div></div>`;
   const body = box.querySelector('.ac-body');
-  const paint = (R) => {
+  const nm = esc(stripCorp(M.vendor_name || '') || '이 업체');
+  const self = /한국콜마/.test(stripCorp(M.vendor_name || ''));
+  let REF = null;
+  const refFoot = (R) => (R ? `한국콜마 기준: ${R.parts.length}개 주소 합산 — ${R.parts.map((p) => `${esc(p.jibun)} ${toPy(p.arch).toLocaleString()}평`).join(' · ')}`
+    + (R.failed && R.failed.length ? ` (조회 안 됨: ${R.failed.map((f) => esc(f.addr)).join(', ')})` : '') : '');
+
+  const paint = () => {
+    const R = REF;
+    const B0 = M.bld && M.bld.arch ? M.bld : null;
+    const B = B0 || (M.bldManual && M.bldManual.arch ? M.bldManual : null);
+    // ① 조회한 업체가 한국콜마 자신 — 비교할 대상이 아니라 기준이다
+    if (self) {
+      body.innerHTML = R
+        ? `<div class="ac-head"><b>${nm}</b>은(는) 비교 기준 회사입니다 — 세종 사업장 합산 건축면적 <em>약 ${toPy(R.arch).toLocaleString()}평</em>`
+          + (R.tot ? ` · 연면적 약 ${toPy(R.tot).toLocaleString()}평` : '') + '</div>'
+          + `<div class="ac-foot">${refFoot(R)}. 다른 업체를 조회하면 이 값과 3D로 비교합니다.</div>`
+        : `<div class="ac-head"><b>${nm}</b>은(는) 비교 기준 회사입니다.</div><div class="ac-foot">한국콜마 건축물대장을 불러오지 못했습니다.</div>`;
+      return;
+    }
+    // ② 이 업체 면적이 없음 — 이유를 보이고, 주소를 바꿔 다시 찾거나 직접 넣게 한다
+    if (!B) {
+      const why = (M.bld && M.bld.err) || '공장 주소가 없어 건축물대장을 조회하지 못했습니다';
+      const guess = (M.bld && M.bld.queried && isFullAddr(M.bld.queried) ? M.bld.queried : '') || visitAddress(report) || '';
+      body.innerHTML = `<div class="ac-head"><b>${nm}</b>의 공장 면적을 건축물대장에서 찾지 못했습니다</div>`
+        + `<div class="ac-why">${esc(why)}${M.bld && M.bld.queried ? ` <small>(조회 주소: ${esc(M.bld.queried)})</small>` : ''}</div>`
+        + `<form class="ac-form" data-f="refind"><label for="acAddr">공장 주소로 다시 찾기</label>`
+        + `<div class="ac-frow"><input id="acAddr" class="ac-in" type="text" value="${esc(guess)}" placeholder="예: 경기도 파주시 월롱면 덕은리 123-4" autocomplete="off">`
+        + `<button type="submit" class="nb-btn dark">다시 찾기</button></div><div class="ac-ferr" aria-live="polite"></div></form>`
+        + `<form class="ac-form" data-f="manual"><label>면적을 알면 직접 넣어 비교</label>`
+        + `<div class="ac-frow"><input class="ac-in sm" name="py" type="number" min="1" step="1" inputmode="numeric" placeholder="건축면적(평)" aria-label="건축면적(평)">`
+        + `<input class="ac-in sm" name="fl" type="number" min="1" max="30" step="1" inputmode="numeric" placeholder="지상 층수" aria-label="지상 층수">`
+        + `<button type="submit" class="nb-btn">직접 입력해 비교</button></div></form>`
+        + (R ? `<div class="ac-foot">${refFoot(R)}</div>` : '');
+      return;
+    }
+    // ③ 비교
     const me = { arch: B.arch, tot: B.tot, plat: B.plat };
     const rf = R ? { arch: R.arch, tot: R.tot, plat: R.plat } : null;
-    const nm = esc(stripCorp(report.meta.vendor_name || '') || '이 업체');
-    let head = '', squares = '', bars = '';
+    let head = '', scene = '', bars = '';
     if (rf && rf.arch) {
       const r = me.arch / rf.arch;
       head = r < 1
-        ? `<b>${nm}</b>의 건축면적은 한국콜마 기준점의 <em>약 ${r < 0.1 ? (r * 100).toFixed(1) : Math.round(r * 100)}%</em>`
+        ? `<b>${nm}</b>의 건축면적은 한국콜마 세종의 <em>약 ${r < 0.1 ? (r * 100).toFixed(1) : Math.round(r * 100)}%</em>`
           + (r < 0.5 ? ` · <em>1/${Math.round(1 / r)}</em> 규모` : '') + '입니다'
-        : `<b>${nm}</b>의 건축면적은 한국콜마 기준점의 <em>약 ${r.toFixed(1)}배</em>입니다`;
-      squares = acScene3d(B, R, nm);
+        : `<b>${nm}</b>의 건축면적은 한국콜마 세종의 <em>약 ${r.toFixed(1)}배</em>입니다`;
+      scene = acScene3d(B, R, nm);
       const rows = [['건축면적', 'arch', '바닥에 닿은 건물 면적 — 흔히 말하는 건평'], ['연면적', 'tot', '모든 층을 더한 면적 — 실제로 쓰는 공간'], ['대지면적', 'plat', '부지 전체 — 차량 진입·적재 여유']];
       bars = rows.filter(([, k]) => me[k] || rf[k]).map(([lab, k, hint], i) => {
         const mx = Math.max(me[k] || 0, rf[k] || 0) || 1;
@@ -4104,21 +4186,54 @@ function renderAreaCompare(report) {
       }).join('');
     } else {
       head = `<b>${nm}</b>의 건축면적은 약 <em>${toPy(me.arch).toLocaleString()}평</em>입니다`
-        + `<small class="ac-warn">한국콜마 기준값을 가져오지 못해 비교는 생략했습니다${R === false ? '' : ''}</small>`;
+        + `<small class="ac-warn">한국콜마 기준값을 가져오지 못해 비교는 생략했습니다</small>`;
     }
-    const fields = me.arch / FIELD_M2;
-    const kf = rf && rf.arch ? rf.arch / FIELD_M2 : null;
+    const fields = me.arch / FIELD_M2, kf = rf && rf.arch ? rf.arch / FIELD_M2 : null;
     const analog = `<div class="ac-analog">축구장(7,140㎡)으로 치면 <b>${nm} ${fields < 1 ? `약 ${Math.round(fields * 100)}%` : `약 ${fields.toFixed(1)}개`}</b>`
-      + (kf ? ` · 한국콜마 기준점 <b>약 ${kf.toFixed(1)}개</b>` : '') + '</div>';
-    const legend = '';   // 범례는 3D 장면 아래 캡션이 맡는다(두 번 적지 않는다)
-    body.innerHTML = `<div class="ac-head">${head}</div>`
-      + `<div class="ac-grid">${squares ? `<div class="ac-left">${squares}</div>` : ''}<div class="ac-right">${bars}${analog}${legend}</div></div>`
-      + `<div class="ac-foot">국토부 건축물대장 기준 — ${esc(B.jibun)} 지번${B.collective ? ' · ⚠ 집합건물이라 건물 전체 면적입니다(업체 전용면적 아님)' : ''}. `
-      + `한국콜마는 방문거리 기준점과 같은 세종 주소(${esc((R && R.jibun) || KOLMAR_ADDR)}) 지번 몫입니다(여러 필지에 걸친 공장은 일부만 잡힙니다).</div>`;
+      + (kf ? ` · 한국콜마 세종 <b>약 ${kf.toFixed(1)}개</b>` : '') + '</div>';
+    const manualNote = B.manual ? `<div class="ac-manual">직접 입력한 값(${toPy(B.arch).toLocaleString()}평 · 지상 ${B.floors}층)으로 비교 중입니다 <button type="button" class="ac3-spin" data-act="clear-manual">입력 지우기</button></div>` : '';
+    body.innerHTML = `<div class="ac-head">${head}</div>${manualNote}`
+      + `<div class="ac-grid">${scene ? `<div class="ac-left">${scene}</div>` : ''}<div class="ac-right">${bars}${analog}</div></div>`
+      + `<div class="ac-foot">${B.manual ? '이 업체: 직접 입력값' : `이 업체: 국토부 건축물대장 ${esc(B.jibun)} 지번${B.collective ? ' · ⚠ 집합건물이라 건물 전체 면적입니다(업체 전용면적 아님)' : ''}`}. `
+      + `${refFoot(R)}.</div>`;
+    box.classList.remove('go', 'manual', 'still');
     acBind3d(box);
     animateAreaCompare(box);
   };
-  refBldArea().then(paint).catch(() => paint(false));
+
+  // 다시 찾기 · 직접 입력 · 입력 지우기
+  box.addEventListener('submit', async (e) => {
+    const f = e.target.closest('.ac-form'); if (!f) return;
+    e.preventDefault();
+    if (f.dataset.f === 'refind') {
+      const addr = f.querySelector('.ac-in').value.trim();
+      const err = f.querySelector('.ac-ferr'), btn = f.querySelector('button');
+      if (!addr) { err.textContent = '주소를 입력해 주세요'; return; }
+      btn.disabled = true; btn.textContent = '찾는 중…'; err.textContent = '';
+      try {
+        const d = await bldAreaLookup(addr);
+        M.bld = { ...d, queried: addr };
+        const i = (report.capacity || []).findIndex((x) => x.key === '공장 건축면적 (건평)');
+        if (i >= 0 && window.areaFieldFromBld) report.capacity[i] = window.areaFieldFromBld({ ok: true, data: M.bld }, null, null, new Date().toISOString().slice(0, 10));
+        saveLastReport(report);
+        render(report, { noScroll: true });          // 생산역량 칸과 카드를 함께 새로 그린다
+      } catch (x) {
+        err.textContent = x && x.message ? x.message : String(x);
+        btn.disabled = false; btn.textContent = '다시 찾기';
+      }
+    } else if (f.dataset.f === 'manual') {
+      const py = Number(f.querySelector('[name=py]').value), fl = Number(f.querySelector('[name=fl]').value) || 1;
+      if (!(py > 0)) { f.querySelector('[name=py]').focus(); return; }
+      const m2 = py * 3.305785;
+      M.bldManual = { manual: true, arch: m2, tot: m2 * fl, plat: 0, floors: fl, bldgs: [{ purpose: '공장', floors: fl }] };
+      saveLastReport(report);
+      paint();
+    }
+  });
+  box.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act="clear-manual"]')) { delete M.bldManual; saveLastReport(report); paint(); }
+  });
+  refBldArea().then((R) => { REF = R; }).catch(() => { REF = null; }).finally(paint);
   return box;
 }
 function animateAreaCompare(box) {
@@ -4467,6 +4582,50 @@ function renderRecent() {
     c.addEventListener('click', () => { $('#q').value = c.dataset.q; lookup(c.dataset.q); }));
 }
 
+// ── 옛 코드로 도는지 확인 ──
+// 캐시 사슬: 브라우저에 index.html이 남아 있으면 그 안의 옛 주소(app.js?v=118)를 다시 요청하고,
+// 그 주소는 7일 캐시라 옛 파일이 그대로 나온다. 또 탭을 열어 둔 채 배포가 나가면 새로고침 전까지
+// 옛 코드가 계속 돈다 — 실제로 v156 배포 뒤에 v154 코드로 만든 리포트가 올라왔다(없앤 산단공
+// 면적 호출 오류가 그대로 찍혀 있었다). 그래서 페이지를 열 때만이 아니라 탭에 돌아올 때와
+// 실데이터 조회 직전에도 확인한다. index.html만 캐시 없이 받아 배포 번호와 대조한다.
+let _staleCheckedAt = 0;
+async function liveBuild() {
+  try {
+    const r = await Promise.race([
+      fetch(`index.html?_=${Date.now()}`, { cache: 'no-store' }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2500)),   // 느리면 기다리지 않는다
+    ]);
+    if (!r.ok) return null;
+    const live = Number((((await r.text()).match(/app\.js\?v=(\d+)/)) || [])[1]);
+    return isFinite(live) ? live : null;
+  } catch { return null; }   // file:// · 오프라인 — 확인할 방법이 없으니 조용히 넘어간다
+}
+const freshUrl = (extra = '') => `${location.pathname}?r=${Date.now()}${extra}`;
+async function showStaleBar() {
+  const live = await liveBuild();
+  if (!live || live <= BUILD || document.querySelector('.stalebar')) return;
+  const bar = el('div', 'stalebar',
+    `<b>옛 버전으로 실행 중입니다</b> 화면은 v${BUILD}, 배포된 최신은 v${live}입니다. `
+    + `이대로 조회하면 옛 코드의 결과가 나옵니다.`
+    + `<button type="button" id="stReload">최신으로 새로고침</button>`);
+  document.body.appendChild(bar);
+  // 주소에 값을 붙여 index.html을 새로 받게 하면, 그 안의 새 ?v= 주소는 캐시에 없어 스크립트도 새로 받는다
+  bar.querySelector('#stReload').addEventListener('click', () => location.replace(freshUrl()));
+}
+// 실데이터 조회 직전 — 옛 코드면 입력값을 들고 새로고침한 뒤 이어서 조회한다(1분에 한 번만 확인)
+async function reloadIfStale(q, bno) {
+  if (Date.now() - _staleCheckedAt < 60000) return false;
+  _staleCheckedAt = Date.now();
+  const live = await liveBuild();
+  if (!live || live <= BUILD) return false;
+  // 배포 직후 CDN이 아직 옛 파일을 주면 새로고침해도 또 옛 코드다 — 1분 안에 두 번은 하지 않는다
+  let last = 0; try { last = Number(sessionStorage.getItem('vs_stale_reload') || 0); } catch {}
+  if (Date.now() - last < 60000) { showStaleBar(); return false; }
+  try { sessionStorage.setItem('vs_stale_reload', String(Date.now())); } catch {}
+  location.replace(freshUrl(`&q=${encodeURIComponent(q || '')}&bno=${encodeURIComponent(bno || '')}`));
+  return true;
+}
+
 function lookup(name, bno) {
   const nm = (name || '').trim();
   const bz = (bno || '').replace(/\D/g, '');                 // 사업자번호 10자리(선택)
@@ -4504,7 +4663,7 @@ function lookup(name, bno) {
     root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}${nm && bz ? ` · 사업자 ${bzDisp}` : ''}」</div>`;
     // 업체명 + 사업자번호 병기 → liveLookup이 사업자번호 일치 법인만 선별(교집합)
     const liveQuery = [nm, bz].filter(Boolean).join(' ');
-    liveLookup(liveQuery)
+    reloadIfStale(nm, bz).then((stale) => stale ? new Promise(() => {}) : liveLookup(liveQuery))
       .then((res) => { if (res.candidates) renderCandidates(res.name, res.candidates, res.source, res.similar); else render(res.report); })
       .catch((e) => {
         root.innerHTML =
@@ -4591,24 +4750,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // 됐는데 화면만 예전인 상태가 되고, 겉으로는 구분이 안 된다 — 실제로 v119를 올린 뒤
   // 4시간 반이 지난 조회에서도 v118 결과가 나왔다. index.html만 캐시 없이 다시 받아
   // 배포된 번호와 대조하면 이 상태를 잡아낼 수 있다.
-  (async () => {
-    try {
-      const r = await fetch(`index.html?_=${Date.now()}`, { cache: 'no-store' });
-      if (!r.ok) return;
-      const live = Number((((await r.text()).match(/app\.js\?v=(\d+)/)) || [])[1]);
-      if (!isFinite(live) || live <= BUILD) return;
-      const bar = el('div', 'stalebar',
-        `<b>옛 버전으로 실행 중입니다</b> 화면은 v${BUILD}, 배포된 최신은 v${live}입니다. `
-        + `브라우저가 예전 스크립트를 캐시에서 쓰고 있습니다.`
-        + `<button type="button" id="stReload">최신으로 새로고침</button>`);
-      document.body.appendChild(bar);
-      // 주소에 값을 붙여 index.html을 새로 받게 하면, 그 안의 새 ?v= 주소는 캐시에 없어
-      // 스크립트도 새로 받는다. 강제 새로고침(Ctrl+F5)을 손으로 하지 않아도 된다.
-      bar.querySelector('#stReload').addEventListener('click', () => {
-        location.replace(`${location.pathname}?r=${Date.now()}`);
-      });
-    } catch { /* file:// 로 열었거나 오프라인 — 확인할 방법이 없으니 조용히 넘어간다 */ }
-  })();
+  showStaleBar();
+  // 탭을 오래 열어 두면 그사이 배포가 나간다 — 탭으로 돌아올 때마다 다시 확인
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) showStaleBar(); });
+
+  // 조회 직전 새로고침으로 넘어온 경우 — 입력했던 업체를 그대로 이어서 조회한다
+  const qp = new URLSearchParams(location.search);
+  if (qp.get('q') || qp.get('bno')) {
+    const q0 = qp.get('q') || '', b0 = qp.get('bno') || '';
+    $('#q').value = q0; const be = $('#bno'); if (be) be.value = b0;
+    history.replaceState(null, '', location.pathname);
+    lookup(q0, b0);
+    return;
+  }
 
   // 마지막 조회 리포트 복원 — 새로고침·탭 복귀·재방문 시 그대로 표시(새 업체 조회 시 교체)
   const last = loadLastReport();

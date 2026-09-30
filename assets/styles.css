@@ -1519,3 +1519,16 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
   .ac-grid { grid-template-columns: 1fr; }
   .ac-row { grid-template-columns: 1fr; gap: 4px; }
 }
+/* 면적을 못 찾았을 때 — 사유 · 주소로 다시 찾기 · 직접 입력 */
+.ac-why { font-size: 13px; color: var(--muted); line-height: 1.55; }
+.ac-why small { color: var(--faint); }
+.ac-form { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.ac-form label { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.ac-frow { display: flex; gap: 8px; flex-wrap: wrap; }
+.ac-in { font: inherit; flex: 1 1 280px; min-width: 0; min-height: 44px; padding: 0 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); color: var(--text); font-size: 14px; }
+.ac-in.sm { flex: 0 1 150px; }
+.ac-in:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.ac-ferr { font-size: 12.5px; color: var(--risk); min-height: 1em; }
+.ac-manual { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--gC); }
+@media print { .ac-form { display: none !important; } }

@@ -649,6 +649,39 @@ function floorAreaNote(py) {
   return `약 ${py}평 — 상하차 도크와 자재·완제품 보관 구역을 방문 시 함께 확인하세요.`;
 }
 
+// ── 공장 건축면적 칸 ──
+// 산단공 공장등록은 우리가 받을 수 있는 응답에 면적이 없어, 국토부 건축물대장에서 가져온다.
+// 화면에서 주소를 고쳐 다시 찾을 때(app.js)도 이 함수로 칸을 다시 만든다.
+function areaFieldFromBld(bld, fctFloor, fctRegDe, today) {
+  const B = bld && bld.ok ? bld.data : null;
+  if (B && B.arch) {
+    const py = (m2) => Math.round(m2 / PYEONG);
+    const facNote = B.factoryCount
+      ? `건물 ${B.bldgCount}동 중 공장 용도 ${B.factoryCount}동(공장 건축면적 약 ${py(B.factoryArch).toLocaleString()}평)`
+      : `건물 ${B.bldgCount}동 · 용도 ${B.purposes.join('·') || '미상'} — 대장상 '공장' 용도가 아닙니다. 창고·근린생활시설 등을 공장으로 쓰는지 방문 시 확인하세요`;
+    return f('공장 건축면적 (건평)',
+      `건축면적 약 ${py(B.arch).toLocaleString()}평 (${Math.round(B.arch).toLocaleString()}㎡)`
+        + (B.tot ? ` · 연면적 약 ${py(B.tot).toLocaleString()}평` : ''),
+      'A', '국토부 건축물대장', today,
+      `★ ${B.jibun} 지번의 건축물대장(${B.src}) 값입니다${B.queried ? ` (조회 주소: ${B.queried})` : ''}. ${facNote}.`
+        + (B.plat ? ` 대지면적 약 ${py(B.plat).toLocaleString()}평.` : '')
+        + (B.firstApr ? ` 사용승인 ${B.firstApr.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')}.` : '')
+        + (B.collective ? ' ⚠ 지식산업센터 등 집합건물입니다 — 이 면적은 건물 전체이고 업체가 쓰는 호실 면적은 훨씬 작습니다. 전용면적을 따로 물어보세요.' : '')
+        + ` ${floorAreaNote(py(B.arch))}`
+        + ' 같은 공장이 여러 필지에 걸쳐 있으면 이 지번 몫만 잡힙니다.');
+  }
+  if (fctFloor) {
+    return f('공장 건축면적 (건평)', `약 ${fctFloor.py.toLocaleString()}평 (${fctFloor.m2.toLocaleString()}㎡)`, 'A', '산업단지공단 공장등록', fctRegDe || today,
+      `★ 공장등록 신고값의 ${fctFloor.label}입니다. ${floorAreaNote(fctFloor.py)}`);
+  }
+  // 못 찾았을 때 '없다'로만 끝내면 API가 안 주는 건지 우리가 못 읽는 건지 모른다 — 사유를 적는다
+  const why2 = bld && !bld.ok ? bld.err : '공장 주소가 없어 건축물대장을 조회하지 못했습니다';
+  return f('공장 건축면적 (건평)', null, 'D', '국토부 건축물대장', null,
+    `${why2}${bld && bld.queried ? ` (조회 주소: ${bld.queried})` : ''}`
+      + (/활용신청|NOT_REGISTERED/i.test(String(why2)) ? ' — data.go.kr에서 「국토교통부_건축HUB_건축물대장정보 서비스」를 활용신청해 주세요(기존 인증키 그대로 사용).' : '')
+      + ' 아래 「공장 규모 비교」에서 다른 주소로 다시 찾거나 면적을 직접 넣어 비교할 수 있습니다.');
+}
+
 // ── 보고품목 심화 분석 ──
 // 여태 기능성 보고품목에서 읽은 건 보고일과 제형 둘뿐이었다. 같은 응답 안에 제품명과
 // 기능성 종류가 함께 들어 있고, 거기서 '이 회사가 실제로 무엇을 만들어 왔는가'가 나온다.
@@ -815,7 +848,8 @@ function assembleLiveReport(name, corp, res) {
   // 식약처 제조업 허가 레코드에서 대표자·소재지 추출 — 금융위 법인 미확보 시 이 값으로 보강
   const mkRep = mk ? (mk.PRSNL_NM ?? mk.RPRSNTV ?? mk.prsdntNm ?? mk.reprsntvNm ?? mk.repNm ??
     ((Object.entries(mk).find(([k, v]) => /대표|PRSNL|RPRSNTV|PRSDNT|REPRE/i.test(k) && v) || [])[1]) ?? null) : null;
-  const mkAddr = mk ? (mk.ADDR ?? mk.SITE_ADDR ?? mk.LOCP_ADDR ?? mk.locplc ?? mk.소재지 ??
+  // 주소가 기본·상세 칸으로 나뉘어 오면 이어 붙인다(첫 칸만 쓰면 '세종특별자치시' 한 단어가 된다)
+  const mkAddr = mk ? (joinAddrFields(mk) ?? mk.ADDR ?? mk.SITE_ADDR ?? mk.LOCP_ADDR ?? mk.locplc ?? mk.소재지 ??
     Object.values(mk).find(looksAddr) ?? null) : null;
   // 식약처 제조업 등록(허가)일 — 법인 설립일 대용(등록일은 설립과 다를 수 있음).
   // 안전장치: 등록/허가 힌트 키를 최우선, 없으면 레코드 내 '가장 이른' 날짜(등록일에 근접, 갱신일/유효기간 오채택 방지).
@@ -1071,36 +1105,8 @@ function assembleLiveReport(name, corp, res) {
           ? `지자체 공장정보 페이지 게재값입니다(공공 API에는 없음). 변경됐을 수 있으니 방문 전 통화로 확인하세요.`
             + `${pubBizFacts.link ? ` 근거: ${pubBizFacts.link}` : ''}`
           : why('factory', '공장등록 응답과 웹 어디에서도 연락처를 찾지 못했습니다'))),
-    // 건평 — 방문 전 물류 동선을 가늠하는 유일한 공개 수치다.
-    // 산단공 공장등록은 우리가 받을 수 있는 응답에 면적이 없어, 국토부 건축물대장에서 가져온다.
-    (() => {
-      const B = R.bld && R.bld.ok ? R.bld.data : null;
-      if (B && B.arch) {
-        const py = (m2) => Math.round(m2 / PYEONG);
-        const facNote = B.factoryCount
-          ? `건물 ${B.bldgCount}동 중 공장 용도 ${B.factoryCount}동(공장 건축면적 약 ${py(B.factoryArch).toLocaleString()}평)`
-          : `건물 ${B.bldgCount}동 · 용도 ${B.purposes.join('·') || '미상'} — 대장상 '공장' 용도가 아닙니다. 창고·근린생활시설 등을 공장으로 쓰는지 방문 시 확인하세요`;
-        return f('공장 건축면적 (건평)',
-          `건축면적 약 ${py(B.arch).toLocaleString()}평 (${Math.round(B.arch).toLocaleString()}㎡)`
-            + (B.tot ? ` · 연면적 약 ${py(B.tot).toLocaleString()}평` : ''),
-          'A', '국토부 건축물대장', today,
-          `★ ${B.jibun} 지번의 건축물대장(${B.src}) 값입니다. ${facNote}.`
-            + (B.plat ? ` 대지면적 약 ${py(B.plat).toLocaleString()}평.` : '')
-            + (B.firstApr ? ` 사용승인 ${B.firstApr.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')}.` : '')
-            + (B.collective ? ' ⚠ 지식산업센터 등 집합건물입니다 — 이 면적은 건물 전체이고 업체가 쓰는 호실 면적은 훨씬 작습니다. 전용면적을 따로 물어보세요.' : '')
-            + ` ${floorAreaNote(py(B.arch))}`
-            + ' 같은 공장이 여러 필지에 걸쳐 있으면 이 지번 몫만 잡힙니다.');
-      }
-      if (fctFloor) {
-        return f('공장 건축면적 (건평)', `약 ${fctFloor.py.toLocaleString()}평 (${fctFloor.m2.toLocaleString()}㎡)`, 'A', '산업단지공단 공장등록', fctRegDe || today,
-          `★ 공장등록 신고값의 ${fctFloor.label}입니다. ${floorAreaNote(fctFloor.py)}`);
-      }
-      // 못 찾았을 때 '없다'로만 끝내면 API가 안 주는 건지 우리가 못 읽는 건지 모른다 — 사유를 적는다
-      const why2 = R.bld && !R.bld.ok ? R.bld.err : '공장 주소가 없어 건축물대장을 조회하지 못했습니다';
-      return f('공장 건축면적 (건평)', null, 'D', '국토부 건축물대장', null,
-        `${why2}${R.bld && R.bld.queried ? ` (조회 주소: ${R.bld.queried})` : ''}`
-          + (/활용신청|NOT_REGISTERED/i.test(String(why2)) ? ' — data.go.kr에서 「국토교통부_건축HUB_건축물대장정보 서비스」를 활용신청해 주세요(기존 인증키 그대로 사용).' : ''));
-    })(),
+    // 건평 — 방문 전 물류 동선을 가늠하는 유일한 공개 수치다(건축물대장 → 없으면 산단공 신고값)
+    areaFieldFromBld(R.bld, fctFloor, fctRegDe, today),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     // ★ 월 갱신 지표 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 가장 최신 근거

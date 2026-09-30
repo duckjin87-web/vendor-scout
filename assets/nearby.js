@@ -223,7 +223,7 @@ function nbTotalCount(d) {
 }
 function nbMkFields(r) {
   const nm = pickByKey(r, /BSSH_NM|CMPNY_NM|ENTRPS_?NM|ENTP_?NAME|업체|업소|회사|제조사/i) || pickByKey(r, /_NM$/i);
-  const addr = pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i);
+  const addr = joinAddrFields(r) || pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i);
   return { nm, key: nbNorm(nm), addr, parts: nbAddrParts(addr),
     rep: pickByKey(r, /PRSNL|PRSDNT|RPRSNTV|REPRE|대표/i), lcns: pickByKey(r, /LCNS_?NO|PERMIT|허가번호|PRMISN_?NO/i) };
 }
