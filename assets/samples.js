@@ -652,6 +652,21 @@ function floorAreaNote(py) {
 // ── 공장 건축면적 칸 ──
 // 산단공 공장등록은 우리가 받을 수 있는 응답에 면적이 없어, 국토부 건축물대장에서 가져온다.
 // 화면에서 주소를 고쳐 다시 찾을 때(app.js)도 이 함수로 칸을 다시 만든다.
+const SITE_STATE = { pick: '선정', alt: '같은 지역', partial: '시·군까지만', out: '공장 지역 밖 — 제외' };
+function siteField(site, bld, today) {
+  const S = site && site.ok ? site.data : null;
+  if (!S) return f('실제 공장 소재지 (선정)', null, 'D', '주소 대조', null, '공장 소재지로 쓸 주소를 어느 기록에서도 찾지 못했습니다');
+  const pick = S.cands.find((c) => c.state === 'pick') || {};
+  const grade = !pick.full ? 'C' : (S.src === 'factory' || S.src === 'maker') ? 'A' : 'B';
+  const B = bld && bld.ok ? bld.data : null;
+  const link = B && B.arch
+    ? ` 건축물대장 연결: 법정동·지번 ${B.jibun}${B.matchedBy === 'road' ? ` (도로명 대표지번 ${B.keyJibun}엔 대장이 없어 같은 본번에서 새주소가 맞는 필지로 연결)`
+      : B.matchedBy === 'name' ? ` (대표지번 ${B.keyJibun}엔 대장이 없어 같은 본번에서 건물명이 상호와 같은 필지로 연결)` : ''}.`
+    : '';
+  return f('실제 공장 소재지 (선정)', S.addr, grade, S.label, today,
+    `★ ${S.why || '번지까지 확인된 주소'} — 방문 이동거리와 공장 면적을 이 주소 기준으로 조회했습니다.${link}`
+      + ` 후보: ${S.cands.map((c) => `${c.label} ${c.addr} [${SITE_STATE[c.state] || c.state}]`).join(' / ')}`);
+}
 function areaFieldFromBld(bld, fctFloor, fctRegDe, today) {
   const B = bld && bld.ok ? bld.data : null;
   if (B && B.arch) {
@@ -663,7 +678,8 @@ function areaFieldFromBld(bld, fctFloor, fctRegDe, today) {
       `건축면적 약 ${py(B.arch).toLocaleString()}평 (${Math.round(B.arch).toLocaleString()}㎡)`
         + (B.tot ? ` · 연면적 약 ${py(B.tot).toLocaleString()}평` : ''),
       'A', '국토부 건축물대장', today,
-      `★ ${B.jibun} 지번의 건축물대장(${B.src}) 값입니다${B.queried ? ` (조회 주소: ${B.queried})` : ''}. ${facNote}.`
+      `★ ${B.jibun} 지번의 건축물대장(${B.src}) 값입니다${B.queried ? ` (조회 주소: ${B.queried})` : ''}`
+        + `${B.matchedBy && B.matchedBy !== 'lot' ? ` — 대표지번 ${B.keyJibun}엔 대장이 없어 같은 본번에서 ${B.matchedBy === 'road' ? '새주소(도로명)가' : '건물명이'} 맞는 건물로 연결했습니다` : ''}. ${facNote}.`
         + (B.plat ? ` 대지면적 약 ${py(B.plat).toLocaleString()}평.` : '')
         + (B.firstApr ? ` 사용승인 ${B.firstApr.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')}.` : '')
         + (B.collective ? ' ⚠ 지식산업센터 등 집합건물입니다 — 이 면적은 건물 전체이고 업체가 쓰는 호실 면적은 훨씬 작습니다. 전용면적을 따로 물어보세요.' : '')
@@ -1105,6 +1121,8 @@ function assembleLiveReport(name, corp, res) {
           ? `지자체 공장정보 페이지 게재값입니다(공공 API에는 없음). 변경됐을 수 있으니 방문 전 통화로 확인하세요.`
             + `${pubBizFacts.link ? ` 근거: ${pubBizFacts.link}` : ''}`
           : why('factory', '공장등록 응답과 웹 어디에서도 연락처를 찾지 못했습니다'))),
+    // 실제 공장 소재지 — 제조업 허가·공장등록·본점·연금·카카오맵 주소 중 방문·면적 조회에 쓴 주소와 그 근거
+    siteField(R.site, R.bld, today),
     // 건평 — 방문 전 물류 동선을 가늠하는 유일한 공개 수치다(건축물대장 → 없으면 산단공 신고값)
     areaFieldFromBld(R.bld, fctFloor, fctRegDe, today),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
@@ -1139,7 +1157,9 @@ function assembleLiveReport(name, corp, res) {
       // 도착지를 반드시 표기한다. 어느 주소로 계산했는지 안 보이면, 주소가 틀렸을 때
       // 거리만 보고는 알아챌 방법이 없다(본점·공장·연금 사업장 주소가 서로 다른 업체가 많다).
       const usedAddr = (kkTravel && kkTravel.destAddr) || fctAddr || corp?.addr || npsAddr || null;
-      const src = usedAddr && fctAddr && usedAddr === fctAddr ? '공장 소재지(산단공)'
+      const siteD = R.site && R.site.ok ? R.site.data : null;
+      const src = usedAddr && siteD && usedAddr === siteD.addr ? `실제 공장 소재지 · ${siteD.label}`
+        : usedAddr && fctAddr && usedAddr === fctAddr ? '공장 소재지(산단공)'
         : usedAddr && corp?.addr && usedAddr === corp.addr ? '본점 주소(금융위 등기)'
           : usedAddr && npsAddr && usedAddr === npsAddr ? '연금 사업장 주소'
             : usedAddr ? '조회된 주소' : null;
@@ -1544,6 +1564,7 @@ function assembleLiveReport(name, corp, res) {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
       version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
       bld: R.bld ? (R.bld.ok ? R.bld.data : { err: R.bld.err, queried: R.bld.queried }) : null,
+      site: R.site && R.site.ok ? R.site.data : null,          // 실제 공장 소재지 선정 결과(후보·근거)
       max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
       no_corp: !hasCorp, // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회 안내용
       biz_agg: agg ? { host: agg.host, url: agg.url } : null, // 외부 집계 보강 출처(비공식)

@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 157;
+const BUILD = 158;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1307,6 +1307,34 @@ function joinAddrFields(rec) {
 // 방문지로 쓸 만한 주소인가 — 시·도 이름만 있거나 번지 숫자가 없으면 좌표가 시·동 중심으로 떨어진다
 const isFullAddr = (a) => { const t = String(a || '').trim(); return t.length >= 8 && /\d/.test(t) && /[가-힣]+(로|길|동|리|가)\s*\d|[가-힣]+(로|길)\d/.test(t); };
 const pickFullAddr = (...cands) => cands.find(isFullAddr) || cands.find((a) => a && String(a).trim()) || null;
+// 주소 첫 토큰 → 시·도. '충청북도'와 '충북', '전북특별자치도'를 같은 값으로 모은다.
+const NB_SIDO = [['서울', '서울'], ['부산', '부산'], ['대구', '대구'], ['인천', '인천'], ['광주', '광주'],
+  ['대전', '대전'], ['울산', '울산'], ['세종', '세종'], ['경기', '경기'], ['강원', '강원'],
+  ['충북', '충북'], ['충청북', '충북'], ['충남', '충남'], ['충청남', '충남'], ['전북', '전북'], ['전라북', '전북'],
+  ['전남', '전남'], ['전라남', '전남'], ['경북', '경북'], ['경상북', '경북'], ['경남', '경남'], ['경상남', '경남'],
+  ['제주', '제주']];
+function nbSido(addr) {
+  const t = String(addr || '').trim().split(/\s+/)[0] || '';
+  for (const [k, v] of NB_SIDO) if (t.startsWith(k)) return v;
+  return null;
+}
+// 글자 주소 → { sido, sgg(시·군·구 첫 토큰), emd(읍·면·동) }.
+// '청주시 흥덕구'처럼 시 아래 구가 붙으면 시까지를 같은 시·군으로 본다. 세종은 시·군·구가 없다.
+function nbAddrParts(addr) {
+  const toks = String(addr || '').replace(/\([^)]*\)/g, ' ').trim().split(/\s+/).filter(Boolean);
+  const sido = nbSido(addr);
+  if (!sido) return { sido: null, sgg: '', emd: '' };
+  let i = 1, sgg = '';
+  if (toks[i] && /(시|군|구)$/.test(toks[i]) && !/^\d/.test(toks[i])) {
+    sgg = toks[i]; i++;
+    if (toks[i] && /구$/.test(toks[i]) && /시$/.test(sgg)) i++;
+  }
+  let emd = '';
+  for (let j = i; j < Math.min(toks.length, i + 2); j++) {
+    if (/(읍|면|동|가)$/.test(toks[j]) && !/(로|길)$/.test(toks[j]) && !/^\d/.test(toks[j])) { emd = toks[j]; break; }
+  }
+  return { sido, sgg, emd };
+}
 
 async function kakaoGeocode(addr, opts = {}) {
   const data = await proxyOnlyGet('kakaoGeocode', { query: addr }); // 실패 시 proxyErrMsg 전파(401 등)
@@ -1354,29 +1382,81 @@ async function bldAddrKey(addr) {
     const d = docs.find((x) => (x.address_type === 'ROAD_ADDR' || x.address_type === 'REGION_ADDR') && x.address && x.address.b_code && x.address.main_address_no);
     if (!d) continue;
     const a = d.address;
+    const ra = d.road_address || null;
     return { sigunguCd: String(a.b_code).slice(0, 5), bjdongCd: String(a.b_code).slice(5, 10),
       platGbCd: a.mountain_yn === 'Y' ? '1' : '0', bun: bldPad4(a.main_address_no), ji: bldPad4(a.sub_address_no),
-      jibun: a.address_name, road: d.road_address ? d.road_address.address_name : '' };
+      jibun: a.address_name, road: ra ? ra.address_name : '',
+      // 도로명 + 건물번호 — 대장의 새주소(newPlatPlc)와 맞대 보는 두 번째 열쇠
+      roadName: ra && ra.road_name ? ra.road_name : '', bldNo: ra && ra.main_building_no ? String(ra.main_building_no) : '',
+      bldSub: ra && ra.sub_building_no && ra.sub_building_no !== '0' ? String(ra.sub_building_no) : '' };
   }
   return null;
 }
 const bldNum = (v) => { const n = Number(String(v == null ? '' : v).replace(/,/g, '')); return isFinite(n) && n > 0 ? n : 0; };
-async function bldAreaLookup(addr) {
+// 대장 항목이 이 주소의 건물인가 — 새주소(도로명+건물번호) 또는 건물명에 상호가 들어 있으면 같은 건물로 본다
+const bldCompact = (s) => String(s || '').replace(/\s+/g, '');
+function bldItemMatches(x, k, name) {
+  if (k.roadName && k.bldNo) {
+    const want = bldCompact(`${k.roadName}${k.bldNo}${k.bldSub ? `-${k.bldSub}` : ''}`);
+    const got = bldCompact(x.newPlatPlc);
+    const at = got.indexOf(want);
+    if (at >= 0 && !/[\d-]/.test(got.charAt(at + want.length))) return true;
+  }
+  const key = bldCompact(stripCorp(name || ''));
+  return key.length >= 2 && bldCompact(`${x.bldNm || ''}${x.dongNm || ''}`).includes(key);
+}
+// 주소 → 건축물대장. 열쇠는 법정동코드(b_code 10자리) + 산 여부 + 본번·부번.
+// 도로명주소가 가리키는 대표 지번에 건물이 안 걸린 경우가 있다(셀랩: 윤보선로 291 → 신남리 731-20엔
+// 대장 없음). 공장 건물은 같은 본번의 다른 부번에 등재돼 있는 일이 흔하므로, 1차가 비면
+// 본번만으로 다시 부르고 그 가운데 새주소(도로명+건물번호)나 건물명이 맞는 것만 받는다.
+// 남의 건물을 섞지 않으려고, 2차에서 아무것도 안 맞으면 받지 않는다.
+async function bldAreaLookup(addr, opts = {}) {
   if (!getProxy()) throw new Error('프록시 미설정');
   if (!addr) throw new Error('공장 주소 없음');
   const k = await bldAddrKey(addr);
   if (!k) throw new Error(`주소를 지번(법정동·번지)으로 바꾸지 못했습니다 — ${addr}`);
-  const params = { sigunguCd: k.sigunguCd, bjdongCd: k.bjdongCd, platGbCd: k.platGbCd, bun: k.bun, ji: k.ji, rows: '100' };
-  const [t, r] = await Promise.allSettled([proxyGet('bldTitle', params), proxyGet('bldRecap', params)]);
-  if (t.status === 'rejected' && r.status === 'rejected') throw new Error(`건축물대장 조회 실패 — ${t.reason && t.reason.message || t.reason}`);
+  // 후보 주소 여러 개가 같은 필지로 모이면(도로명·지번·카카오 장소) 한 번만 부른다
+  if (opts.seen) {
+    const sig = `${k.sigunguCd}${k.bjdongCd}-${k.platGbCd}-${k.bun}-${k.ji}`;
+    if (opts.seen.has(sig)) { const e = new Error('같은 필지'); e.dup = true; throw e; }
+    opts.seen.add(sig);
+  }
+  const base ={ sigunguCd: k.sigunguCd, bjdongCd: k.bjdongCd, platGbCd: k.platGbCd, bun: k.bun, rows: '100' };
   const items = (d) => listOf(d, ['response.body.items.item', 'body.items.item', 'body.items']).filter((x) => x && typeof x === 'object');
-  const titles = (t.status === 'fulfilled' ? items(t.value) : []).map((x) => ({
+  const fetchLot = async (params) => {
+    const [t, r] = await Promise.allSettled([proxyGet('bldTitle', params), proxyGet('bldRecap', params)]);
+    if (t.status === 'rejected' && r.status === 'rejected') throw new Error(`건축물대장 조회 실패 — ${t.reason && t.reason.message || t.reason}`);
+    return { rawT: t.status === 'fulfilled' ? items(t.value) : [], rawR: r.status === 'fulfilled' ? items(r.value) : [] };
+  };
+  let { rawT, rawR } = await fetchLot({ ...base, ji: k.ji });
+  let matchedBy = 'lot';
+  if (!rawT.length && !rawR.length) {
+    const wide = await fetchLot(base).catch(() => ({ rawT: [], rawR: [] }));
+    rawT = wide.rawT.filter((x) => bldItemMatches(x, k, opts.name));
+    rawR = wide.rawR.filter((x) => bldItemMatches(x, k, opts.name));
+    // 총괄표제부만 맞고 표제부는 새주소가 비어 있을 수 있다 — 같은 대지(지번)의 표제부를 함께 받는다
+    if (rawR.length && !rawT.length) {
+      const lots = new Set(rawR.map((x) => bldCompact(x.platPlc)).filter(Boolean));
+      rawT = wide.rawT.filter((x) => lots.has(bldCompact(x.platPlc)));
+    }
+    matchedBy = 'road';
+  }
+  const titles = rawT.map((x) => ({
     name: x.bldNm || '', dong: x.dongNm || '', purpose: x.mainPurpsCdNm || '', etc: x.etcPurps || '',
     arch: bldNum(x.archArea), tot: bldNum(x.totArea), plat: bldNum(x.platArea),
     floors: Number(x.grndFlrCnt) || null, under: Number(x.ugrndFlrCnt) || null,
-    apr: String(x.useAprDay || '').trim(), kind: x.mainAtchGbCdNm || '', regKind: x.regstrKindCdNm || '', strct: x.strctCdNm || '' }));
-  const recap = r.status === 'fulfilled' ? items(r.value)[0] : null;
-  if (!titles.length && !recap) throw new Error(`건축물대장에 이 지번(${k.jibun})의 건물이 없습니다 — 신축·미등재이거나 공장이 다른 필지에 있을 수 있습니다`);
+    apr: String(x.useAprDay || '').trim(), kind: x.mainAtchGbCdNm || '', regKind: x.regstrKindCdNm || '', strct: x.strctCdNm || '',
+    lot: String(x.platPlc || '').replace(/\s*번지\s*$/, '').trim() }));
+  const recap = rawR[0] || null;
+  if (!titles.length && !recap) {
+    throw new Error(`건축물대장에 이 지번(${k.jibun})의 건물이 없습니다`
+      + (k.roadName ? ` — 같은 본번(${Number(k.bun)}번지)의 다른 부번에서도 「${k.roadName} ${k.bldNo}」 건물을 찾지 못했습니다` : '')
+      + ' · 신축·미등재이거나 공장이 다른 필지에 있을 수 있습니다');
+  }
+  // 실제로 맞은 대장상 지번 — 2차로 찾았으면 조회 지번과 다르다
+  const lotHit = (recap && String(recap.platPlc || '').replace(/\s*번지\s*$/, '').trim()) || (titles.find((x) => x.lot) || {}).lot || '';
+  // 2차에서 새주소가 아니라 건물명(상호)으로만 맞았으면 그렇게 적는다
+  if (matchedBy === 'road' && !rawT.concat(rawR).some((x) => bldItemMatches(x, k, null))) matchedBy = 'name';
   const sum = (arr, f) => arr.reduce((a, x) => a + x[f], 0);
   const isFactory = (x) => /공장|제조/.test(`${x.purpose} ${x.etc}`);
   const fac = titles.filter(isFactory);
@@ -1386,7 +1466,9 @@ async function bldAreaLookup(addr) {
   const plat = (recap && bldNum(recap.platArea)) || Math.max(0, ...titles.map((x) => x.plat));
   const aprs = (fac.length ? fac : titles).map((x) => x.apr).filter((x) => /^\d{8}$/.test(x)).sort();
   return {
-    jibun: k.jibun, road: k.road, arch, tot, plat,
+    jibun: matchedBy === 'lot' ? k.jibun : (lotHit || k.jibun), keyJibun: k.jibun, matchedBy,
+    key: `${k.sigunguCd}${k.bjdongCd}-${k.platGbCd}-${k.bun}${matchedBy === 'lot' ? `-${k.ji}` : ''}`,
+    road: k.road, arch, tot, plat,
     factoryArch: sum(fac, 'arch'), factoryTot: sum(fac, 'tot'),
     bldgCount: titles.length, factoryCount: fac.length,
     purposes: [...new Set(titles.map((x) => x.purpose).filter(Boolean))],
@@ -1423,6 +1505,87 @@ async function refBldArea() {
   };
   try { localStorage.setItem(REF_BLD_KEY, JSON.stringify({ sig, at: Date.now(), data })); } catch {}
   return data;
+}
+
+// ── 실제 공장 소재지 선정 ──
+// 한 회사의 주소가 기록마다 다르다. 셀랩을 예로 들면
+//   식약처 제조업 허가: '충청남도 아산시'(시·군까지만) · 금융위 본점: 아산시 둔포면 윤보선로 291
+//   국민연금 사업장: 서울 서초구(사무소) · 카카오맵 등록 장소: 아산시 둔포면 윤보선로 291
+// 제조소 주소는 허가 기록(산단공 공장등록 > 식약처 제조업)이 법적 근거라 그 시·도·시·군을
+// '공장 지역'으로 삼는다. 그 지역 밖 주소(서울 사무소 등)는 후보에서 뺀다. 지역 안 주소 가운데
+// 번지까지 있는 것을, 허가 기록 > 카카오맵 등록 장소 > 본점 > 연금 순으로, 다른 기록과 같은
+// 읍·면·동이면 가산해 고른다. 고른 주소는 건축물대장 열쇠(법정동코드+지번)로 이어진다.
+const SITE_SRC = { factory: '공장등록(산단공)', maker: '제조업 허가(식약처)', place: '카카오맵 등록 장소', hq: '본점(금융위 등기)', nps: '연금 사업장' };
+// 공장등록은 생산 설비가 실제로 있는 곳의 신고라 다른 기록과 읍·면이 달라도 앞세운다
+const SITE_W = { factory: 9, maker: 5, place: 4, hq: 2, nps: 1 };
+const siteRegion = (p) => (p && p.sido ? [p.sido, p.sgg, p.emd].filter(Boolean).join(' ') : '');
+const sameArea = (a, p) => !!(a && a.sido && p && p.sido === a.sido && (!a.sgg || !p.sgg || a.sgg === p.sgg));
+// 카카오맵에서 상호로 등록 장소 찾기 — 공장 지역을 알면 그 시·군 안의 것만 받는다
+async function kakaoPlaceOf(name, area) {
+  const nm = stripCorp(name);
+  if (bldCompact(nm).length < 2) return null;
+  const q = area && area.sgg ? `${area.sgg.replace(/(시|군|구)$/, '')} ${nm}` : nm;
+  let docs = [];
+  try { docs = ((await proxyOnlyGet('kakaoKeyword', { query: q, size: '10' })) || {}).documents || []; } catch { return null; }
+  const key = bldCompact(nm);
+  const hits = docs.filter((d) => bldCompact(stripCorp(d.place_name)).includes(key)
+    && (!area || sameArea(area, nbAddrParts(d.address_name || d.road_address_name))));
+  // 같은 이름의 카페·매장보다 화장품·제조 업종을 먼저
+  hits.sort((a, b) => (/화장품|제조|공장|산업/.test(b.category_name || '') ? 1 : 0) - (/화장품|제조|공장|산업/.test(a.category_name || '') ? 1 : 0));
+  const d = hits[0];
+  if (!d) return null;
+  return { addr: d.road_address_name || d.address_name, jibun: d.address_name || '', place: d.place_name, category: d.category_name || '', url: d.place_url || '' };
+}
+async function pickFactorySite({ name, fAddr, mAddr, hqAddr, npsAddr }) {
+  const cands = [['factory', fAddr], ['maker', mAddr], ['hq', hqAddr], ['nps', npsAddr]]
+    .filter(([, a]) => a && String(a).trim())
+    .map(([src, addr]) => ({ src, addr: String(addr).trim() }));
+  cands.forEach((c) => { c.p = nbAddrParts(c.addr); c.full = isFullAddr(c.addr); });
+  const anchorC = cands.find((c) => (c.src === 'factory' || c.src === 'maker') && c.p.sido);
+  const area = anchorC ? anchorC.p : null;
+  const place = await kakaoPlaceOf(name, area).catch(() => null);
+  if (place && place.addr) {
+    const c = { src: 'place', addr: place.addr, jibun: place.jibun, place, p: nbAddrParts(place.addr), full: isFullAddr(place.addr) || isFullAddr(place.jibun) };
+    cands.push(c);
+  }
+  cands.forEach((c) => {
+    c.inArea = area ? sameArea(area, c.p) : null;
+    c.agree = cands.filter((o) => o !== c && o.p.sido && o.p.sido === c.p.sido && o.p.sgg === c.p.sgg && (!c.p.emd || !o.p.emd || o.p.emd === c.p.emd)).map((o) => o.src);
+    c.score = (c.full ? 20 : 0) + (c.inArea === false ? -100 : 0) + SITE_W[c.src] + c.agree.length * 2;
+  });
+  const ranked = cands.slice().sort((a, b) => b.score - a.score);
+  // 공장 지역 밖 주소는 번지가 있어도 고르지 않는다 — 지역 안 주소가 시·군까지만 있으면 그것을 쓴다
+  const pick = ranked.find((c) => c.full && c.inArea !== false) || ranked.find((c) => c.inArea !== false) || ranked[0] || null;
+  if (!pick) return null;
+  const why = [];
+  if (area) why.push(`허가 기록상 공장 지역 ${siteRegion({ sido: area.sido, sgg: area.sgg })} (${SITE_SRC[anchorC.src]})`);
+  if (pick.agree.length) why.push(`${pick.agree.map((s) => SITE_SRC[s]).join('·')}와 같은 지역`);
+  if (!pick.full) why.push('번지까지 있는 주소가 없어 시·군 단위로만 확인');
+  return {
+    addr: pick.addr, src: pick.src, label: SITE_SRC[pick.src], why: why.join(' · '),
+    area: area ? siteRegion({ sido: area.sido, sgg: area.sgg }) : null,
+    place: place || null,
+    cands: ranked.map((c) => ({ src: c.src, label: SITE_SRC[c.src], addr: c.addr, full: c.full,
+      state: c === pick ? 'pick' : c.inArea === false ? 'out' : !c.full ? 'partial' : 'alt' })),
+  };
+}
+// 선정 주소로 건축물대장을 찾고, 비면 공장 지역 안의 다른 번지 주소로 이어서 찾는다
+async function bldAreaForSite(site, name) {
+  if (!site) throw new Error('공장 주소 없음');
+  const tries = [site.addr, ...site.cands.filter((c) => c.state === 'alt' && c.full).map((c) => c.addr)];
+  if (site.place && site.place.jibun) tries.push(site.place.jibun);
+  const seen = new Set(); const lots = new Set(); let firstErr = null;
+  for (const a of tries) {
+    const k = bldCompact(String(a).replace(/\([^)]*\)/g, ''));
+    if (!a || seen.has(k)) continue;
+    seen.add(k);
+    try { return { ...(await bldAreaLookup(a, { name, seen: lots })), queried: a }; } catch (e) {
+      if (e.dup) continue;
+      if (/프록시|활용신청|NOT_REGISTERED|401|403/.test(e.message)) throw e;
+      if (!firstErr) firstErr = e;
+    }
+  }
+  throw firstErr || new Error('건축물대장 조회 실패');
 }
 
 async function kakaoTravel(destAddr) {
@@ -2752,18 +2915,23 @@ async function finishLive(name, corp) {
   const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
   const mkHit = matchByNameApp(name, mList); // 상호 일치 건만(남의 회사 주소 오염 방지)
   const mAddr = mkHit ? (joinAddrFields(mkHit) || Object.values(mkHit).find(looksAddr) || null) : null;
-  // 번지까지 있는 주소를 방문지로 — 공장(산단공) > 식약처 제조소 > 본점 순으로 보되 '세종특별자치시'
-  // 처럼 시·도만 있는 주소는 건너뛴다
-  const visitAddr = pickFullAddr(fAddr, mAddr, corp.addr);
+  // 실제 공장 소재지 선정 — 허가 기록의 시·군 안에서 번지까지 있는 주소(pickFactorySite 참고).
+  // 선정이 실패해도(카카오 오류 등) 예전 순서(공장 > 제조소 > 본점)로 방문지를 정한다.
+  const npsSrch = res.nps && res.nps.ok && res.nps.data ? res.nps.data.search : null;
+  const npsAddr = npsSrch ? (npsSrch.wkplRoadNmDetAddr || npsSrch.wkplRoadNmDtlAddr || npsSrch.ldongAddr || null) : null;
+  const site = await pickFactorySite({ name: corp.corpNm || name, fAddr, mAddr, hqAddr: corp.addr, npsAddr }).catch(() => null);
+  res.site = site ? { ok: true, data: site } : { ok: false, err: '공장 소재지 후보 주소 없음' };
+  const visitAddr = site ? site.addr : pickFullAddr(fAddr, mAddr, corp.addr);
   // 방문 거리와 공장 면적(건축물대장)은 같은 주소로 부르므로 함께 돌린다
-  const [trR, bldR] = await Promise.allSettled([kakaoTravel(visitAddr), bldAreaLookup(visitAddr)]);
+  const [trR, bldR] = await Promise.allSettled([kakaoTravel(visitAddr),
+    site ? bldAreaForSite(site, corp.corpNm || name) : bldAreaLookup(visitAddr, { name })]);
   const travel = trR.status === 'fulfilled' ? trR.value : null;
   const kakaoErr = trR.status === 'rejected' ? (trR.reason && trR.reason.message ? trR.reason.message : String(trR.reason)) : null;
   res.kakao = travel
     ? { ok: true, data: travel }
     : { ok: false, err: `${kakaoErr || '실패'} — 추정치 대체` };
   res.bld = bldR.status === 'fulfilled'
-    ? { ok: true, data: { ...bldR.value, queried: visitAddr } }
+    ? { ok: true, data: { queried: visitAddr, ...bldR.value } }
     : { ok: false, err: bldR.reason && bldR.reason.message ? bldR.reason.message : String(bldR.reason), queried: visitAddr };
 
   return window.assembleLiveReport(corp.corpNm || name, corp, res);
@@ -4211,7 +4379,7 @@ function renderAreaCompare(report) {
       if (!addr) { err.textContent = '주소를 입력해 주세요'; return; }
       btn.disabled = true; btn.textContent = '찾는 중…'; err.textContent = '';
       try {
-        const d = await bldAreaLookup(addr);
+        const d = await bldAreaLookup(addr, { name: M.vendor_name });
         M.bld = { ...d, queried: addr };
         const i = (report.capacity || []).findIndex((x) => x.key === '공장 건축면적 (건평)');
         if (i >= 0 && window.areaFieldFromBld) report.capacity[i] = window.areaFieldFromBld({ ok: true, data: M.bld }, null, null, new Date().toISOString().slice(0, 10));

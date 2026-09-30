@@ -45,34 +45,7 @@ const NB_ADJ = {
   전남: ['광주', '전북', '경남'], 경북: ['강원', '충북', '전북', '경남', '대구', '울산'],
   경남: ['부산', '울산', '대구', '경북', '전북', '전남'], 제주: [],
 };
-// 주소 첫 토큰 → 시·도. '충청북도'와 '충북', '전북특별자치도'를 같은 값으로 모은다.
-const NB_SIDO = [['서울', '서울'], ['부산', '부산'], ['대구', '대구'], ['인천', '인천'], ['광주', '광주'],
-  ['대전', '대전'], ['울산', '울산'], ['세종', '세종'], ['경기', '경기'], ['강원', '강원'],
-  ['충북', '충북'], ['충청북', '충북'], ['충남', '충남'], ['충청남', '충남'], ['전북', '전북'], ['전라북', '전북'],
-  ['전남', '전남'], ['전라남', '전남'], ['경북', '경북'], ['경상북', '경북'], ['경남', '경남'], ['경상남', '경남'],
-  ['제주', '제주']];
-function nbSido(addr) {
-  const t = String(addr || '').trim().split(/\s+/)[0] || '';
-  for (const [k, v] of NB_SIDO) if (t.startsWith(k)) return v;
-  return null;
-}
-// 글자 주소 → { sido, sgg(시·군·구 첫 토큰), emd(읍·면·동) }.
-// '청주시 흥덕구'처럼 시 아래 구가 붙으면 시까지를 같은 시·군으로 본다. 세종은 시·군·구가 없다.
-function nbAddrParts(addr) {
-  const toks = String(addr || '').replace(/\([^)]*\)/g, ' ').trim().split(/\s+/).filter(Boolean);
-  const sido = nbSido(addr);
-  if (!sido) return { sido: null, sgg: '', emd: '' };
-  let i = 1, sgg = '';
-  if (toks[i] && /(시|군|구)$/.test(toks[i]) && !/^\d/.test(toks[i])) {
-    sgg = toks[i]; i++;
-    if (toks[i] && /구$/.test(toks[i]) && /시$/.test(sgg)) i++;
-  }
-  let emd = '';
-  for (let j = i; j < Math.min(toks.length, i + 2); j++) {
-    if (/(읍|면|동|가)$/.test(toks[j]) && !/(로|길)$/.test(toks[j]) && !/^\d/.test(toks[j])) { emd = toks[j]; break; }
-  }
-  return { sido, sgg, emd };
-}
+// 시·도 정규화(nbSido)와 글자 주소 분해(nbAddrParts)는 공장 소재지 선정에도 쓰여서 app.js에 있다.
 const nbRegionText = (p) => (p && p.sido ? [p.sido, p.sgg, p.emd].filter(Boolean).join(' ') : '');
 
 // 기점과 얼마나 같은 지역인가 — 0 같은 읍·면·동 · 1 같은 시·군 · 2 같은 시·도 · 3 인접 시·도 · 4 그 밖
