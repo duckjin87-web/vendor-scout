@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 155;
+const BUILD = 156;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4003,6 +4003,78 @@ document.addEventListener('click', (e) => {
 // 움직임은 처음 화면에 들어올 때 한 번만, 움직임 줄이기 설정이면 바로 최종 모습. 인쇄도 최종 모습.
 const FIELD_M2 = 7140;                         // 축구장(105m × 68m)
 const toPy = (m2) => Math.round(m2 / 3.305785);
+// ── 3D 건물 블록 ──
+// 바닥 한 변 ∝ √건축면적(두 건물 같은 축척), 높이 ∝ 지상 층수. CSS 3D만 쓴다(라이브러리 없음).
+// 공장은 층고 대비 폭이 워낙 넓어 실제 비율로 세우면 납작한 판이 된다 — 높이만 과장하고 그 사실을 적는다.
+function acFloors(D) {
+  const bl = (D && D.bldgs) || [];
+  const fac = bl.filter((x) => /공장|제조/.test(`${x.purpose} ${x.etc}`));
+  const fl = Math.max(0, ...(fac.length ? fac : bl).map((x) => Number(x.floors) || 0));
+  if (fl) return Math.min(fl, 12);
+  return D && D.arch && D.tot ? Math.max(1, Math.min(12, Math.round(D.tot / D.arch))) : 1;
+}
+function acBox(cls, x, y, w, d, h, label) {
+  // 바닥면(XY) 위에 선 상자 — 윗면은 translateZ(h), 네 옆면은 바닥 모서리에서 90° 세운다
+  return `<div class="ac3-bld ${cls}" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px;width:${w.toFixed(1)}px;height:${d.toFixed(1)}px">`
+    + `<div class="ac3-rise">`
+    + `<i class="f top" style="width:${w.toFixed(1)}px;height:${d.toFixed(1)}px;transform:translateZ(${h.toFixed(1)}px)"></i>`
+    + `<i class="f fr" style="width:${w.toFixed(1)}px;height:${h.toFixed(1)}px;top:${d.toFixed(1)}px"></i>`
+    + `<i class="f bk" style="width:${w.toFixed(1)}px;height:${h.toFixed(1)}px;top:0"></i>`
+    + `<i class="f lf" style="width:${h.toFixed(1)}px;height:${d.toFixed(1)}px;left:0"></i>`
+    + `<i class="f rt" style="width:${h.toFixed(1)}px;height:${d.toFixed(1)}px;left:${w.toFixed(1)}px"></i>`
+    + `</div><span class="ac3-tag" style="--tz:${(h + 16).toFixed(1)}px">${label}</span></div>`;
+}
+function acScene3d(B, R, nm) {
+  const big = Math.max(B.arch, R.arch);
+  const S = 150;                                   // 큰 건물 바닥 한 변(px)
+  const sK = Math.max(8, S * Math.sqrt(R.arch / big)), sM = Math.max(8, S * Math.sqrt(B.arch / big));
+  const fK = acFloors(R), fM = acFloors(B);
+  const perFloor = Math.min(18, 84 / Math.max(fK, fM));   // 가장 높은 건물이 84px 안에 들게
+  const hK = fK * perFloor, hM = fM * perFloor;
+  const pad = 22, gap = 26;
+  const W = pad + sK + gap + sM + pad, D = pad + Math.max(sK, sM) + pad;
+  // 바닥 격자 — 20m 칸(두 건물 같은 축척)
+  const pxPerM = S / Math.sqrt(big);
+  const grid = Math.max(6, 20 * pxPerM);
+  const scene = `<div class="ac3-scene" style="width:${W.toFixed(1)}px;height:${D.toFixed(1)}px;--grid:${grid.toFixed(1)}px">`
+    + `<div class="ac3-ground"></div>`
+    + acBox('k', pad, pad + (Math.max(sK, sM) - sK), sK, sK, hK, '한국콜마')
+    + acBox('m', pad + sK + gap, pad + (Math.max(sK, sM) - sM), sM, sM, hM, nm)
+    + `</div>`;
+  return `<div class="ac3" role="img" aria-label="3D 규모 비교: 한국콜마 건축면적 ${toPy(R.arch).toLocaleString()}평 지상 ${fK}층, ${nm} ${toPy(B.arch).toLocaleString()}평 지상 ${fM}층">`
+    + `<div class="ac3-stage" data-rz="-38">${scene}</div>`
+    + `<div class="ac3-cap"><span class="m"></span>${nm} · 지상 ${fM}층<span class="k"></span>한국콜마 · 지상 ${fK}층</div>`
+    + `<div class="ac3-note">바닥은 같은 축척(격자 한 칸 20m), 높이는 층수를 나타내며 보기 쉽게 과장했습니다 · 끌어서 돌려 보세요</div>`
+    + `<button type="button" class="ac3-spin" aria-pressed="true">회전 멈춤</button>`
+    + `</div>`;
+}
+// 끌어서 돌리기 · 회전 멈춤/재생
+function acBind3d(box) {
+  const stage = box.querySelector('.ac3-stage'), scene = box.querySelector('.ac3-scene'), btn = box.querySelector('.ac3-spin');
+  if (!stage || !scene) return;
+  let rz = -38, drag = null;
+  const tags = [...box.querySelectorAll('.ac3-tag')];
+  // 이름표는 장면과 반대로 돌려 늘 정면을 보게 한다
+  const set = (v) => {
+    rz = v; scene.style.transform = `rotateX(58deg) rotateZ(${rz}deg)`;
+    tags.forEach((t) => { t.style.transform = `translate(-50%, -50%) translateZ(var(--tz)) rotateZ(${-rz}deg) rotateX(-58deg)`; });
+  };
+  const current = () => {                          // 돌고 있던 각도를 읽어 이어 받는다
+    const m = getComputedStyle(scene).transform;
+    const mm = m && m.startsWith('matrix3d') ? m.slice(9, -1).split(',').map(Number) : null;
+    return mm ? Math.atan2(mm[1], mm[0]) * 180 / Math.PI : rz;
+  };
+  const stop = () => { if (!box.classList.contains('manual')) { const a = current(); box.classList.add('manual'); set(a); } btn.setAttribute('aria-pressed', 'false'); btn.textContent = '회전 재생'; };
+  stage.addEventListener('pointerdown', (e) => { stop(); drag = { x: e.clientX, a: rz }; stage.setPointerCapture(e.pointerId); });
+  stage.addEventListener('pointermove', (e) => { if (drag) set(drag.a + (e.clientX - drag.x) * 0.6); });
+  stage.addEventListener('pointerup', () => { drag = null; });
+  stage.addEventListener('pointercancel', () => { drag = null; });
+  btn.addEventListener('click', () => {
+    if (box.classList.contains('manual')) { box.classList.remove('manual'); scene.style.transform = ''; tags.forEach((t) => { t.style.transform = ''; }); btn.setAttribute('aria-pressed', 'true'); btn.textContent = '회전 멈춤'; }
+    else stop();
+  });
+}
+
 function renderAreaCompare(report) {
   const B = report.meta && report.meta.bld;
   if (!B || !B.arch) return null;
@@ -4021,16 +4093,7 @@ function renderAreaCompare(report) {
         ? `<b>${nm}</b>의 건축면적은 한국콜마 기준점의 <em>약 ${r < 0.1 ? (r * 100).toFixed(1) : Math.round(r * 100)}%</em>`
           + (r < 0.5 ? ` · <em>1/${Math.round(1 / r)}</em> 규모` : '') + '입니다'
         : `<b>${nm}</b>의 건축면적은 한국콜마 기준점의 <em>약 ${r.toFixed(1)}배</em>입니다`;
-      // 정사각형 — 큰 쪽이 240px, 작은 쪽은 면적비의 제곱근만큼
-      const big = Math.max(me.arch, rf.arch), S = 240;
-      const side = (a) => Math.max(3, S * Math.sqrt(a / big));
-      const sK = side(rf.arch), sM = side(me.arch);
-      squares = `<svg class="ac-sq" viewBox="0 0 ${S + 20} ${S + 20}" role="img" aria-label="면적 비교: 한국콜마 ${toPy(rf.arch).toLocaleString()}평, ${nm} ${toPy(me.arch).toLocaleString()}평">`
-        + `<rect class="ac-k" x="10" y="${10 + S - sK}" width="${sK}" height="${sK}"></rect>`
-        + `<rect class="ac-m" x="10" y="${10 + S - sM}" width="${sM}" height="${sM}"></rect>`
-        + `<text class="ac-tk" x="${10 + sK - 8}" y="${10 + S - sK + 18}" text-anchor="end">한국콜마</text>`
-        + (sM > 70 ? `<text class="ac-tm" x="18" y="${10 + S - 10}">${nm}</text>` : `<text class="ac-tm out" x="${10 + sM + 6}" y="${10 + S - 4}">${nm}</text>`)
-        + `</svg>`;
+      squares = acScene3d(B, R, nm);
       const rows = [['건축면적', 'arch', '바닥에 닿은 건물 면적 — 흔히 말하는 건평'], ['연면적', 'tot', '모든 층을 더한 면적 — 실제로 쓰는 공간'], ['대지면적', 'plat', '부지 전체 — 차량 진입·적재 여유']];
       bars = rows.filter(([, k]) => me[k] || rf[k]).map(([lab, k, hint], i) => {
         const mx = Math.max(me[k] || 0, rf[k] || 0) || 1;
@@ -4047,11 +4110,12 @@ function renderAreaCompare(report) {
     const kf = rf && rf.arch ? rf.arch / FIELD_M2 : null;
     const analog = `<div class="ac-analog">축구장(7,140㎡)으로 치면 <b>${nm} ${fields < 1 ? `약 ${Math.round(fields * 100)}%` : `약 ${fields.toFixed(1)}개`}</b>`
       + (kf ? ` · 한국콜마 기준점 <b>약 ${kf.toFixed(1)}개</b>` : '') + '</div>';
-    const legend = rf ? `<div class="ac-leg"><span class="m"></span>${nm}<span class="k"></span>한국콜마 기준점(${esc(R.jibun || KOLMAR_ADDR)})</div>` : '';
+    const legend = '';   // 범례는 3D 장면 아래 캡션이 맡는다(두 번 적지 않는다)
     body.innerHTML = `<div class="ac-head">${head}</div>`
       + `<div class="ac-grid">${squares ? `<div class="ac-left">${squares}</div>` : ''}<div class="ac-right">${bars}${analog}${legend}</div></div>`
       + `<div class="ac-foot">국토부 건축물대장 기준 — ${esc(B.jibun)} 지번${B.collective ? ' · ⚠ 집합건물이라 건물 전체 면적입니다(업체 전용면적 아님)' : ''}. `
-      + '한국콜마는 방문거리 기준점과 같은 세종 주소의 지번 몫입니다(여러 필지에 걸친 공장은 일부만 잡힙니다).</div>';
+      + `한국콜마는 방문거리 기준점과 같은 세종 주소(${esc((R && R.jibun) || KOLMAR_ADDR)}) 지번 몫입니다(여러 필지에 걸친 공장은 일부만 잡힙니다).</div>`;
+    acBind3d(box);
     animateAreaCompare(box);
   };
   refBldArea().then(paint).catch(() => paint(false));

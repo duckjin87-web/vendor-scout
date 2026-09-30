@@ -1429,15 +1429,8 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 .ac-head { font-size: 16px; line-height: 1.5; }
 .ac-head em { font-style: normal; font-weight: 800; color: var(--accent); }
 .ac-warn { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
-.ac-grid { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 22px; align-items: center; }
-.ac-left { display: flex; justify-content: center; }
-.ac-sq { width: 100%; max-width: 260px; height: auto; overflow: visible; }
-.ac-sq rect { transform-box: fill-box; transform-origin: left bottom; }
-.ac-k { fill: var(--bg); stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 4; }
-.ac-m { fill: var(--accent); fill-opacity: .88; }
-.ac-tk { font-size: 12px; font-weight: 700; fill: var(--muted); }
-.ac-tm { font-size: 12px; font-weight: 800; fill: #fff; }
-.ac-tm.out { fill: var(--accent); }
+.ac-grid { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 22px; align-items: center; }
+.ac-left { display: flex; justify-content: center; min-width: 0; }
 .ac-right { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .ac-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; align-items: center; }
 .ac-lab b { display: block; font-size: 13px; }
@@ -1457,21 +1450,69 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 .ac-leg span.k { background: var(--bg); border: 1.5px dashed var(--muted); }
 .ac-foot { font-size: 11.5px; color: var(--muted); line-height: 1.5; border-top: 1px dashed var(--border); padding-top: 10px; }
 
-/* 움직임 — 처음엔 0, .go가 붙으면 자란다 */
-.ac-sq rect { transform: scale(0); transition: transform .75s cubic-bezier(.2, .8, .2, 1); }
-.ac-sq .ac-m { transition: transform .9s cubic-bezier(.2, 1.35, .4, 1) .45s; }
-.ac-sq text { opacity: 0; transition: opacity .4s ease 1.1s; }
+/* ── 3D 건물 블록 ──
+   바닥면(XY)을 눕혀(rotateX 58°) 비스듬히 돌린(rotateZ) 장면. 상자는 윗면 + 네 옆면.
+   .ac3-rise가 Z축으로 0 → 1 늘어나며 건물이 솟는다. 다 솟은 뒤 천천히 한 바퀴씩 돈다. */
+.ac3 { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; }
+.ac3-stage { width: 100%; max-width: 340px; height: 270px; perspective: 900px; perspective-origin: 50% 35%;
+  display: flex; align-items: center; justify-content: center; cursor: grab; touch-action: pan-y; user-select: none; }
+.ac3-stage:active { cursor: grabbing; }
+.ac3-scene { position: relative; transform-style: preserve-3d; transform: rotateX(58deg) rotateZ(-38deg); }
+.ac3-ground { position: absolute; inset: 0; border-radius: 4px;
+  background-color: var(--bg);
+  background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: var(--grid) var(--grid); box-shadow: 0 0 0 1px var(--border); }
+.ac3-bld { position: absolute; transform-style: preserve-3d; }
+.ac3-rise { position: absolute; inset: 0; transform-style: preserve-3d; transform-origin: 0 0 0; }
+.ac3-rise .f { position: absolute; left: 0; top: 0; display: block; backface-visibility: visible; }
+.ac3-rise .fr, .ac3-rise .bk { transform-origin: top center; transform: rotateX(90deg); }
+.ac3-rise .lf, .ac3-rise .rt { transform-origin: left center; transform: rotateY(-90deg); }
+/* 면마다 밝기를 달리해 입체로 읽히게 */
+.ac3-bld.m .top { background: color-mix(in srgb, var(--accent) 88%, white); }
+.ac3-bld.m .fr, .ac3-bld.m .bk { background: color-mix(in srgb, var(--accent) 82%, black); }
+.ac3-bld.m .lf, .ac3-bld.m .rt { background: color-mix(in srgb, var(--accent) 64%, black); }
+.ac3-bld.k .top { background: color-mix(in srgb, var(--muted) 45%, var(--panel)); outline: 1px dashed var(--muted); outline-offset: -1px; }
+.ac3-bld.k .fr, .ac3-bld.k .bk { background: color-mix(in srgb, var(--muted) 62%, var(--panel)); }
+.ac3-bld.k .lf, .ac3-bld.k .rt { background: color-mix(in srgb, var(--muted) 78%, var(--panel)); }
+/* 이름표 — 장면과 반대로 돌아 늘 정면을 본다 */
+.ac3-tag { position: absolute; left: 50%; top: 50%; white-space: nowrap; font-size: 12px; font-weight: 800; color: var(--text);
+  padding: 2px 7px; border-radius: 6px; background: var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,.18);
+  transform: translate(-50%, -50%) translateZ(var(--tz)) rotateZ(38deg) rotateX(-58deg); pointer-events: none; }
+.ac3-bld.m .ac3-tag { color: #fff; background: var(--accent); }
+.ac3-cap { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 6px 10px; font-size: 12px; color: var(--muted); }
+.ac3-cap span { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.ac3-cap span.m { background: var(--accent); }
+.ac3-cap span.k { background: color-mix(in srgb, var(--muted) 62%, var(--panel)); }
+.ac3-note { font-size: 11px; color: var(--faint); text-align: center; max-width: 320px; line-height: 1.4; }
+.ac3-spin { font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted); background: var(--panel); border: 1px solid var(--border);
+  border-radius: 999px; padding: 4px 11px; cursor: pointer; min-height: 30px; }
+.ac3-spin:hover { color: var(--accent); border-color: var(--accent); }
+
+/* 움직임 — 처음엔 땅에 붙어 있다가(.go) 솟고, 막대가 자라고, 그 뒤 천천히 돈다 */
+.ac3-rise { transform: scaleZ(0.001); transition: transform 1.1s cubic-bezier(.2, .9, .25, 1.05); }
+.ac3-bld.m .ac3-rise { transition-delay: .35s; }
+.ac3-tag { opacity: 0; transition: opacity .4s ease 1.3s; }
 .ac-bar span { transform: scaleX(0); transform-origin: left center; transition: transform .9s cubic-bezier(.2, .8, .2, 1) var(--d, 0ms); }
-.ac.go .ac-sq rect, .ac.go .ac-bar span { transform: none; }
-.ac.go .ac-sq text { opacity: 1; }
-.ac.still .ac-sq rect, .ac.still .ac-sq text, .ac.still .ac-bar span { transition: none; }
+.ac.go .ac3-rise, .ac.go .ac-bar span { transform: none; }
+.ac.go .ac3-tag { opacity: 1; }
+@keyframes ac3spin { from { transform: rotateX(58deg) rotateZ(-38deg); } to { transform: rotateX(58deg) rotateZ(322deg); } }
+@keyframes ac3tag { from { transform: translate(-50%, -50%) translateZ(var(--tz)) rotateZ(38deg) rotateX(-58deg); }
+  to { transform: translate(-50%, -50%) translateZ(var(--tz)) rotateZ(-322deg) rotateX(-58deg); } }
+.ac.go:not(.manual):not(.still) .ac3-scene { animation: ac3spin 32s linear 2.2s infinite; }
+.ac.go:not(.manual):not(.still) .ac3-tag { animation: ac3tag 32s linear 2.2s infinite; }
+.ac.still .ac3-rise, .ac.still .ac3-tag, .ac.still .ac-bar span { transition: none; }
+.ac.still .ac3-spin { display: none; }
 @media (prefers-reduced-motion: reduce) {
-  .ac-sq rect, .ac-bar span { transform: none !important; transition: none !important; }
-  .ac-sq text { opacity: 1 !important; transition: none !important; }
+  .ac3-rise, .ac-bar span { transform: none !important; transition: none !important; }
+  .ac3-tag { opacity: 1 !important; transition: none !important; }
+  .ac3-scene, .ac3-tag { animation: none !important; }
+  .ac3-spin { display: none; }
 }
 @media print {
-  .ac-sq rect, .ac-bar span { transform: none !important; transition: none !important; }
-  .ac-sq text { opacity: 1 !important; }
+  .ac3-rise, .ac-bar span { transform: none !important; transition: none !important; }
+  .ac3-tag { opacity: 1 !important; }
+  .ac3-scene, .ac3-tag { animation: none !important; }
+  .ac3-spin, .ac3-note { display: none !important; }
   .ac { break-inside: avoid; }
 }
 @media (max-width: 720px) {
