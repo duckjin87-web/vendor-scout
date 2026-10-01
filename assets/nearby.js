@@ -198,7 +198,8 @@ function nbMkFields(r) {
   const nm = pickByKey(r, /BSSH_NM|CMPNY_NM|ENTRPS_?NM|ENTP_?NAME|업체|업소|회사|제조사/i) || pickByKey(r, /_NM$/i);
   const addr = joinAddrFields(r) || pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i);
   return { nm, key: nbNorm(nm), addr, parts: nbAddrParts(addr),
-    rep: pickByKey(r, /PRSNL|PRSDNT|RPRSNTV|REPRE|대표/i), lcns: pickByKey(r, /LCNS_?NO|PERMIT|허가번호|PRMISN_?NO/i) };
+    rep: pickByKey(r, /PRSNL|PRSDNT|RPRSNTV|REPRE|대표/i), lcns: pickByKey(r, /LCNS_?NO|PERMIT|허가번호|PRMISN_?NO/i),
+    raw: r };   // 원 레코드 — 사전검증 조회가 상호 필터로 못 찾을 때 이 명단에서 집어 쓴다(app.js makerLookup)
 }
 function nbMfdsAll() {
   if (_nbMfds) return Promise.resolve(_nbMfds);

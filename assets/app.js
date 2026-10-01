@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 160;
+const BUILD = 161;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1718,7 +1718,20 @@ async function makerLookup(nm) {
     if (merged.length >= 4000) break;
   }
   if (!anyOk) throw new Error(lastErr || '식약처 제조업 조회 실패');
-  return { items: merged };
+  // 상호 키가 하나도 안 먹으면 위 응답은 '무필터 첫 500건'이라, 명단 뒤쪽(최근 허가 업체)은
+  // 영영 안 걸린다(에스제이바이오: 2026-03 허가 → 제조업 미등록으로 보임). 이 업체가 안 보이면
+  // 식약처 명단 전체(근처 업체 탭과 같은 세션 캐시)에서 다시 찾는다.
+  let register = null;
+  if (!matchByNameApp(nm, merged) && typeof nbMfdsAll === 'function') {
+    try {
+      const all = await nbMfdsAll();
+      const key = nbNorm(nm);
+      const hits = key.length >= 2 ? all.list.filter((x) => x.key && (x.key === key || (key.length >= 3 && x.key.includes(key)))) : [];
+      hits.forEach((x) => { if (x.raw) merged.unshift(x.raw); });
+      register = { searched: true, total: all.total, size: all.list.length, full: all.full, hits: hits.length };
+    } catch (e) { register = { searched: false, err: e && e.message ? e.message : String(e) }; }
+  }
+  return { items: merged, register };
 }
 
 // 식약처 화장품제조업 등록업체 기준 후보 — 상호명으로 조회해 등록 업체명(중복제거) 목록화

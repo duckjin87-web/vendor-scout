@@ -808,6 +808,7 @@ function assembleLiveReport(name, corp, res) {
   // ★ mkList[0] 폴백 금지: maker API가 상호 필터링을 안 해 첫 레코드가 '남의 회사'일 수 있음(할루시네이션 방지)
   const mkList = R.maker && R.maker.ok ? listOf(R.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const mk = matchByName(name, mkList);
+  const mkReg = R.maker && R.maker.ok && R.maker.data ? R.maker.data.register : null;   // 명단 전체 재검색 여부
   const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? mk.PRMISN_NO ?? mk.prmisnNo ?? null) : null;
   // 허가일자 — 설립일과 크게 벌어져 있으면 업종을 바꿔 들어온 것이다. 반드시 물어야 할 사항.
   const mkDateRaw = mk ? pickByKey(mk, /PRMISN.*(DE|DT|DAY)|허가일|등록일|LCNS.*(DE|DT)|PRMS.*DE/i) : null;
@@ -906,8 +907,13 @@ function assembleLiveReport(name, corp, res) {
     f('제조업 등록', mk ? `등록${mkNo ? ` (허가 ${mkNo})` : ''}${mkDate ? ` · ${mkDate} 허가` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null,
       mk ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null,
         // 허가일이 있으면 '화장품을 몇 년 했는가'가 나온다 — 회사 업력과는 다른 숫자다
-        mkDate ? `화장품 업력 약 ${Math.max(0, new Date().getFullYear() - Number(String(mkDate).slice(0, 4)))}년` : null,
-      ].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인') : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성')),
+        mkDate ? ((y) => (y < 1 ? '화장품 업력 1년 미만 — 신규 허가 업체' : `화장품 업력 약 ${y}년`))(Math.max(0, new Date().getFullYear() - Number(String(mkDate).slice(0, 4)))) : null,
+      ].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인') : (mkReg && mkReg.searched
+        // 명단 전체를 훑고도 없으면 '책임판매업 추정'이라고 단정하지 않는다 — 공개 API는 의약품안전나라보다
+        // 늦게 갱신돼서, 최근 허가 업체는 빠져 있는 일이 있다
+        ? `식약처 공개 API 명단 전체(${(mkReg.total || mkReg.size || 0).toLocaleString()}곳${mkReg.full ? '' : ' 중 일부만 수신'})에 이 상호가 없습니다. `
+          + '최근 허가 업체는 공개 API 반영이 늦어 빠져 있을 수 있습니다 — 의약품안전나라(nedrug.mfds.go.kr) 업체 검색에서 허가 여부를 확인하세요. 거기에도 없으면 책임판매업만 등록(OEM 위탁)일 수 있습니다'
+        : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성'))),
     f('공장/제조소 소재지', fctAddr || mkAddr || null, (fctAddr || mkAddr) ? 'A' : 'D',
       fctAddr ? '산업단지공단 공장등록' : (mkAddr ? '식약처 화장품제조업 API' : '산업단지공단 공장등록'),
       (fctAddr || mkAddr) ? today : null,
