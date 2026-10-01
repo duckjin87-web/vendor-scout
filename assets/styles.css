@@ -1519,7 +1519,7 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
   .ac-grid { grid-template-columns: 1fr; }
   .ac-row { grid-template-columns: 1fr; gap: 4px; }
 }
-/* 면적을 못 찾았을 때 — 사유 · 주소로 다시 찾기 · 직접 입력 */
+/* 면적을 못 찾았을 때 — 사유 · 직접 입력 */
 .ac-why { font-size: 13px; color: var(--muted); line-height: 1.55; }
 .ac-why small { color: var(--faint); }
 .ac-form { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px dashed var(--border); }
@@ -1529,6 +1529,48 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
   background: var(--panel); color: var(--text); font-size: 14px; }
 .ac-in.sm { flex: 0 1 150px; }
 .ac-in:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
-.ac-ferr { font-size: 12.5px; color: var(--risk); min-height: 1em; }
 .ac-manual { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--gC); }
 @media print { .ac-form { display: none !important; } }
+
+/* ═══════════ 공장 면적 탭 ═══════════
+   머리줄(주소 수정) · 후보 주소 · 합계 · 필지별 내역 · 동별 대장 · 주의할 점 · 3D 비교 */
+.rtab-sub { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 4px; }
+.at { display: flex; flex-direction: column; gap: 14px; }
+.at-head, .at-sec { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; min-width: 0; }
+.at-sec h4 { margin: 0 0 10px; font-size: 14.5px; font-weight: 800; color: var(--text); }
+.at-sec h4 small { font-weight: 500; font-size: 12px; color: var(--muted); margin-left: 6px; }
+.at-head .nb-oerr { margin-top: 6px; }
+.at-cands { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.at-cands li { display: grid; grid-template-columns: 150px 1fr auto auto; align-items: center; gap: 4px 10px; font-size: 13px;
+  padding: 6px 0; border-top: 1px solid var(--rule); }
+.at-cands li:first-child { border-top: 0; }
+.at-cl { color: var(--muted); font-size: 12px; }
+.at-ca { overflow-wrap: anywhere; color: var(--text); }
+.at-cs { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; white-space: nowrap; background: var(--rule); color: var(--muted); }
+.at-cands li.pick .at-cs { background: var(--accent-soft); color: var(--accent); }
+.at-cands li.out { opacity: .6; }
+.at-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.at-stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 6px; min-width: 0; }
+.at-stat span { font-size: 12px; color: var(--muted); }
+.at-stat b { font-size: 20px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.at-stat small { font-size: 11.5px; color: var(--muted); }
+.at-miss p { margin: 6px 0 0; font-size: 13px; color: var(--muted); line-height: 1.55; }
+.at-tw { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.at-tbl { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 13px; }
+.at-tbl th { text-align: left; font-size: 12px; font-weight: 700; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.at-tbl td { padding: 7px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; color: var(--text); }
+.at-tbl td small { display: block; font-size: 11px; color: var(--muted); }
+.at-tbl .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.at-tbl tr.fac td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.at-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.at-warn { margin-top: 8px; font-size: 12.5px; color: var(--risk); }
+.at-sec .ac-form { margin-top: 12px; }
+.at-notes { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.6; color: var(--text); }
+.at .ac { margin: 0; }
+@media (max-width: 720px) {
+  .at-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .at-cands li { grid-template-columns: 1fr auto; }
+  .at-cl { grid-column: 1 / -1; }
+  .at-head, .at-sec { padding: 12px; }
+}
+@media print { .at .nb-btn, .at .ac-form, .at-cands button { display: none !important; } }

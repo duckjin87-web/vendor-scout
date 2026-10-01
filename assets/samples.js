@@ -684,7 +684,8 @@ function areaFieldFromBld(bld, fctFloor, fctRegDe, today) {
         + (B.firstApr ? ` 사용승인 ${B.firstApr.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')}.` : '')
         + (B.collective ? ' ⚠ 지식산업센터 등 집합건물입니다 — 이 면적은 건물 전체이고 업체가 쓰는 호실 면적은 훨씬 작습니다. 전용면적을 따로 물어보세요.' : '')
         + ` ${floorAreaNote(py(B.arch))}`
-        + ' 같은 공장이 여러 필지에 걸쳐 있으면 이 지번 몫만 잡힙니다.');
+        + (B.parts && B.parts.length > 1 ? ` ${B.parts.length}개 필지 합산값입니다.` : ' 같은 공장이 여러 필지에 걸쳐 있으면 이 지번 몫만 잡힙니다 — 「공장 면적」 탭에서 필지를 추가해 합산하세요.')
+        + (B.edited ? ' (「공장 면적」 탭에서 고친 주소 기준)' : ''));
   }
   if (fctFloor) {
     return f('공장 건축면적 (건평)', `약 ${fctFloor.py.toLocaleString()}평 (${fctFloor.m2.toLocaleString()}㎡)`, 'A', '산업단지공단 공장등록', fctRegDe || today,
@@ -695,7 +696,7 @@ function areaFieldFromBld(bld, fctFloor, fctRegDe, today) {
   return f('공장 건축면적 (건평)', null, 'D', '국토부 건축물대장', null,
     `${why2}${bld && bld.queried ? ` (조회 주소: ${bld.queried})` : ''}`
       + (/활용신청|NOT_REGISTERED/i.test(String(why2)) ? ' — data.go.kr에서 「국토교통부_건축HUB_건축물대장정보 서비스」를 활용신청해 주세요(기존 인증키 그대로 사용).' : '')
-      + ' 아래 「공장 규모 비교」에서 다른 주소로 다시 찾거나 면적을 직접 넣어 비교할 수 있습니다.');
+      + ' 「공장 면적」 탭의 주소 수정으로 실제 공장 지번을 넣어 다시 조회할 수 있습니다.');
 }
 
 // ── 보고품목 심화 분석 ──

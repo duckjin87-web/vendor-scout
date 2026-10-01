@@ -852,34 +852,40 @@ function nbOpen(pane, report) {
 // ── 리포트 화면에 탭을 붙인다 ── render()가 다 그린 뒤 부른다.
 // 툴바 아래의 모든 내용을 '사전검증 리포트' 탭으로 옮기고, 옆에 '근처 업체' 탭을 둔다.
 // 닫힌 탭은 hidden이라 인쇄에도 나오지 않는다(조회 화면 그대로 인쇄).
-function mountReportTabs(root, report, actions) {
+// areaEl(app.js renderAreaTab)이 있으면 가운데에 '공장 면적' 탭을 둔다.
+function mountReportTabs(root, report, actions, areaEl) {
   if (!root || !actions || actions.parentNode !== root) return;
   const vid = (report.meta && report.meta.vendor_id) || 'x';
+  const B = report.meta && report.meta.bld && report.meta.bld.arch ? report.meta.bld : null;
+  const tabs = [{ id: 'report', label: '사전검증 리포트' }];
+  if (areaEl) tabs.push({ id: 'area', label: `공장 면적${B ? ` <small class="rtab-sub">약 ${Math.round(B.arch / 3.305785).toLocaleString()}평</small>` : ''}` });
+  tabs.push({ id: 'nearby', label: '근처 업체' });
   const bar = el('div', 'rtabs');
   bar.setAttribute('role', 'tablist');
   bar.setAttribute('aria-label', '리포트 보기');
-  bar.innerHTML = '<button type="button" role="tab" class="rtab" data-tab="report" id="rtab-report" aria-controls="rpane-report">사전검증 리포트</button>'
-    + '<button type="button" role="tab" class="rtab" data-tab="nearby" id="rtab-nearby" aria-controls="rpane-nearby">근처 업체</button>';
-  const paneR = el('div', 'tabpane'); paneR.id = 'rpane-report'; paneR.setAttribute('role', 'tabpanel'); paneR.setAttribute('aria-labelledby', 'rtab-report');
-  const paneN = el('div', 'tabpane nbpane'); paneN.id = 'rpane-nearby'; paneN.setAttribute('role', 'tabpanel'); paneN.setAttribute('aria-labelledby', 'rtab-nearby');
+  bar.innerHTML = tabs.map((t) => `<button type="button" role="tab" class="rtab" data-tab="${t.id}" id="rtab-${t.id}" aria-controls="rpane-${t.id}">${t.label}</button>`).join('');
+  const pane = (id, cls) => { const p = el('div', cls); p.id = `rpane-${id}`; p.setAttribute('role', 'tabpanel'); p.setAttribute('aria-labelledby', `rtab-${id}`); return p; };
+  const panes = { report: pane('report', 'tabpane'), nearby: pane('nearby', 'tabpane nbpane') };
+  if (areaEl) { panes.area = pane('area', 'tabpane atpane'); panes.area.appendChild(areaEl); }
   let n = actions.nextSibling;
-  while (n) { const nx = n.nextSibling; paneR.appendChild(n); n = nx; }
-  root.appendChild(bar); root.appendChild(paneR); root.appendChild(paneN);
+  while (n) { const nx = n.nextSibling; panes.report.appendChild(n); n = nx; }
+  root.appendChild(bar);
+  tabs.forEach((t) => root.appendChild(panes[t.id]));
   const show = (tab) => {
+    if (!panes[tab]) tab = 'report';
     _nbActiveTab.set(vid, tab);
     bar.querySelectorAll('.rtab').forEach((b) => {
       const on = b.dataset.tab === tab;
       b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1;
     });
-    paneR.hidden = tab !== 'report';
-    paneN.hidden = tab !== 'nearby';
-    if (tab === 'nearby') nbOpen(paneN, report);
+    tabs.forEach((t) => { panes[t.id].hidden = t.id !== tab; });
+    if (tab === 'nearby') nbOpen(panes.nearby, report);
   };
   bar.addEventListener('click', (e) => { const b = e.target.closest('.rtab'); if (b) show(b.dataset.tab); });
   bar.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    const cur = _nbActiveTab.get(vid) || 'report';
-    const next = cur === 'report' ? 'nearby' : 'report';
+    const i = Math.max(0, tabs.findIndex((t) => t.id === (_nbActiveTab.get(vid) || 'report')));
+    const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length].id;
     show(next); bar.querySelector(`[data-tab="${next}"]`).focus();
   });
   show(_nbActiveTab.get(vid) || 'report');

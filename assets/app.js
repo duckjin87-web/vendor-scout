@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 158;
+const BUILD = 159;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1432,13 +1432,13 @@ async function bldAreaLookup(addr, opts = {}) {
   let matchedBy = 'lot';
   if (!rawT.length && !rawR.length) {
     const wide = await fetchLot(base).catch(() => ({ rawT: [], rawR: [] }));
-    rawT = wide.rawT.filter((x) => bldItemMatches(x, k, opts.name));
-    rawR = wide.rawR.filter((x) => bldItemMatches(x, k, opts.name));
-    // 총괄표제부만 맞고 표제부는 새주소가 비어 있을 수 있다 — 같은 대지(지번)의 표제부를 함께 받는다
-    if (rawR.length && !rawT.length) {
-      const lots = new Set(rawR.map((x) => bldCompact(x.platPlc)).filter(Boolean));
-      rawT = wide.rawT.filter((x) => lots.has(bldCompact(x.platPlc)));
-    }
+    const hitT = wide.rawT.filter((x) => bldItemMatches(x, k, opts.name));
+    const hitR = wide.rawR.filter((x) => bldItemMatches(x, k, opts.name));
+    // 맞은 건물이 선 필지(대지위치)를 찾고, 그 필지의 동은 모두 받는다 — 새주소가 비어 있는
+    // 창고·부속동도 같은 공장 면적이다. 남의 필지는 섞지 않는다.
+    const lots = new Set([...hitT, ...hitR].map((x) => bldCompact(x.platPlc)).filter(Boolean));
+    rawT = lots.size ? wide.rawT.filter((x) => lots.has(bldCompact(x.platPlc))) : hitT;
+    rawR = lots.size ? wide.rawR.filter((x) => lots.has(bldCompact(x.platPlc))) : hitR;
     matchedBy = 'road';
   }
   const titles = rawT.map((x) => ({
@@ -1474,7 +1474,7 @@ async function bldAreaLookup(addr, opts = {}) {
     purposes: [...new Set(titles.map((x) => x.purpose).filter(Boolean))],
     collective: titles.some((x) => /집합/.test(x.regKind)),      // 지식산업센터 등 — 면적이 건물 전체다
     firstApr: aprs[0] || null,
-    bldgs: titles.slice(0, 12),
+    bldgs: titles.slice(0, 40),
     src: recap ? '총괄표제부+표제부' : '표제부',
   };
 }
@@ -1586,6 +1586,55 @@ async function bldAreaForSite(site, name) {
     }
   }
   throw firstErr || new Error('건축물대장 조회 실패');
+}
+
+// ── 여러 필지 합산 · 사용자가 고친 면적 주소 ──
+// 공장이 여러 필지에 걸쳐 있으면 필지마다 대장이 따로 있다. 필지별 결과를 같은 지번은 한 번만 세어
+// 더하고, 필지별 내역(parts)을 남겨 '공장 면적' 탭에서 하나씩 보이고 뺄 수 있게 한다.
+function bldCombine(list, extra = {}) {
+  const seen = new Set();
+  const ps = list.filter((p) => p && p.jibun && !seen.has(p.jibun) && seen.add(p.jibun));
+  if (!ps.length) return null;
+  const s = (k) => ps.reduce((a, p) => a + (p[k] || 0), 0);
+  const p0 = ps[0];
+  return {
+    ...p0,
+    arch: s('arch'), tot: s('tot'), plat: s('plat'), factoryArch: s('factoryArch'), factoryTot: s('factoryTot'),
+    bldgCount: s('bldgCount'), factoryCount: s('factoryCount'),
+    purposes: [...new Set(ps.flatMap((p) => p.purposes || []))],
+    collective: ps.some((p) => p.collective),
+    firstApr: ps.map((p) => p.firstApr).filter(Boolean).sort()[0] || null,
+    bldgs: ps.flatMap((p) => (p.bldgs || []).map((b) => ({ ...b, lotOf: p.jibun }))),
+    jibun: ps.map((p) => p.jibun).join(' · '),
+    parts: ps.map((p) => ({ queried: p.queried, jibun: p.jibun, keyJibun: p.keyJibun, matchedBy: p.matchedBy, key: p.key, road: p.road,
+      arch: p.arch, tot: p.tot, plat: p.plat, factoryArch: p.factoryArch, factoryTot: p.factoryTot,
+      bldgCount: p.bldgCount, factoryCount: p.factoryCount, purposes: p.purposes, collective: p.collective, firstApr: p.firstApr,
+      bldgs: p.bldgs, src: p.src })),
+    ...extra,
+  };
+}
+// 업체별로 고친 면적 주소 { addr, lots:[추가 필지 주소] } — 다음 조회에도 그대로 쓴다
+const AREA_OV_KEY = 'vs_area_addr';
+const areaOvId = (name) => bldCompact(stripCorp(name || ''));
+function areaOvGet(name) {
+  try { const all = JSON.parse(localStorage.getItem(AREA_OV_KEY) || '{}'); return all[areaOvId(name)] || null; } catch { return null; }
+}
+function areaOvSet(name, v) {
+  try {
+    const all = JSON.parse(localStorage.getItem(AREA_OV_KEY) || '{}');
+    if (v && (v.addr || (v.lots && v.lots.length))) all[areaOvId(name)] = v; else delete all[areaOvId(name)];
+    localStorage.setItem(AREA_OV_KEY, JSON.stringify(all));
+  } catch { /* 저장 차단 — 이번 화면에서만 적용 */ }
+}
+// 본 필지 결과(main) + 추가 필지 주소들 → 필지별 조회 후 합산. 추가 필지가 안 잡히면 사유를 남긴다.
+async function bldWithLots(main, lots, name, extra = {}) {
+  const got = lots.length
+    ? await mapLimit(lots, 2, (a) => bldAreaLookup(a, { name }).then((d) => ({ ...d, queried: a })).catch((e) => ({ err: e.message, queried: a })))
+    : [];
+  return bldCombine([main, ...got.filter((g) => !g.err)], {
+    ...extra, lots: lots.slice(),
+    failedLots: got.filter((g) => g.err).map((g) => ({ addr: g.queried, err: g.err })),
+  });
 }
 
 async function kakaoTravel(destAddr) {
@@ -2923,16 +2972,23 @@ async function finishLive(name, corp) {
   res.site = site ? { ok: true, data: site } : { ok: false, err: '공장 소재지 후보 주소 없음' };
   const visitAddr = site ? site.addr : pickFullAddr(fAddr, mAddr, corp.addr);
   // 방문 거리와 공장 면적(건축물대장)은 같은 주소로 부르므로 함께 돌린다
-  const [trR, bldR] = await Promise.allSettled([kakaoTravel(visitAddr),
-    site ? bldAreaForSite(site, corp.corpNm || name) : bldAreaLookup(visitAddr, { name })]);
+  // 사용자가 '공장 면적' 탭에서 주소를 고쳐 둔 업체는 그 주소(와 추가 필지)로 면적을 찾는다
+  const areaOv = areaOvGet(corp.corpNm || name);
+  const bldQueried = areaOv && areaOv.addr ? areaOv.addr : visitAddr;
+  const bnm = corp.corpNm || name;
+  const mainJob = areaOv && areaOv.addr ? bldAreaLookup(areaOv.addr, { name: bnm }).then((d) => ({ ...d, queried: areaOv.addr }))
+    : site ? bldAreaForSite(site, bnm)
+      : bldAreaLookup(visitAddr, { name: bnm }).then((d) => ({ ...d, queried: visitAddr }));
+  const bldJob = mainJob.then((main) => bldWithLots(main, (areaOv && areaOv.lots) || [], bnm, { edited: !!(areaOv && areaOv.addr) }));
+  const [trR, bldR] = await Promise.allSettled([kakaoTravel(visitAddr), bldJob]);
   const travel = trR.status === 'fulfilled' ? trR.value : null;
   const kakaoErr = trR.status === 'rejected' ? (trR.reason && trR.reason.message ? trR.reason.message : String(trR.reason)) : null;
   res.kakao = travel
     ? { ok: true, data: travel }
     : { ok: false, err: `${kakaoErr || '실패'} — 추정치 대체` };
   res.bld = bldR.status === 'fulfilled'
-    ? { ok: true, data: { queried: visitAddr, ...bldR.value } }
-    : { ok: false, err: bldR.reason && bldR.reason.message ? bldR.reason.message : String(bldR.reason), queried: visitAddr };
+    ? { ok: true, data: { queried: bldQueried, ...bldR.value } }
+    : { ok: false, err: bldR.reason && bldR.reason.message ? bldR.reason.message : String(bldR.reason), queried: bldQueried };
 
   return window.assembleLiveReport(corp.corpNm || name, corp, res);
 }
@@ -4319,13 +4375,8 @@ function renderAreaCompare(report) {
     }
     // ② 이 업체 면적이 없음 — 이유를 보이고, 주소를 바꿔 다시 찾거나 직접 넣게 한다
     if (!B) {
-      const why = (M.bld && M.bld.err) || '공장 주소가 없어 건축물대장을 조회하지 못했습니다';
-      const guess = (M.bld && M.bld.queried && isFullAddr(M.bld.queried) ? M.bld.queried : '') || visitAddress(report) || '';
-      body.innerHTML = `<div class="ac-head"><b>${nm}</b>의 공장 면적을 건축물대장에서 찾지 못했습니다</div>`
-        + `<div class="ac-why">${esc(why)}${M.bld && M.bld.queried ? ` <small>(조회 주소: ${esc(M.bld.queried)})</small>` : ''}</div>`
-        + `<form class="ac-form" data-f="refind"><label for="acAddr">공장 주소로 다시 찾기</label>`
-        + `<div class="ac-frow"><input id="acAddr" class="ac-in" type="text" value="${esc(guess)}" placeholder="예: 경기도 파주시 월롱면 덕은리 123-4" autocomplete="off">`
-        + `<button type="submit" class="nb-btn dark">다시 찾기</button></div><div class="ac-ferr" aria-live="polite"></div></form>`
+      body.innerHTML = `<div class="ac-head"><b>${nm}</b>의 공장 면적을 건축물대장에서 찾지 못해 비교하지 못했습니다</div>`
+        + `<div class="ac-why">위 <b>주소 수정</b>으로 실제 공장 주소를 넣어 다시 조회하거나, 면적을 알면 아래에 직접 넣어 비교하세요.</div>`
         + `<form class="ac-form" data-f="manual"><label>면적을 알면 직접 넣어 비교</label>`
         + `<div class="ac-frow"><input class="ac-in sm" name="py" type="number" min="1" step="1" inputmode="numeric" placeholder="건축면적(평)" aria-label="건축면적(평)">`
         + `<input class="ac-in sm" name="fl" type="number" min="1" max="30" step="1" inputmode="numeric" placeholder="지상 층수" aria-label="지상 층수">`
@@ -4369,27 +4420,11 @@ function renderAreaCompare(report) {
     animateAreaCompare(box);
   };
 
-  // 다시 찾기 · 직접 입력 · 입력 지우기
+  // 직접 입력 · 입력 지우기 (주소 다시 조회는 '공장 면적' 탭 머리줄에서)
   box.addEventListener('submit', async (e) => {
     const f = e.target.closest('.ac-form'); if (!f) return;
     e.preventDefault();
-    if (f.dataset.f === 'refind') {
-      const addr = f.querySelector('.ac-in').value.trim();
-      const err = f.querySelector('.ac-ferr'), btn = f.querySelector('button');
-      if (!addr) { err.textContent = '주소를 입력해 주세요'; return; }
-      btn.disabled = true; btn.textContent = '찾는 중…'; err.textContent = '';
-      try {
-        const d = await bldAreaLookup(addr, { name: M.vendor_name });
-        M.bld = { ...d, queried: addr };
-        const i = (report.capacity || []).findIndex((x) => x.key === '공장 건축면적 (건평)');
-        if (i >= 0 && window.areaFieldFromBld) report.capacity[i] = window.areaFieldFromBld({ ok: true, data: M.bld }, null, null, new Date().toISOString().slice(0, 10));
-        saveLastReport(report);
-        render(report, { noScroll: true });          // 생산역량 칸과 카드를 함께 새로 그린다
-      } catch (x) {
-        err.textContent = x && x.message ? x.message : String(x);
-        btn.disabled = false; btn.textContent = '다시 찾기';
-      }
-    } else if (f.dataset.f === 'manual') {
+    if (f.dataset.f === 'manual') {
       const py = Number(f.querySelector('[name=py]').value), fl = Number(f.querySelector('[name=fl]').value) || 1;
       if (!(py > 0)) { f.querySelector('[name=py]').focus(); return; }
       const m2 = py * 3.305785;
@@ -4404,6 +4439,187 @@ function renderAreaCompare(report) {
   refBldArea().then((R) => { REF = R; }).catch(() => { REF = null; }).finally(paint);
   return box;
 }
+// ── 공장 면적 탭 ──
+// 면적은 발주 물량·물류 판단에 바로 쓰여 정확해야 한다. 그래서 리포트 칸 하나로 두지 않고 탭으로 뺐다.
+//   머리줄: 업체명 (조회 주소) · [주소 수정] — 고친 주소로 바로 다시 조회, 업체별로 저장돼 다음 조회에도 쓴다
+//   후보 주소: 공장 소재지 선정 때 본 주소들 — 눌러서 그 주소로 조회
+//   합계 · 필지별 내역(필지 추가·빼기) · 동별 건축물대장 표 · 주의할 점 · 한국콜마 3D 비교
+const BLD_HOW = { lot: '지번 일치', road: '같은 본번 · 새주소(도로명) 일치', name: '같은 본번 · 건물명(상호) 일치' };
+function renderAreaTab(report) {
+  const M = report.meta || {};
+  if (!M.live) return null;
+  const wrap = el('div', 'at');
+  const nm = stripCorp(M.vendor_name || '') || '이 업체';
+  const B = M.bld && M.bld.arch ? M.bld : null;
+  const parts = B ? (B.parts && B.parts.length ? B.parts : [B]) : [];
+  const ov = areaOvGet(M.vendor_name);
+  const curAddr = (M.bld && M.bld.queried) || (M.site && M.site.addr) || visitAddress(report) || '';
+  const today = () => new Date().toISOString().slice(0, 10);
+  const py = (m2) => toPy(m2 || 0).toLocaleString();
+  const m2 = (v) => (v ? `${Math.round(v).toLocaleString()}㎡` : '—');
+  const ui = { editing: false, busy: '', err: '' };
+
+  const headHtml = () => {
+    if (ui.editing) {
+      return `<form class="nb-oform" data-at="main"><label for="atAddrIn"><b>${esc(nm)}</b> 면적 조회 주소 수정</label>`
+        + `<div class="nb-orow"><input id="atAddrIn" class="nb-oin" type="text" value="${esc(curAddr)}" placeholder="예: 충청남도 아산시 둔포면 신남리 731-25" autocomplete="off">`
+        + `<button type="submit" class="nb-btn dark"${ui.busy ? ' disabled' : ''}>${ui.busy === 'main' ? '조회 중…' : '이 주소로 다시 조회'}</button>`
+        + `<button type="button" class="nb-btn" data-act="at-cancel">취소</button></div>`
+        + (ui.err ? `<div class="nb-oerr" role="alert">${esc(ui.err)}</div>` : '<div class="nb-ohint">건축물대장은 지번 기준이라 <b>지번(○○리 123-4)</b>을 넣으면 가장 정확합니다. 도로명(○○로 12)도 됩니다.</div>')
+        + '</form>';
+    }
+    return `<div class="nb-origin-line"><b class="nb-oname">${esc(nm)}</b><span class="nb-oaddr">(${esc(curAddr || '주소 없음')})</span>`
+      + (ov && ov.addr ? '<span class="nb-oedited">수정한 주소</span>' : '')
+      + `<button type="button" class="nb-btn sm" data-act="at-edit">주소 수정</button>`
+      + (ov ? '<button type="button" class="nb-btn sm" data-act="at-reset">원래 주소로</button>' : '')
+      + `</div><small class="nb-osub">이 주소 → 법정동코드·지번으로 국토부 건축물대장을 조회한 값입니다${ui.busy === 'reset' ? ' · 다시 조회 중…' : ''}</small>`
+      + (!ui.editing && ui.err ? `<div class="nb-oerr" role="alert">${esc(ui.err)}</div>` : '');
+  };
+  const candHtml = () => {
+    const cs = (M.site && M.site.cands) || [];
+    if (!cs.length) return '';
+    const ST = { pick: '선정', alt: '같은 지역', partial: '시·군까지만', out: '공장 지역 밖' };
+    return `<div class="at-sec"><h4>후보 주소 <small>공장 소재지 선정 때 대조한 주소 — 눌러서 그 주소로 조회</small></h4><ul class="at-cands">`
+      + cs.map((c) => `<li class="${c.state}"><span class="at-cl">${esc(c.label)}</span><span class="at-ca">${esc(c.addr)}</span><span class="at-cs">${ST[c.state] || ''}</span>`
+        + (c.full && c.addr !== curAddr ? `<button type="button" class="nb-btn sm" data-act="at-use" data-addr="${esc(c.addr)}"${ui.busy ? ' disabled' : ''}>이 주소로 조회</button>` : '')
+        + '</li>').join('') + '</ul></div>';
+  };
+  const sumHtml = () => {
+    if (!B) {
+      const why = (M.bld && M.bld.err) || '공장 주소가 없어 건축물대장을 조회하지 못했습니다';
+      return `<div class="at-sec at-miss"><b>건축물대장에서 면적을 찾지 못했습니다</b><p>${esc(why)}</p>`
+        + '<p>실제 공장의 <b>지번</b>을 알면 위 <b>주소 수정</b>으로 다시 조회하세요. 카카오맵에서 공장을 찍으면 지번이 나옵니다.</p></div>';
+    }
+    const stat = (lab, v, sub) => `<div class="at-stat"><span>${lab}</span><b>${v ? `약 ${py(v)}평` : '—'}</b><small>${[v ? m2(v) : '', sub].filter(Boolean).join(' · ')}</small></div>`;
+    return `<div class="at-sec"><h4>합계 <small>${parts.length > 1 ? `${parts.length}개 필지 합산 · ` : ''}국토부 건축물대장 (${esc(B.src || '표제부')})</small></h4><div class="at-stats">`
+      + stat('건축면적 (건평)', B.arch, '바닥에 닿은 면적')
+      + stat('연면적', B.tot, '모든 층 합계')
+      + stat('대지면적', B.plat, '부지')
+      + stat('공장 용도 건축면적', B.factoryArch, `공장 ${B.factoryCount || 0}동 / 전체 ${B.bldgCount || 0}동`)
+      + '</div></div>';
+  };
+  const lotsHtml = () => {
+    if (!B) return '';
+    const failed = (M.bld.failedLots || []);
+    return `<div class="at-sec"><h4>필지별 내역 <small>공장이 여러 필지에 걸쳐 있으면 필지를 추가해 합산하세요</small></h4>`
+      + '<div class="at-tw"><table class="at-tbl"><thead><tr><th>필지 (대장 지번)</th><th>조회 주소</th><th>연결</th><th class="n">건축면적</th><th class="n">연면적</th><th class="n">동수</th><th></th></tr></thead><tbody>'
+      + parts.map((p, i) => `<tr><td>${esc(p.jibun)}${p.key ? `<small class="at-key">키 ${esc(p.key)}</small>` : ''}</td><td>${esc(p.queried || '')}</td>`
+        + `<td>${esc(BLD_HOW[p.matchedBy] || '지번 일치')}${p.matchedBy && p.matchedBy !== 'lot' ? `<small>대표지번 ${esc(p.keyJibun || '')}엔 대장 없음</small>` : ''}</td>`
+        + `<td class="n">${py(p.arch)}평<small>${m2(p.arch)}</small></td><td class="n">${py(p.tot)}평<small>${m2(p.tot)}</small></td><td class="n">${p.bldgCount || 0}</td>`
+        + `<td>${i > 0 ? `<button type="button" class="nb-btn sm" data-act="at-drop" data-jibun="${esc(p.jibun)}" data-addr="${esc(p.queried || '')}">빼기</button>` : '<small>본 필지</small>'}</td></tr>`).join('')
+      + '</tbody></table></div>'
+      + (failed.length ? `<div class="at-warn">추가 필지 중 조회되지 않은 주소: ${failed.map((f) => `${esc(f.addr)} — ${esc(f.err)}`).join(' / ')}</div>` : '')
+      + `<form class="ac-form" data-at="lot"><label for="atLotIn">필지 추가</label><div class="ac-frow">`
+      + `<input id="atLotIn" class="ac-in" type="text" placeholder="같은 공장의 다른 필지 — 예: 충청남도 아산시 둔포면 신남리 731-26" autocomplete="off">`
+      + `<button type="submit" class="nb-btn"${ui.busy ? ' disabled' : ''}>${ui.busy === 'lot' ? '조회 중…' : '추가해 합산'}</button></div>`
+      + (ui.lotErr ? `<div class="nb-oerr" role="alert">${esc(ui.lotErr)}</div>` : '') + '</form></div>';
+  };
+  const bldgHtml = () => {
+    if (!B) return '';
+    const rows = (B.bldgs || []);
+    if (!rows.length) return '';
+    const d8 = (s) => (/^\d{8}$/.test(s || '') ? s.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') : '—');
+    const multi = parts.length > 1;
+    return `<div class="at-sec"><h4>동별 건축물대장 <small>표제부 ${rows.length}동${B.bldgCount > rows.length ? ` (전체 ${B.bldgCount}동 중)` : ''}</small></h4>`
+      + `<div class="at-tw"><table class="at-tbl"><thead><tr>${multi ? '<th>필지</th>' : ''}<th>건물·동</th><th>주용도</th><th class="n">건축면적</th><th class="n">연면적</th><th class="n">층수</th><th>사용승인</th><th>구조</th></tr></thead><tbody>`
+      + rows.map((x) => {
+        const fac = /공장|제조/.test(`${x.purpose} ${x.etc || ''}`);
+        return `<tr class="${fac ? 'fac' : ''}">${multi ? `<td>${esc(x.lotOf || '')}</td>` : ''}<td>${esc([x.name, x.dong].filter(Boolean).join(' ') || (x.kind || '—'))}${x.regKind ? `<small>${esc(x.regKind)}</small>` : ''}</td>`
+          + `<td>${esc(x.purpose || '—')}${x.etc && x.etc !== x.purpose ? `<small>${esc(x.etc)}</small>` : ''}</td>`
+          + `<td class="n">${x.arch ? `${py(x.arch)}평<small>${m2(x.arch)}</small>` : '—'}</td><td class="n">${x.tot ? `${py(x.tot)}평<small>${m2(x.tot)}</small>` : '—'}</td>`
+          + `<td class="n">${x.floors ? `지상 ${x.floors}` : '—'}${x.under ? `<small>지하 ${x.under}</small>` : ''}</td><td>${d8(x.apr)}</td><td>${esc(x.strct || '—')}</td></tr>`;
+      }).join('') + '</tbody></table></div></div>';
+  };
+  const noteHtml = () => {
+    if (!B) return '';
+    const n = [];
+    if (B.collective) n.push('⚠ 집합건물(지식산업센터 등)입니다 — 표의 면적은 건물 전체이고 업체가 쓰는 호실은 훨씬 작습니다. 전용면적을 따로 물어보세요.');
+    if (!B.factoryCount) n.push(`대장상 '공장' 용도 건물이 없습니다(용도: ${esc((B.purposes || []).join('·') || '미상')}). 창고·근린생활시설을 공장으로 쓰는지 방문 시 확인하세요.`);
+    if (parts.some((p) => p.matchedBy && p.matchedBy !== 'lot')) n.push('도로명주소의 대표지번에는 대장이 없어 같은 본번의 다른 필지로 연결했습니다. 표의 필지가 실제 공장 건물인지 카카오맵 로드뷰로 한 번 대조하세요.');
+    n.push('대장 면적은 사용승인 당시 신고값입니다 — 무단 증축·가설 건물은 빠져 있을 수 있습니다.');
+    return `<div class="at-sec"><h4>주의할 점</h4><ul class="at-notes">${n.map((x) => `<li>${x}</li>`).join('')}</ul></div>`;
+  };
+
+  const paint = () => {
+    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${candHtml()}${sumHtml()}${lotsHtml()}${bldgHtml()}${noteHtml()}`;
+    const cmp = renderAreaCompare(report);
+    if (cmp) wrap.appendChild(cmp);
+    if (ui.editing) { const i = wrap.querySelector('#atAddrIn'); if (i) { i.focus(); i.select(); } }
+  };
+  // 면적이 바뀌면 리포트의 면적·소재지 칸도 같은 값으로 고친 뒤 전부 다시 그린다(탭은 그대로 유지)
+  const commit = (bld) => {
+    M.bld = bld;
+    const cap = report.capacity || [];
+    const i = cap.findIndex((x) => x.key === '공장 건축면적 (건평)');
+    if (i >= 0 && window.areaFieldFromBld) cap[i] = window.areaFieldFromBld(bld && bld.arch ? { ok: true, data: bld } : { ok: false, err: bld && bld.err, queried: bld && bld.queried }, null, null, today());
+    const j = cap.findIndex((x) => x.key === '실제 공장 소재지 (선정)');
+    if (j >= 0 && window.siteField && M.site) cap[j] = window.siteField({ ok: true, data: M.site }, { ok: !!(bld && bld.arch), data: bld }, today());
+    saveLastReport(report);
+    render(report, { noScroll: true });
+  };
+  const run = async (kind, job) => {
+    ui.busy = kind; ui.err = ''; ui.lotErr = ''; paint();
+    try { await job(); } catch (x) {
+      ui.busy = '';
+      if (kind === 'lot') ui.lotErr = x && x.message ? x.message : String(x); else ui.err = x && x.message ? x.message : String(x);
+      paint();
+    }
+  };
+  const lookupMain = async (addr) => {
+    const main = { ...(await bldAreaLookup(addr, { name: M.vendor_name })), queried: addr };
+    const lots = (ov && ov.lots) || [];
+    const bld = await bldWithLots(main, lots, M.vendor_name, { edited: true });
+    areaOvSet(M.vendor_name, { addr, lots });
+    commit({ queried: addr, ...bld });
+  };
+
+  wrap.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act]'); if (!b || ui.busy) return;
+    const act = b.dataset.act;
+    if (act === 'at-edit') { ui.editing = true; ui.err = ''; paint(); }
+    else if (act === 'at-cancel') { ui.editing = false; ui.err = ''; paint(); }
+    else if (act === 'at-use') run('main', () => lookupMain(b.dataset.addr));
+    else if (act === 'at-reset') {
+      run('reset', async () => {
+        areaOvSet(M.vendor_name, null);
+        try {
+          const main = M.site && M.site.cands ? await bldAreaForSite(M.site, M.vendor_name)
+            : { ...(await bldAreaLookup(visitAddress(report), { name: M.vendor_name })), queried: visitAddress(report) };
+          commit({ queried: main.queried, ...bldCombine([main]) });
+        } catch (x) {
+          commit({ err: x && x.message ? x.message : String(x), queried: (M.site && M.site.addr) || visitAddress(report) });
+        }
+      });
+    } else if (act === 'at-drop') {
+      const keep = parts.filter((p) => p.jibun !== b.dataset.jibun);
+      const lots = ((ov && ov.lots) || (B && B.lots) || []).filter((a) => a !== b.dataset.addr);
+      areaOvSet(M.vendor_name, { addr: ov && ov.addr ? ov.addr : null, lots });
+      commit({ queried: B.queried, ...bldCombine(keep, { edited: B.edited, lots, failedLots: [] }) });
+    }
+  });
+  wrap.addEventListener('submit', (e) => {
+    const f = e.target.closest('form[data-at]'); if (!f) return;
+    e.preventDefault();
+    if (ui.busy) return;
+    const addr = (f.querySelector('input') || {}).value ? f.querySelector('input').value.trim() : '';
+    if (f.dataset.at === 'main') {
+      if (!addr) { ui.err = '주소를 입력해 주세요'; paint(); return; }
+      run('main', () => lookupMain(addr));
+    } else if (f.dataset.at === 'lot') {
+      if (!addr) { ui.lotErr = '추가할 필지 주소를 입력해 주세요'; paint(); return; }
+      run('lot', async () => {
+        const part = { ...(await bldAreaLookup(addr, { name: M.vendor_name })), queried: addr };
+        if (parts.some((p) => p.jibun === part.jibun)) throw new Error(`이미 들어 있는 필지입니다 (${part.jibun})`);
+        const lots = [...(((ov && ov.lots) || (B && B.lots) || [])), addr];
+        areaOvSet(M.vendor_name, { addr: ov && ov.addr ? ov.addr : null, lots });
+        commit({ queried: B.queried, ...bldCombine([...parts, part], { edited: B.edited, lots, failedLots: [] }) });
+      });
+    }
+  });
+  paint();
+  return wrap;
+}
+
 function animateAreaCompare(box) {
   const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (reduce) { box.classList.add('go', 'still'); return; }
@@ -4567,10 +4783,10 @@ function render(report, opts = {}) {
 
   const blocks = el('div', 'blocks');
   blocks.appendChild(block('기업 기본정보', '', visible(report.basic), 'basic'));
-  blocks.appendChild(block('생산역량 · 인원', '', visible(report.capacity), 'prod'));
-  // 공장 규모 비교 — 건축물대장 면적을 한국콜마 기준점과 견준다(면적이 잡힌 경우에만)
-  const areaCmp = renderAreaCompare(report);
-  if (areaCmp) blocks.appendChild(areaCmp);
+  // 공장 면적은 '공장 면적' 탭에서 자세히 본다(실데이터일 때). 리포트에는 칸을 두지 않는다.
+  const areaTab = renderAreaTab(report);
+  blocks.appendChild(block('생산역량 · 인원', '',
+    visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod'));
   if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
   // 🧑‍🏭 채용공고 추적 — 재무 뒤(재무가 오래된 업체의 '현재 활동'을 보는 자리이므로 나란히)
   if (!excl.has('hiring')) {
@@ -4684,7 +4900,7 @@ function render(report, opts = {}) {
   root.appendChild(lg);
 
   // 리포트 내용을 '사전검증 리포트' 탭으로 감싸고 옆에 '근처 업체' 탭을 붙인다(nearby.js)
-  if (typeof mountReportTabs === 'function') mountReportTabs(root, report, actions);
+  if (typeof mountReportTabs === 'function') mountReportTabs(root, report, actions, areaTab);
 
   // 조회 리포트 저장 — 새로고침/재방문 시 복원용 (새 조회 전까지 유지)
   saveLastReport(report);
