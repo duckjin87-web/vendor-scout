@@ -248,6 +248,7 @@ a:hover { text-decoration: underline; }
 .gapfold > summary em { font-style: normal; color: var(--faint); opacity: .75; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .gapfold > summary:hover { color: var(--muted); }
+.gapfold > summary .gf-n { flex: none; white-space: nowrap; }   /* 빈칸 목록이 길어도 '확인 안 됨 N건'은 한 줄 */
 .gdot { flex: 0 0 auto; font-size: 9.5px; font-weight: 700; width: 15px; height: 15px; border-radius: 4px; display: grid; place-items: center; }
 /* CGMP 적합업소 행 음영 */
 .field.cgmp { background: var(--gA-bg); box-shadow: inset 3px 0 0 var(--gA); }
@@ -1574,3 +1575,6 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
   .at-head, .at-sec { padding: 12px; }
 }
 @media print { .at .nb-btn, .at .ac-form, .at-cands button { display: none !important; } }
+
+/* 대시보드 아래 기업정보·생산역량·재무 묶음 — 방문 전 확인필요와 간격 */
+.core-blocks { margin: 0 0 18px; }

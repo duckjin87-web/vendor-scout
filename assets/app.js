@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 159;
+const BUILD = 160;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3116,7 +3116,7 @@ function block(title, icon, fields, cat) {
   filled.forEach((f) => b.appendChild(fieldRow(f)));
   if (gaps.length) {
     const d = el('details', 'gapfold');
-    d.appendChild(el('summary', null, `확인 안 됨 ${gaps.length}건`
+    d.appendChild(el('summary', null, `<span class="gf-n">확인 안 됨 ${gaps.length}건</span>`
       + `<em>${esc(gaps.map((g) => g.key).join(' · '))}</em>`));
     gaps.forEach((f) => d.appendChild(fieldRow(f)));
     b.appendChild(d);
@@ -4700,7 +4700,7 @@ function render(report, opts = {}) {
   const allFields = [...report.basic, ...report.capacity, ...report.finance].filter(included);
   const gapTotal = allFields.filter((f) => f.data_gap).length;
 
-  // ── 화면 순서: 종합판정 → 방문 전 확인 필요 → 체크리스트 → 상세 블록 ──
+  // ── 화면 순서: 종합판정(대시보드) → 기업정보·생산역량·재무 → 방문 전 확인필요 → 그 밖의 상세 ──
   // 예전에는 등급 글자 하나와 '수집 필드 22 / 공백 5' 같은 집계가 맨 위였다. 그건 시스템의
   // 상태이지 업체에 대한 판단이 아니다. 방문 여부를 3분 안에 정하려면 '어떤 업체인가 →
   // 방문할 만한가 → 무엇이 걸리는가 → 가서 뭘 볼 것인가' 순으로 읽혀야 한다.
@@ -4715,6 +4715,17 @@ function render(report, opts = {}) {
     `조회 <b>${esc(qDate)}</b> · 스냅샷 v${m.version} · 출처 ${m.sources_used.length}종 · `
     + `수집 필드 ${allFields.length}${gapTotal ? ` · 공백 <b class="warn">${gapTotal}</b>` : ''}`
     + `${report.risk_flags.length ? ` · 리스크 <b class="warn">${report.risk_flags.length}</b>` : ''}`));
+
+  // 기업 기본정보 · 생산역량 · 재무 — 대시보드 바로 아래, '방문 전 확인필요' 위에 둔다.
+  // 확인사항을 읽기 전에 어떤 회사인지(규모·인원·재무)를 먼저 보게 하려는 것이다.
+  const core = el('div', 'blocks core-blocks');
+  core.appendChild(block('기업 기본정보', '', visible(report.basic), 'basic'));
+  // 공장 면적은 '공장 면적' 탭에서 자세히 본다(실데이터일 때). 리포트에는 칸을 두지 않는다.
+  const areaTab = renderAreaTab(report);
+  core.appendChild(block('생산역량 · 인원', '',
+    visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod'));
+  if (!excl.has('finance')) core.appendChild(financeBlock(report));
+  root.appendChild(core);
 
   // ✅ 방문 전 체크리스트 — 웹 기반(기사·채용·기술/제품) 실사 제안(실데이터일 때)
   //    심층분석 결과가 나중에 도착하면 갱신해야 하므로 id로 찾아 교체 가능하게 둔다.
@@ -4782,12 +4793,6 @@ function render(report, opts = {}) {
   if (!excl.has('news')) { const chkW = renderCheckWeb(report); if (chkW) root.appendChild(chkW); }
 
   const blocks = el('div', 'blocks');
-  blocks.appendChild(block('기업 기본정보', '', visible(report.basic), 'basic'));
-  // 공장 면적은 '공장 면적' 탭에서 자세히 본다(실데이터일 때). 리포트에는 칸을 두지 않는다.
-  const areaTab = renderAreaTab(report);
-  blocks.appendChild(block('생산역량 · 인원', '',
-    visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod'));
-  if (!excl.has('finance')) blocks.appendChild(financeBlock(report));
   // 🧑‍🏭 채용공고 추적 — 재무 뒤(재무가 오래된 업체의 '현재 활동'을 보는 자리이므로 나란히)
   if (!excl.has('hiring')) {
     const hb = renderHiring(report.hiring);
