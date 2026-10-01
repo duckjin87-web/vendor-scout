@@ -1578,3 +1578,11 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 
 /* 대시보드 아래 기업정보·생산역량·재무 묶음 — 방문 전 확인필요와 간격 */
 .core-blocks { margin: 0 0 18px; }
+
+/* 먼저 그린 리포트 — 느린 기관 자료를 기다리는 중 */
+.pendbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0 0 14px; padding: 9px 14px; font-size: 13px;
+  color: var(--text); background: var(--accent-soft); border: 1px solid var(--border); border-radius: 6px; }
+.pend-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: pendPulse 1.2s ease-in-out infinite; }
+@keyframes pendPulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .pend-dot { animation: none; } }
+@media print { .pendbar { display: none !important; } }

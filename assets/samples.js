@@ -789,6 +789,7 @@ function assembleLiveReport(name, corp, res) {
   // 장황한 상류 오류를 짧은 사유로 정규화 — "조회불가"/"자료 미제출" 등 간략 표기(사용자 요청)
   const briefErr = (msg) => {
     const m = String(msg || '');
+    if (/불러오는 중/.test(m)) return '불러오는 중…';   // 먼저 그린 리포트 — 도착하면 자동으로 채운다
     if (/미제출|없음|0건|미검색|미등록|미수록/.test(m) && !/HTTP|50\d|타임아웃|서버|실패|오류/.test(m)) return '자료 미제출/미등록';
     if (/50\d|서버 오류|API 서버|점검|과부하|일시적/.test(m)) return '조회불가 (제공기관 서버 오류)';
     if (/타임아웃|지연|deadline|abort/i.test(m)) return '조회불가 (응답 지연)';
