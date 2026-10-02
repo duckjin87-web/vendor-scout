@@ -1223,6 +1223,7 @@ function assembleLiveReport(name, corp, res) {
   const hiring = hireRaw && typeof analyzeHiring === 'function'
     ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs)
     : null;
+  if (hiring && hireRaw && hireRaw.contacts) hiring.contacts = hireRaw.contacts;   // 대표번호·메일(업체명 옆 표시)
 
   const flAll = R.finance && R.finance.ok ? listOf(R.finance.data, ['response.body.items.item', 'body.items']) : [];
   const byYear = new Map();

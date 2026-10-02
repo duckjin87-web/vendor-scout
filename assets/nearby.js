@@ -666,10 +666,124 @@ function nbLoadLeaflet() {
 }
 const nbCssVar = (n, fb) => (getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb);
 
+// ── 지도 엔진 ──
+// 프록시에 카카오 JavaScript 키(KAKAO_JS_KEY)가 있고 이 도메인이 카카오에 등록돼 있으면 카카오맵,
+// 아니면 오픈스트리트맵(Leaflet). 한 번 정하면 이 화면에서는 그대로 쓴다.
+let _nbEngineP = null;
+function nbMapEngine() {
+  if (_nbEngineP) return _nbEngineP;
+  _nbEngineP = (async () => {
+    try {
+      const r = await proxyOnlyGet('kakaoMapKey', {});
+      if (!r || !r.key) return 'leaflet';
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('카카오맵 로드 시간 초과')), 8000);
+        const sc = document.createElement('script');
+        sc.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(r.key)}&autoload=false`;
+        sc.onload = () => {
+          try { window.kakao.maps.load(() => { clearTimeout(t); resolve(); }); } catch (e) { clearTimeout(t); reject(e); }
+        };
+        sc.onerror = () => { clearTimeout(t); reject(new Error('카카오맵 SDK를 불러오지 못했습니다')); };
+        document.head.appendChild(sc);
+      });
+      return 'kakao';
+    } catch { return 'leaflet'; }      // 키 없음·도메인 미등록·차단 — 오픈스트리트맵으로
+  })();
+  return _nbEngineP;
+}
+function nbPanTo(st, v) {
+  if (st.kmap && window.kakao && window.kakao.maps) st.kmap.panTo(new window.kakao.maps.LatLng(v.lat, v.lng));
+  else if (st.map) st.map.panTo([v.lat, v.lng]);
+}
+
+// 카카오맵으로 그리기 — Leaflet 판과 같은 것(반경 링·기점·핀·이름표 겹침 피하기)을 카카오 객체로 그린다
+function nbDrawKakao(st, box) {
+  const K = window.kakao.maps;
+  const c = new K.LatLng(st.center.lat, st.center.lng);
+  if (!st.kmap || st.kmapBox !== box) {
+    box.innerHTML = '';
+    box.classList.add('kakao');
+    st.kmap = new K.Map(box, { center: c, level: 9 });
+    st.kmapBox = box;
+    st.kobjs = [];
+    st.kmap.addControl(new K.ZoomControl(), K.ControlPosition.RIGHT);
+    // 페이지를 스크롤하다 지도가 확대되는 일을 막는다 — 지도를 한 번 누른 뒤에만 휠 확대
+    st.kmap.setZoomable(false);
+    K.event.addListener(st.kmap, 'click', () => st.kmap.setZoomable(true));
+    box.addEventListener('mouseleave', () => st.kmap && st.kmap.setZoomable(false));
+    st.drawnRadius = null;
+  }
+  const map = st.kmap;
+  map.relayout();
+  (st.kobjs || []).forEach((o) => o.setMap(null));
+  st.kobjs = [];
+  const add = (o) => { o.setMap(map); st.kobjs.push(o); return o; };
+  const reg = nbCssVar('--pin-reg', '#1D4ED8');
+  add(new K.Circle({ center: c, radius: st.radius * 1000, strokeWeight: 1.5, strokeColor: reg, strokeOpacity: 0.55, strokeStyle: 'dash', fillColor: reg, fillOpacity: 0.05 }));
+  add(new K.Circle({ center: c, radius: st.radius * 500, strokeWeight: 1, strokeColor: reg, strokeOpacity: 0.35, strokeStyle: 'shortdash', fillOpacity: 0 }));
+  const node = (cls, html, w, h) => { const d = document.createElement('div'); d.className = cls; d.style.width = `${w}px`; d.style.height = `${h}px`; d.style.position = 'relative'; d.innerHTML = html; return d; };
+  const overlay = (pos, el, z) => add(new K.CustomOverlay({ position: pos, content: el, xAnchor: 0.5, yAnchor: 0.5, zIndex: z || 1 }));
+  const up = (km) => new K.LatLng(st.center.lat + km / 111.32, st.center.lng);
+  overlay(up(st.radius), node('nb-rlabel', `<span>${st.radius}km</span>`, 48, 18));
+  overlay(up(st.radius / 2), node('nb-rlabel half', `<span>${st.radius / 2}km</span>`, 48, 18));
+  if (st.drawnCenter !== `${st.center.lat},${st.center.lng}`) { st.drawnRadius = null; st.drawnCenter = `${st.center.lat},${st.center.lng}`; }
+  overlay(c, node('nb-origin-pin', `<span class="nb-dia"></span><span class="nb-plabel strong">${esc(st.vendorName)} · 기점</span>`, 18, 18), 1000);
+  if (st.drawnRadius !== st.radius) {
+    const dLat = st.radius / 111.32, dLng = st.radius / (111.32 * Math.cos(st.center.lat * Math.PI / 180));
+    map.setBounds(new K.LatLngBounds(new K.LatLng(st.center.lat - dLat, st.center.lng - dLng), new K.LatLng(st.center.lat + dLat, st.center.lng + dLng)), 8, 8, 8, 8);
+    st.drawnRadius = st.radius;
+  }
+  // 이름표 겹침 — Leaflet 판과 같은 상자 계산을 카카오 화면 좌표로
+  const proj = map.getProjection();
+  const pt = (lat, lng) => proj.containerPointFromCoords(new K.LatLng(lat, lng));
+  const vis = nbVisible(st).filter(nbPlaced);
+  const boxes = [];
+  const boxOf = (p, text, left, origin) => {
+    const w = Math.min(180, String(text).length * 12 + 4);
+    const x0 = origin ? p.x + 15 : left ? p.x - 10 - w : p.x + 10;
+    return { x0: x0 - 2, x1: x0 + w + 2, y0: p.y - 10, y1: p.y + 10 };
+  };
+  const hit = (b) => boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+  const cp = pt(st.center.lat, st.center.lng);
+  boxes.push(boxOf(cp, `${st.vendorName} · 기점`, false, true));
+  boxes.push({ x0: cp.x - 10, x1: cp.x + 10, y0: cp.y - 10, y1: cp.y + 10 });
+  vis.forEach((v) => { const q = pt(v.lat, v.lng); boxes.push({ x0: q.x - 7, x1: q.x + 7, y0: q.y - 7, y1: q.y + 7 }); });
+  const labelSide = new Map();
+  vis.slice().sort((a, b) => (b.id === st.sel) - (a.id === st.sel) || a.km - b.km).forEach((v) => {
+    const p = pt(v.lat, v.lng);
+    for (const left of [false, true]) {
+      const bx = boxOf(p, v.name, left);
+      if (!hit(bx)) { boxes.push(bx); labelSide.set(v.id, left ? 'left' : 'right'); return; }
+    }
+    if (v.id === st.sel) labelSide.set(v.id, 'left');
+  });
+  vis.forEach((v) => {
+    const on = v.id === st.sel;
+    const side = labelSide.get(v.id);
+    const label = side ? `<span class="nb-plabel${on ? ' strong' : ''}${side === 'left' ? ' left' : ''}">${esc(v.name)}</span>` : '';
+    const el2 = node('nb-pinwrap', `<span class="nb-pin ${nbCls(v)}${on ? ' on' : ''}"></span>${label}`, 32, 32);
+    el2.title = v.name; el2.style.cursor = 'pointer';
+    el2.addEventListener('click', (e) => { e.stopPropagation(); nbSelect(st, v.id, { fromMap: true }); });
+    overlay(new K.LatLng(v.lat, v.lng), el2, on ? 900 : 10);
+  });
+}
+
 function nbDrawMap(st) {
   const box = st.pane && st.pane.querySelector('.nb-map');
   if (!box || st.pane.hidden) return;
-  if (!st.center) { if (st.layer) st.layer.clearLayers(); return; }
+  if (!st.center) { if (st.layer) st.layer.clearLayers(); (st.kobjs || []).forEach((o) => o.setMap(null)); return; }
+  if (!st.engine) {
+    box.classList.add('loading');
+    nbMapEngine().then((e) => { st.engine = e; nbDrawMap(st); });
+    return;
+  }
+  if (st.engine === 'kakao') {
+    box.classList.remove('loading');
+    try { nbDrawKakao(st, box); return; } catch (e) {
+      // 카카오 지도가 그리다 실패하면(키 권한·도메인 문제) 이 화면은 오픈스트리트맵으로 바꾼다
+      st.engine = 'leaflet'; st.kmap = null; box.innerHTML = ''; box.classList.remove('kakao');
+    }
+  }
   if (!window.L) {
     box.classList.add('loading');
     nbLoadLeaflet().then(() => nbDrawMap(st)).catch((e) => { box.innerHTML = `<div class="nb-empty err">${esc(e.message)}</div>`; });
@@ -755,7 +869,7 @@ function nbSelect(st, id, opts = {}) {
   nbDrive(st, v);                                        // 고른 업체만 실측 이동시간을 묻는다
   if (opts.quiet) return;
   nbPaint(st);
-  if (v && st.map && !opts.fromMap && nbPlaced(v)) st.map.panTo([v.lat, v.lng]);
+  if (v && !opts.fromMap && nbPlaced(v)) nbPanTo(st, v);
   if (opts.fromMap) {
     const row = st.pane.querySelector(`[data-row="${CSS.escape(id)}"]`);
     if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -842,7 +956,7 @@ function nbOpen(pane, report) {
     nbStates.set(vid, st);
   }
   st.report = report;
-  if (st.pane !== pane) { st.pane = pane; st.map = null; pane.innerHTML = ''; nbBind(st); }
+  if (st.pane !== pane) { st.pane = pane; st.map = null; st.kmap = null; pane.innerHTML = ''; nbBind(st); }
   if (!getProxy()) {
     pane.innerHTML = '<div class="nb"><div class="nb-empty">근처 업체는 실데이터 연결(프록시) 상태에서만 볼 수 있습니다 — 우측 상단 실데이터 연결을 먼저 해 주세요.</div></div>';
     return;
@@ -864,7 +978,18 @@ function mountReportTabs(root, report, actions, areaEl) {
   const bar = el('div', 'rtabs');
   bar.setAttribute('role', 'tablist');
   bar.setAttribute('aria-label', '리포트 보기');
-  bar.innerHTML = tabs.map((t) => `<button type="button" role="tab" class="rtab" data-tab="${t.id}" id="rtab-${t.id}" aria-controls="rpane-${t.id}">${t.label}</button>`).join('');
+  bar.innerHTML = tabs.map((t) => `<button type="button" role="tab" class="rtab" data-tab="${t.id}" id="rtab-${t.id}" aria-controls="rpane-${t.id}">${t.label}</button>`).join('')
+    + '<span class="rtab-ink" aria-hidden="true"></span>';
+  const ink = bar.querySelector('.rtab-ink');
+  // 밑줄을 고른 탭 아래로 옮긴다(첫 그림에서는 미끄러지지 않고 바로 놓는다)
+  const placeInk = (instant) => {
+    const on = bar.querySelector('.rtab[aria-selected="true"]');
+    if (!on || !ink) return;
+    if (instant) ink.style.transition = 'none';
+    ink.style.width = `${on.offsetWidth}px`;
+    ink.style.transform = `translateX(${on.offsetLeft}px)`;
+    if (instant) { void ink.offsetWidth; ink.style.transition = ''; }
+  };
   const pane = (id, cls) => { const p = el('div', cls); p.id = `rpane-${id}`; p.setAttribute('role', 'tabpanel'); p.setAttribute('aria-labelledby', `rtab-${id}`); return p; };
   const panes = { report: pane('report', 'tabpane'), nearby: pane('nearby', 'tabpane nbpane') };
   if (areaEl) { panes.area = pane('area', 'tabpane atpane'); panes.area.appendChild(areaEl); }
@@ -872,16 +997,32 @@ function mountReportTabs(root, report, actions, areaEl) {
   while (n) { const nx = n.nextSibling; panes.report.appendChild(n); n = nx; }
   root.appendChild(bar);
   tabs.forEach((t) => root.appendChild(panes[t.id]));
+  let first = true;
   const show = (tab) => {
     if (!panes[tab]) tab = 'report';
+    const prev = _nbActiveTab.get(vid);
     _nbActiveTab.set(vid, tab);
     bar.querySelectorAll('.rtab').forEach((b) => {
       const on = b.dataset.tab === tab;
       b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1;
     });
     tabs.forEach((t) => { panes[t.id].hidden = t.id !== tab; });
+    placeInk(first);
+    // 탭을 바꿀 때만 새 내용이 살짝 떠오르며 나타난다(처음 그릴 때·같은 탭은 그대로)
+    if (!first && prev !== tab) {
+      const p = panes[tab];
+      p.classList.remove('enter'); void p.offsetWidth; p.classList.add('enter');
+      // 탭 줄이 상단에 붙은 채로 바꾸면 새 탭의 처음부터 보이게 올린다
+      if (bar.classList.contains('stuck')) {
+        const topH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--topbar-h')) || 0;
+        window.scrollTo({ top: window.scrollY + bar.getBoundingClientRect().top - topH, behavior: 'auto' });
+      }
+    }
+    first = false;
     if (tab === 'nearby') nbOpen(panes.nearby, report);
   };
+  // 탭 이름(공장 면적 평수 등)이나 화면 폭이 바뀌면 밑줄 길이를 다시 맞춘다
+  if (window.ResizeObserver) new ResizeObserver(() => placeInk(true)).observe(bar);
   bar.addEventListener('click', (e) => { const b = e.target.closest('.rtab'); if (b) show(b.dataset.tab); });
   bar.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;

@@ -322,6 +322,9 @@ export default async function handler(req) {
     const service = url.searchParams.get('service');
     const env = process.env;
 
+    // 카카오맵 지도(JavaScript SDK)용 키. JavaScript 키는 원래 브라우저에서 쓰는 공개 키라 내려 준다 —
+    // 대신 카카오 개발자 콘솔에 등록한 도메인에서만 동작한다. 저장소에는 두지 않고 Vercel 환경변수에만 둔다.
+    if (service === 'kakaoMapKey')     return env.KAKAO_JS_KEY ? jsonRes({ key: env.KAKAO_JS_KEY }) : jsonRes({ error: 'KAKAO_JS_KEY 미설정 — 오픈스트리트맵으로 표시' }, 404);
     if (service === 'naverNews')       return handleNaver(url, env, 'news');
     if (service === 'naverWeb')        return handleNaver(url, env, 'webkr');
     if (service === 'naverLocal')      return handleNaver(url, env, 'local');

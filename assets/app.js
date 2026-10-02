@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 163;
+const BUILD = 164;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1154,6 +1154,30 @@ function domainAffinity(korName, host) {
   return false;
 }
 
+// ── 대표번호 · 대표메일 ──
+// 확정된 홈페이지 본문과 채용사이트(기업정보·공고)에서 읽는다. 채용사이트 고객센터(15xx 등)와
+// 사이트 자체 메일(help@saramin…)은 회사 연락처가 아니라서 버린다. 팩스는 '전화/TEL' 표시가 없어 걸리지 않는다.
+const CONTACT_TEL_RE = /(?:대표\s*(?:전화|번호)|전화\s*(?:번호)?|연락처|TEL|Tel|T\s*[.:)]|☎|📞)\s*[:.)]?\s*(0\d{1,2}[-.)\s]?\d{3,4}[-.\s]?\d{4})(?!\d)/;
+const CONTACT_MAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+const CONTACT_MAIL_JUNK = /(saramin|jobkorea|incruit|catch\.co|albamon|work\.go|worknet|jobplanet|wanted|peoplenjob|superookie|example\.|sentry|wixpress|imweb\.me$|cafe24\.com$|godo\.co|domain\.|yourmail|email\.com$|\.(png|jpe?g|gif|webp|svg)$|noreply|no-reply|webmaster@)/i;
+function fmtTel(raw) {
+  const d = String(raw || '').replace(/\D/g, '');
+  if (!/^0/.test(d) || d.length < 9 || d.length > 11) return null;
+  if (d.startsWith('02')) return d.length === 9 ? `02-${d.slice(2, 5)}-${d.slice(5)}` : `02-${d.slice(2, 6)}-${d.slice(6)}`;
+  return d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+}
+function extContacts(text, html) {
+  const T = String(text || '').replace(/\s+/g, ' ');
+  const H = String(html || '');
+  const telLink = H.match(/href=["']tel:([0-9+\-\s().]{8,20})["']/i);
+  let tel = telLink ? fmtTel(telLink[1].replace(/^\+?82/, '0')) : null;
+  if (!tel) { const m = T.match(CONTACT_TEL_RE); if (m) tel = fmtTel(m[1]); }
+  const mailLink = H.match(/href=["']mailto:([^"'?\s]+)/i);
+  const mails = [...(mailLink ? [decodeURIComponent(mailLink[1])] : []), ...(T.match(CONTACT_MAIL_RE) || [])]
+    .map((e) => e.replace(/[.,;:]+$/, '').toLowerCase()).filter((e) => !CONTACT_MAIL_JUNK.test(e));
+  return { tel, email: mails[0] || null };
+}
+
 async function findHomepage(nm, corp, hpHints) {
   if (!getProxy()) return null;
   // 공장등록부에 홈페이지가 있으면 그게 공식 확정 — 웹검색보다 신뢰
@@ -1287,6 +1311,8 @@ async function findHomepage(nm, corp, hpHints) {
         : '대조할 후보가 없습니다'));
   // 확정 사이트에서만 인증·생산능력 추출(오매칭 사이트 정보 방지). 이미 받은 HTML 재사용.
   if (proposed) { try { proposed.extract = await extractSiteInfo(proposed.url, proposed.html); } catch { /* 무시 */ } }
+  // 대표번호·대표메일 — 확정 사이트에서만(남의 사이트 연락처를 붙이지 않게)
+  if (proposed) { try { proposed.contact = extContacts(htmlToText(proposed.html), proposed.html); } catch { /* 무시 */ } }
   scored.forEach((c) => { delete c.html; }); // 원문 HTML은 저장 용량 커서 제거
   return { proposed, candidates: scored, reason, skipped, tried: cands.length };
 }
@@ -1511,11 +1537,14 @@ async function bldAreaLookup(addr, opts = {}) {
     src: recap ? '총괄표제부+표제부' : '표제부',
   };
 }
-// 비교 기준 — 한국콜마 세종. 공장이 여러 필지·주소에 걸쳐 있어 한 지번만 보면 실제보다 한참 작다.
-// 방문거리 기준점 주소에 더해, 공식 기록에 나온 한국콜마(주) 주소를 모두 합산한다:
+// 비교 기준 — 한국콜마 세종 기준점(산단길 22-17) 한 곳의 건축물대장 건평.
+// 예전에는 노장공단길 23·덕고개길 12-11까지 세 주소를 더했는데, 기준점은 방문거리와 같은
+// 산단길 22-17 하나로 맞춘다(사용자 요청). 여러 주소를 다시 더하려면 아래 배열에 넣으면 된다.
+// (참고: 예전 합산 대상이었던 주소들)
 //   산단공 공장등록 소재지(노장공단길 23) · 금융위 본점 주소(덕고개길 12-11)
 // 같은 지번은 한 번만 센다. 결과는 30일간 저장해 둔다(자주 바뀌지 않는다).
-const KOLMAR_BLD_ADDRS = [KOLMAR_ADDR, '세종특별자치시 전동면 노장공단길 23', '세종특별자치시 전의면 덕고개길 12-11'];
+//   산단공 공장등록 소재지 '세종특별자치시 전동면 노장공단길 23' · 금융위 본점 '세종특별자치시 전의면 덕고개길 12-11'
+const KOLMAR_BLD_ADDRS = [KOLMAR_ADDR];
 const REF_BLD_KEY = 'vs_ref_bld2';
 try { localStorage.removeItem('vs_ref_bld'); } catch { /* 옛 단일 지번 캐시 */ }
 async function refBldArea() {
@@ -2653,6 +2682,7 @@ async function hiringTrace(nm) {
   // 접속 결과를 남긴다 — 지금까지 실패를 조용히 삼켜, 값이 안 나온 게 차단 때문인지
   // 페이지에 정보가 없어서인지 구분할 수 없었다.
   const extDiag = [];
+  const contacts = { tels: [], emails: [] };
   const pages = await mapLimit(targets, 3, async (p) => {
     try {
       const r = await proxyOnlyGet('fetchPage', { url: p.link });
@@ -2680,6 +2710,12 @@ async function hiringTrace(nm) {
     if (hh) { hpHints.push(hh); found.push('홈페이지'); }
     const wa = extWorkAddr(txt);
     if (wa) { workAddrs.push(wa); found.push('근무지'); }
+    // 연락처 — 기업정보·공고 페이지에서(재무 탭은 숫자표라 건너뛴다)
+    if (pg.kind !== 'finance') {
+      const ct = extContacts(txt, pg.text);
+      if (ct.tel) { contacts.tels.push({ v: ct.tel, host: pg.host, link: pg.link }); found.push('전화'); }
+      if (ct.email) { contacts.emails.push({ v: ct.email, host: pg.host, link: pg.link }); found.push('메일'); }
+    }
     // 페이지에서 찾은 날짜를 해당 공고에 돌려준다 — 스니펫에 없던 등록일이 여기 있다.
     // 단 기업정보 페이지는 공고가 아니다. 거기 있는 날짜는 설립일·사원수 기준일이라
     // 공고 시점으로 세면 안 된다(씨앤티드림: 설립 2011.09과 기준일 2017.04이 공고 날짜로
@@ -2739,7 +2775,7 @@ async function hiringTrace(nm) {
   // 사원수는 기준일이 있는 값을 우선한다(페이지 > 스니펫)
   heads.sort((a, b) => (b.asOf ? 1 : 0) - (a.asOf ? 1 : 0) || (b.from === 'page' ? 1 : 0) - (a.from === 'page' ? 1 : 0));
   return { posts, heads, extFin: finRows, extProfile: reconcileProfile(extProf),
-    hpHints: [...new Set(hpHints)], workAddrs: [...new Set(workAddrs)], extDiag };
+    hpHints: [...new Set(hpHints)], workAddrs: [...new Set(workAddrs)], extDiag, contacts };
 }
 
 // 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
@@ -3889,9 +3925,10 @@ function renderVerdict(report) {
 
   const box = el('div', 'verdict v-' + v.tone);
   let html = `<div class="vd-head">`
-    + `<div class="vd-badge badge-${esc(g)}"><b>${esc(g)}</b><span>종합판정</span></div>`
+    + `<button type="button" class="vd-badge badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기"><b>${esc(g)}</b><span>종합판정 ⓘ</span></button>`
     + `<div class="vd-title"><h2>${esc(m.vendor_name || '')}</h2>`
-    + `<div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div></div>`
+    + `<div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div>`
+    + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
     + `<div class="vd-verd">${esc(v.label)}</div></div>`;
   // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
   if (ups.length || downs.length) {
@@ -3969,7 +4006,93 @@ function renderVerdict(report) {
     + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')
     + `</div>`;
   box.innerHTML = html;
+  box.querySelector('[data-act="verdict-why"]').addEventListener('click', () => openVerdictWhy(report));
   return box;
+}
+
+// 업체명 옆 대표번호·대표메일 — 홈페이지 > 채용사이트 > 공장등록 순. 여러 곳에서 같은 값이 나오면 그만큼 믿을 만하다.
+function contactOf(report) {
+  const hp = report._homepage && report._homepage.proposed ? report._homepage.proposed : null;
+  const hc = report.hiring && report.hiring.contacts ? report.hiring.contacts : { tels: [], emails: [] };
+  const fct = ((report.capacity || []).find((x) => x.key === '공장 연락처' && x.value) || {});
+  const pick = (hpV, list, extra) => {
+    const all = [];
+    if (hpV) all.push({ v: hpV, src: '홈페이지', link: hp.url });
+    (list || []).forEach((x) => all.push({ v: x.v, src: '채용사이트', link: x.link }));
+    if (extra) all.push(extra);
+    if (!all.length) return null;
+    const n = (v) => all.filter((x) => x.v === v).length;
+    const top = all[0];
+    const srcs = [...new Set(all.filter((x) => x.v === top.v).map((x) => x.src))];
+    return { v: top.v, srcs, n: n(top.v) };
+  };
+  const fctTel = fct.value ? fmtTel(fct.value) : null;
+  return {
+    tel: pick(hp && hp.contact && hp.contact.tel, hc.tels, fctTel ? { v: fctTel, src: '공장등록' } : null),
+    email: pick(hp && hp.contact && hp.contact.email, hc.emails, null),
+  };
+}
+function contactHtml(report) {
+  const c = contactOf(report);
+  const item = (x, kind) => {
+    if (!x) return '';
+    const href = kind === 'tel' ? `tel:${x.v.replace(/\D/g, '')}` : `mailto:${x.v}`;
+    return `<a class="vc-${kind}" href="${esc(href)}"><span aria-hidden="true">${kind === 'tel' ? '☎' : '✉'}</span> ${esc(x.v)}</a><small>${esc(x.srcs.join('·'))}</small>`;
+  };
+  const parts = [item(c.tel, 'tel'), item(c.email, 'mail')].filter(Boolean);
+  if (parts.length) return parts.join('<i class="vd-csep" aria-hidden="true">·</i>');
+  return report.meta && report.meta.live && report._homepage === undefined ? '<small class="vd-cwait">대표번호·메일 찾는 중…</small>' : '';
+}
+function refreshContact(report) {
+  const box = document.querySelector('[data-vd-contact]');
+  if (box && currentReport === report) box.innerHTML = contactHtml(report);
+}
+
+// 종합판정 판단 기준 — 등급이 어떻게 나왔는지 이 업체의 실제 숫자로 보여 준다.
+// 계산은 samples.js assembleLiveReport와 같다: 값이 확인된 항목들의 신뢰도 등급(A~D)을
+// 좋은 순으로 세웠을 때 가운데 값. 값이 없는 항목(공백)은 셈에서 빠진다.
+function openVerdictWhy(report) {
+  const m = report.meta || {};
+  const g = m.overall_grade || 'D';
+  const all = [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])];
+  const got = all.filter((x) => !x.data_gap);
+  const gaps = all.length - got.length;
+  const cnt = { A: 0, B: 0, C: 0, D: 0 };
+  got.forEach((x) => { if (cnt[x.grade] != null) cnt[x.grade]++; });
+  const { ups, downs } = verdictReason(report);
+  const mid = got.length ? Math.floor(got.length / 2) + 1 : 0;
+  const bar = got.length
+    ? ['A', 'B', 'C', 'D'].filter((k) => cnt[k]).map((k) => `<span class="vw-seg badge-${k}" style="flex:${cnt[k]}">${k} ${cnt[k]}</span>`).join('')
+    : '<span class="vw-seg none">확인된 항목 없음</span>';
+  const rows = ['A', 'B', 'C', 'D'].map((k) => `<tr class="${k === g ? 'on' : ''}"><td><b class="vw-g badge-${k}">${k}</b></td><td>${esc(VERDICT[k].label)}</td>`
+    + `<td>${esc(GRADE_LABEL[k])}${k === 'D' ? '' : ' 위주'}</td></tr>`).join('');
+  const dlg = document.createElement('dialog');
+  dlg.className = 'vwhy';
+  dlg.setAttribute('aria-labelledby', 'vwhyTitle');
+  dlg.innerHTML = `<div class="vwhy-in">`
+    + `<div class="vwhy-head"><h3 id="vwhyTitle">종합판정 <b class="vw-g badge-${esc(g)}">${esc(g)}</b> ${esc((VERDICT[g] || VERDICT.D).label)}</h3>`
+    + `<button type="button" class="vwhy-x" aria-label="닫기">✕</button></div>`
+    + `<section><h4>어떻게 정하나</h4><p>리포트에서 <b>값이 확인된 항목</b>의 신뢰도 등급(A~D)을 좋은 순으로 세웠을 때 `
+    + `<b>가운데 등급</b>이 종합판정입니다. 값이 없는 항목은 셈에서 뺍니다. `
+    + (got.length ? `이 업체는 확인된 항목 ${got.length}개 중 ${mid}번째 등급입니다.` : '이 업체는 확인된 항목이 하나도 없어 D입니다.') + `</p>`
+    + `<div class="vw-bar">${bar}</div>`
+    + `<p class="vw-note">이 업체: A ${cnt.A} · B ${cnt.B} · C ${cnt.C} · D ${cnt.D}${gaps ? ` · 공백 ${gaps}(제외)` : ''} → 가운데 값 <b>${esc(g)}</b></p></section>`
+    + `<section><h4>등급별 판정</h4><table class="vw-tbl"><thead><tr><th>등급</th><th>판정</th><th>항목 출처</th></tr></thead><tbody>${rows}</tbody></table>`
+    + `<p class="vw-note">항목 등급 — A 공식 API(식약처·금융위·국세청 등 원부 자료) · B 공공DB 간접(국민연금·실측 경로 등) · C 추정·외부 자료 · D 데이터 공백</p></section>`
+    + `<section><h4>이 업체에서 본 것</h4>`
+    + (ups.length ? `<div class="vw up"><i>확인됨</i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
+    + (downs.length ? `<div class="vw down"><i>확인필요</i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
+    + (!ups.length && !downs.length ? '<p class="vw-note">표시할 근거가 없습니다.</p>' : '')
+    + `</section>`
+    + `<p class="vw-caution">⚠ 종합판정은 <b>자료를 얼마나 믿을 수 있는지</b>로 정해집니다. 회수 이력·자본잠식 같은 위험 신호는 등급을 직접 낮추지 않으니, `
+    + `<b>확인필요</b>와 아래 <b>방문 전 확인필요</b> 표를 함께 보세요.</p>`
+    + `</div>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); };
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.querySelector('.vwhy-x').addEventListener('click', close);
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });   // 바깥(배경) 누르면 닫힘
+  if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
 }
 
 // ── ⚠ 방문 전 반드시 확인 ──
@@ -4449,7 +4572,7 @@ function renderAreaCompare(report) {
   const nm = esc(stripCorp(M.vendor_name || '') || '이 업체');
   const self = /한국콜마/.test(stripCorp(M.vendor_name || ''));
   let REF = null;
-  const refFoot = (R) => (R ? `한국콜마 기준: ${R.parts.length}개 주소 합산 — ${R.parts.map((p) => `${esc(p.jibun)} ${toPy(p.arch).toLocaleString()}평`).join(' · ')}`
+  const refFoot = (R) => (R ? `한국콜마 기준: ${R.parts.length > 1 ? `${R.parts.length}개 주소 합산 — ` : ''}${R.parts.map((p) => `${esc(p.addr)} (대장 지번 ${esc(p.jibun)}) 건축면적 ${toPy(p.arch).toLocaleString()}평`).join(' · ')}`
     + (R.failed && R.failed.length ? ` (조회 안 됨: ${R.failed.map((f) => esc(f.addr)).join(', ')})` : '') : '');
 
   const paint = () => {
@@ -4459,7 +4582,7 @@ function renderAreaCompare(report) {
     // ① 조회한 업체가 한국콜마 자신 — 비교할 대상이 아니라 기준이다
     if (self) {
       body.innerHTML = R
-        ? `<div class="ac-head"><b>${nm}</b>은(는) 비교 기준 회사입니다 — 세종 사업장 합산 건축면적 <em>약 ${toPy(R.arch).toLocaleString()}평</em>`
+        ? `<div class="ac-head"><b>${nm}</b>은(는) 비교 기준 회사입니다 — 기준점(산단길 22-17) 건축면적 <em>약 ${toPy(R.arch).toLocaleString()}평</em>`
           + (R.tot ? ` · 연면적 약 ${toPy(R.tot).toLocaleString()}평` : '') + '</div>'
           + `<div class="ac-foot">${refFoot(R)}. 다른 업체를 조회하면 이 값과 3D로 비교합니다.</div>`
         : `<div class="ac-head"><b>${nm}</b>은(는) 비교 기준 회사입니다.</div><div class="ac-foot">한국콜마 건축물대장을 불러오지 못했습니다.</div>`;
@@ -4571,10 +4694,16 @@ function renderAreaTab(report) {
     const cs = (M.site && M.site.cands) || [];
     if (!cs.length) return '';
     const ST = { pick: '선정', alt: '같은 지역', partial: '시·군까지만', out: '공장 지역 밖' };
-    return `<div class="at-sec"><h4>후보 주소 <small>공장 소재지 선정 때 대조한 주소 — 눌러서 그 주소로 조회</small></h4><ul class="at-cands">`
-      + cs.map((c) => `<li class="${c.state}"><span class="at-cl">${esc(c.label)}</span><span class="at-ca">${esc(c.addr)}</span><span class="at-cs">${ST[c.state] || ''}</span>`
-        + (c.full && c.addr !== curAddr ? `<button type="button" class="nb-btn sm" data-act="at-use" data-addr="${esc(c.addr)}"${ui.busy ? ' disabled' : ''}>이 주소로 조회</button>` : '')
-        + '</li>').join('') + '</ul></div>';
+    const row = (c) => `<li class="${c.state}"><span class="at-cl">${esc(c.label)}</span><span class="at-ca">${esc(c.addr)}</span><span class="at-cs">${ST[c.state] || ''}</span>`
+      + (c.full && c.addr !== curAddr ? `<button type="button" class="nb-btn sm" data-act="at-use" data-addr="${esc(c.addr)}"${ui.busy ? ' disabled' : ''}>이 주소로 조회</button>` : '')
+      + '</li>';
+    // 선정 주소만 펼쳐 두고 나머지는 접는다 — 필요할 때 열어서 다른 주소로 조회
+    const pick = cs.filter((c) => c.state === 'pick'), rest = cs.filter((c) => c.state !== 'pick');
+    return `<div class="at-sec"><h4>후보 주소 <small>공장 소재지 선정 때 대조한 주소</small></h4>`
+      + `<ul class="at-cands">${pick.map(row).join('')}</ul>`
+      + (rest.length ? `<details class="at-more"${ui.candOpen ? ' open' : ''}><summary>다른 후보 주소 ${rest.length}곳 보기 <small>눌러서 그 주소로 조회</small></summary>`
+        + `<ul class="at-cands">${rest.map(row).join('')}</ul></details>` : '')
+      + '</div>';
   };
   const sumHtml = () => {
     if (!B) {
@@ -4666,6 +4795,7 @@ function renderAreaTab(report) {
     commit({ queried: addr, ...bld });
   };
 
+  wrap.addEventListener('toggle', (e) => { if (e.target.classList && e.target.classList.contains('at-more')) ui.candOpen = e.target.open; }, true);
   wrap.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]'); if (!b || ui.busy) return;
     const act = b.dataset.act;
@@ -4968,8 +5098,8 @@ function render(report, opts = {}) {
           hints) });
       }
       report._hpP
-        .then((hp) => { report._homepage = hp || null; if (hpBox.isConnected) renderHomepageInto(hpBox, report._homepage); if (currentReport === report) saveLastReport(report); })
-        .catch(() => { report._homepage = null; if (hpBox.isConnected) renderHomepageInto(hpBox, null); if (currentReport === report) saveLastReport(report); });
+        .then((hp) => { report._homepage = hp || null; if (hpBox.isConnected) renderHomepageInto(hpBox, report._homepage); refreshContact(report); if (currentReport === report) saveLastReport(report); })
+        .catch(() => { report._homepage = null; if (hpBox.isConnected) renderHomepageInto(hpBox, null); refreshContact(report); if (currentReport === report) saveLastReport(report); });
     }
     // 🔬 홈페이지 심층분석 — 버튼 실행(비용/시간 소요). 결과 캐시.
     const sdBox = el('div', 'sdbox');
@@ -5211,7 +5341,24 @@ function lookup(name, bno) {
   render(report);
 }
 
+// 고정 머리줄 높이 → 리포트 탭 줄이 그 바로 아래에 붙도록(--topbar-h). 탭 줄이 붙으면 그림자를 준다.
+function trackStickyBars() {
+  const tb = document.querySelector('.topbar');
+  const setH = () => document.documentElement.style.setProperty('--topbar-h', `${tb ? tb.offsetHeight : 0}px`);
+  setH();
+  if (tb && window.ResizeObserver) new ResizeObserver(setH).observe(tb);
+  const onScroll = () => {
+    const bar = document.querySelector('.rtabs');
+    if (!bar) return;
+    const topH = tb ? tb.offsetHeight : 0;
+    bar.classList.toggle('stuck', bar.getBoundingClientRect().top <= topH + 0.5 && window.scrollY > 0);
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  trackStickyBars();
   loadStaticIndex(); // 식약처 실데이터 인덱스 미리 로드 (있으면)
 
   // ?proxy= 로 들어오면 저장 (프록시 자동 연결)

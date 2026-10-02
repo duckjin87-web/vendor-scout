@@ -1206,11 +1206,27 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 :root[data-theme="dark"] { --pin-reg: #6ea0ff; --pin-new: #f0a050; --pin-new-bg: #3a2610; --pin-new-ink: #f5c28a; --pin-unk: #6b7482; --nb-ink: #e6e9ee; }
 
 /* 리포트 탭 */
-.rtabs { display: flex; gap: 22px; margin: 4px 0 16px; border-bottom: 1px solid var(--rule); }
-.rtab { font: inherit; font-size: 15px; font-weight: 600; color: var(--muted); background: none; border: 0;
-  border-bottom: 2px solid transparent; padding: 10px 2px 11px; margin-bottom: -1px; cursor: pointer; }
+/* 스크롤해도 탭 줄은 상단(고정 머리줄 바로 아래)에 붙어 있는다. --topbar-h는 app.js가 실제 높이로 맞춘다 */
+.rtabs { display: flex; gap: 22px; margin: 4px 0 16px; border-bottom: 1px solid var(--rule); position: sticky; top: var(--topbar-h, 61px); z-index: 9;
+  background: var(--bg); overflow-x: auto; scrollbar-width: none; }
+.rtabs::-webkit-scrollbar { display: none; }
+.rtabs.stuck { box-shadow: 0 6px 10px -8px rgba(0, 0, 0, .25); }
+.rtab { font: inherit; font-size: 15px; font-weight: 600; color: var(--muted); background: none; border: 0; white-space: nowrap;
+  border-bottom: 2px solid transparent; padding: 10px 2px 11px; margin-bottom: -1px; cursor: pointer;
+  transition: color .2s ease, transform .15s ease; }
 .rtab:hover { color: var(--text); }
-.rtab[aria-selected="true"] { color: var(--text); font-weight: 800; border-bottom-color: var(--text); }
+.rtab:active { transform: scale(.96); }
+.rtab[aria-selected="true"] { color: var(--text); font-weight: 800; }
+/* 고른 탭 아래 밑줄이 옆 탭으로 미끄러져 간다 */
+.rtab-ink { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: var(--text); border-radius: 2px;
+  transition: transform .28s cubic-bezier(.3, .7, .2, 1), width .28s cubic-bezier(.3, .7, .2, 1); pointer-events: none; }
+.tabpane.enter { animation: paneIn .28s ease both; }
+@keyframes paneIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .rtab-ink { transition: none; }
+  .tabpane.enter { animation: none; }
+}
+@media print { .rtabs { position: static; box-shadow: none; } .rtab-ink { display: none; } }
 .rtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .tabpane[hidden] { display: none !important; }
 
@@ -1586,3 +1602,47 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 @keyframes pendPulse { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .pend-dot { animation: none; } }
 @media print { .pendbar { display: none !important; } }
+
+/* 공장 면적 — 선정 외 후보 주소는 접어 둔다 */
+.at-more { margin-top: 6px; border-top: 1px dashed var(--border); }
+.at-more > summary { cursor: pointer; padding: 8px 0 4px; font-size: 13px; font-weight: 700; color: var(--accent); list-style: none; }
+.at-more > summary::-webkit-details-marker { display: none; }
+.at-more > summary::before { content: '▸ '; display: inline-block; transition: transform .15s; }
+.at-more[open] > summary::before { transform: rotate(90deg); }
+.at-more > summary small { font-weight: 500; color: var(--muted); margin-left: 6px; }
+
+/* 종합판정 배지 — 눌러서 판단 기준 보기 */
+button.vd-badge { font: inherit; color: inherit; cursor: pointer; transition: transform .12s ease, box-shadow .12s ease; }
+button.vd-badge:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
+button.vd-badge:active { transform: scale(.96); }
+button.vd-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.vwhy { border: 1px solid var(--border); border-radius: 10px; padding: 0; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px);
+  background: var(--panel); color: var(--text); box-shadow: 0 20px 50px rgba(0, 0, 0, .25); }
+.vwhy::backdrop { background: rgba(10, 14, 20, .45); }
+.vwhy[open] { animation: vwhyIn .2s ease both; }
+@keyframes vwhyIn { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .vwhy[open] { animation: none; } }
+.vwhy-in { padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+.vwhy-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.vwhy-head h3 { margin: 0; font-size: 17px; font-weight: 800; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vwhy-x { font: inherit; font-size: 16px; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; flex: none; }
+.vwhy section h4 { margin: 0 0 6px; font-size: 13.5px; font-weight: 800; }
+.vwhy section p { margin: 0; font-size: 13px; line-height: 1.6; }
+.vw-g { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 22px; padding: 0 6px; border-radius: 4px; font-size: 13px; font-weight: 800; border: 1px solid currentColor; }
+.vw-bar { display: flex; gap: 2px; margin: 10px 0 6px; height: 24px; border-radius: 5px; overflow: hidden; }
+.vw-seg { display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 800; min-width: 36px; border: 1px solid currentColor; }
+.vw-seg.none { flex: 1; color: var(--muted); border-style: dashed; }
+.vw-note { color: var(--muted); font-size: 12.5px !important; margin-top: 6px !important; }
+.vw-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.vw-tbl th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 700; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.vw-tbl td { padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+.vw-tbl tr.on td { background: var(--accent-soft); font-weight: 700; }
+.vw-caution { margin: 0; font-size: 12.5px; line-height: 1.6; padding: 10px 12px; border-radius: 6px; background: var(--panel-2, var(--bg)); border: 1px solid var(--border); }
+
+/* 업체명 옆 대표번호·대표메일 */
+.vd-contact { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin-top: 4px; font-size: 13px; min-height: 1em; }
+.vd-contact a { color: var(--text); font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
+.vd-contact a:hover { color: var(--accent); text-decoration: underline; }
+.vd-contact small { font-size: 11px; color: var(--muted); margin-left: 3px; }
+.vd-csep { font-style: normal; color: var(--faint); }
+.vd-cwait { color: var(--faint); }
