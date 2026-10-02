@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 162;
+const BUILD = 163;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -278,21 +278,26 @@ async function mapLimit(items, limit, fn) {
 }
 
 // ── 조회 속도 ──
-// 업체와 상관없이 늘 같은 목록(CGMP 적합업소 · 회수·판매중지)은 매 조회마다 받을 이유가 없다.
-// 성공한 응답만 저장해 두고 유효시간 안에는 그대로 쓴다. 같은 화면에서 동시에 두 번 불러도 요청은 한 벌.
-const _listInflight = new Map();
-function cachedList(key, ttlMs, fn) {
+// 업체와 상관없이 늘 같은 목록(CGMP 적합업소 · 회수·판매중지)은 매번 실시간으로 받는다.
+// 받은 목록은 저장해 두되, 실시간 조회가 실패하거나 LIST_WAIT_MS 안에 안 오면 7일 이내 저장본을 대신 쓴다
+// (실시간 조회는 뒤에서 계속 돌아 저장본을 새로 고친다). 저장본을 쓴 경우 __savedAt에 저장 시각을 남긴다.
+const LIST_WAIT_MS = 4000;
+const LIST_KEEP_MS = 7 * 24 * 3600e3;
+function liveFirstList(key, fn) {
+  let saved = null;
   try {
     const c = JSON.parse(localStorage.getItem(key) || 'null');
-    if (c && c.data && Date.now() - c.at < ttlMs) return Promise.resolve(c.data);
-  } catch { /* 저장소 차단 — 그냥 부른다 */ }
-  if (_listInflight.has(key)) return _listInflight.get(key);
-  const p = fn().then((data) => {
-    try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), data })); } catch { /* 용량 초과 등 — 이번만 쓴다 */ }
+    if (c && c.data && Date.now() - c.at < LIST_KEEP_MS) saved = c;
+  } catch { /* 저장소 차단 — 실시간만 */ }
+  const useSaved = () => ({ ...saved.data, __savedAt: saved.at });
+  const fresh = fn().then((data) => {
+    try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), data })); } catch { /* 용량 초과 등 */ }
     return data;
-  }).finally(() => _listInflight.delete(key));
-  _listInflight.set(key, p);
-  return p;
+  });
+  if (!saved) return fresh;
+  const slow = new Promise((r) => setTimeout(() => r(null), LIST_WAIT_MS));
+  return Promise.race([fresh.then((d) => ({ d }), () => ({ failed: true })), slow])
+    .then((r) => (r && r.d ? r.d : useSaved()));
 }
 // 짧은 메모 — 같은 조회 안에서 후보 추천과 리포트 조립이 같은 요청을 두 번 하지 않게(실패는 기억하지 않는다)
 const _memo = new Map();
@@ -2948,11 +2953,11 @@ async function finishLive(name, corp) {
     rpt: proxyGet('rpt', { name: nm, rows: '100' }),
     nps: npsLookup(nm, corp.bzno),
     maker: makerLookup(nm),
-    // CGMP 적합업소·회수 목록은 업체와 무관하게 같다 — 저장해 두고 다시 쓴다(CGMP 12시간 · 회수 6시간)
-    gmp: cachedList('vs_c_gmp', 12 * 3600e3, () => proxyGet('gmp', { rows: '500' })),
+    // CGMP 적합업소·회수 목록 — 실시간 우선, 느리거나 실패하면 7일 이내 저장본(liveFirstList)
+    gmp: liveFirstList('vs_c_gmp', () => proxyGet('gmp', { rows: '500' })),
     // 공장 상세(면적)는 생산정보가 주는 공장관리번호를 키로 써야 해서 순서를 지킨다
     factory: factoryWithDetail(nm),
-    recall: cachedList('vs_c_recall', 6 * 3600e3, recallLookup),
+    recall: liveFirstList('vs_c_recall', recallLookup),
     nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
     naverNews: proxyOnlyGet('naverNews', { query: nm, display: '30', sort: 'date' }),
     // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)

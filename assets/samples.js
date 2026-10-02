@@ -783,6 +783,12 @@ function rptFunctions(recs) {
 
 // 선택된 업체 기준정보 + 재무/식약처/국민연금 응답 → 전체 리포트 조립 (실데이터 + 진단)
 // res = { finance:{ok,data|err}, rpt:{ok,...}, nps:{ok,...} }
+// 실시간 조회가 늦거나 실패해 저장본(최대 7일)을 썼으면 언제 것인지 밝힌다(app.js liveFirstList)
+const savedNote = (d) => {
+  if (!d || !d.__savedAt) return '';
+  const t = new Date(d.__savedAt);
+  return ` · 실시간 조회가 늦거나 실패해 ${t.getMonth() + 1}월 ${t.getDate()}일 ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')} 저장본 사용`;
+};
 function assembleLiveReport(name, corp, res) {
   const today = '2026-07-07';
   const R = res || {};
@@ -1463,7 +1469,7 @@ function assembleLiveReport(name, corp, res) {
         : (!R.factory ? '자료 미제출/미등록' : (!R.factory.ok ? briefErr(R.factory.err) : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '공장등록 0건(미등록/임대 가능)'))) },
     // GMP: API가 응답했으면 체크(✓), 미해당은 빨간색으로 표시
     (R.gmp && R.gmp.ok)
-      ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: true, warn: !hasCgmp, detail: hasCgmp ? 'CGMP 적합업소 명단 확인' : `미해당 — 적합업체 ${gmpList.length}곳 중 미등재(CGMP 미인증)` }
+      ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: true, warn: !hasCgmp, detail: (hasCgmp ? 'CGMP 적합업소 명단 확인' : `미해당 — 적합업체 ${gmpList.length}곳 중 미등재(CGMP 미인증)`) + savedNote(R.gmp.data) }
       : stat('gmp', 'gmp', '식약처 GMP (CGMP)', null, 'GMP 목록 조회 실패'),
     (R.naverNews && R.naverNews.ok)
       ? { key: 'news', name: '네이버 뉴스검색', ok: !!news, warn: !news, detail: news ? `${news.length}건 관련기사` : `업체명 포함 기사 없음 (검색결과 ${newsItems.length}건 중)` }
@@ -1471,11 +1477,11 @@ function assembleLiveReport(name, corp, res) {
     // 회수·판매중지: 조회 성공 시 이력 유무 표시(이력 있으면 warn=위험 신호), 실패 시 연결오류
     (R.recall && R.recall.ok)
       ? { key: 'recall', name: '식약처 회수·판매중지', ok: true, warn: recalls.length > 0,
-          detail: recalls.length ? `⚠ 회수·판매중지 이력 ${recalls.length}건`
+          detail: (recalls.length ? `⚠ 회수·판매중지 이력 ${recalls.length}건`
             // '없음'과 '못 봤음'은 다르다. 전체 몇 건 중 몇 건을 훑었는지 밝힌다.
             : `조회 범위 내 이력 없음 (${recallTotal != null && recallTotal > recallListAll.length
                 ? `전체 ${recallTotal}건 중 ${recallListAll.length}건 확인 — 나머지는 미조회`
-                : `전체 ${recallListAll.length}건 확인`})` }
+                : `전체 ${recallListAll.length}건 확인`})`) + savedNote(R.recall.data) }
       : stat('recall', 'recall', '식약처 회수·판매중지', null, '회수정보 조회 실패'),
     R.kakao ? { name: '카카오 이동거리', ok: !!kkTravel, detail: kkTravel ? `${kkNavi ? '실측' : '좌표추정'} 약 ${kkTravel.km}km · ${Math.floor(kkTravel.min / 60)}시간 ${kkTravel.min % 60}분` : (R.kakao.err || '실패 — 추정치 대체') } : null,
     R.hiring ? (hiring && hiring.ok
