@@ -43,16 +43,17 @@ jobs:
             return { total: b.totalCount, items: it.map((x) => (x && x.item && typeof x.item === 'object' ? x.item : x)) };
           };
           const first = await call({});
-          console.log('== 무필터 첫 응답 HTTP', first.status, '앞부분 ==');
-          console.log(first.text.slice(0, 1200));
+          // 로그 대신 주석(annotation)으로 남긴다 — API로 읽을 수 있다
+          const note = (t) => console.log(`::notice::${String(t).replace(/%/g, '%25').replace(/\r?\n/g, ' ')}`);
           const f = itemsOf(first.json);
-          console.log('== totalCount', f.total, '· 첫 레코드 키 ==', f.items[0] ? Object.keys(f.items[0]).join(', ') : '(없음)');
+          note(`무필터 HTTP ${first.status} · totalCount ${f.total} · 첫 레코드 키: ${f.items[0] ? Object.keys(f.items[0]).join(', ') : '(없음) ' + first.text.slice(0, 300)}`);
+          if (f.items[0]) note(`첫 레코드 원본: ${JSON.stringify(f.items[0])}`);
           for (const p of ['bssh_nm', 'Bssh_Nm', 'BSSH_NM', 'entpName', 'entp_name', 'prmisnEntpNm', 'ENTP_NAME']) {
             const r = await call({ [p]: name });
             const { total, items } = itemsOf(r.json);
             const hits = items.filter((x) => Object.values(x).some((v) => norm(v).includes(key)));
-            console.log(`== 파라미터 ${p}: HTTP ${r.status} · totalCount ${total} · 받은 ${items.length}건 · 상호 일치 ${hits.length}건`);
-            hits.slice(0, 5).forEach((h) => console.log(JSON.stringify(h, null, 1)));
+            note(`파라미터 ${p}: HTTP ${r.status} · totalCount ${total} · 받은 ${items.length}건 · 상호 일치 ${hits.length}건`);
+            hits.slice(0, 5).forEach((h) => note(`일치 레코드: ${JSON.stringify(h)}`));
             if (hits.length) break;
           }
           EOF
