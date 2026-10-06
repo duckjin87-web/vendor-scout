@@ -240,4 +240,4 @@ async function main() {
   notice(`기준월 ${M} · 대상 ${rows.length}곳 · 시계열 달 ${have.length}/${MONTHS} (${have[0]}~${have[have.length - 1]}) · 이번에 내려받은 파일 ${downloaded}개 · 13개월 모두 잡힌 사업장 ${full.length}곳`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => { console.error(e); notice(`집계 실패: ${e && e.stack ? e.stack.split('\n').slice(0, 3).join(' / ') : e}`); process.exit(1); });
