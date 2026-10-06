@@ -48,13 +48,12 @@ jobs:
           const f = itemsOf(first.json);
           note(`무필터 HTTP ${first.status} · totalCount ${f.total} · 첫 레코드 키: ${f.items[0] ? Object.keys(f.items[0]).join(', ') : '(없음) ' + first.text.slice(0, 300)}`);
           if (f.items[0]) note(`첫 레코드 원본: ${JSON.stringify(f.items[0])}`);
-          for (const p of ['bssh_nm', 'Bssh_Nm', 'BSSH_NM', 'entpName', 'entp_name', 'prmisnEntpNm', 'ENTP_NAME']) {
+          for (const p of ['bssh_nm', 'BSSH_NM', 'entpName', 'entp_name', 'ENTP_NAME', 'entp_name_like', 'induty']) {
             const r = await call({ [p]: name });
             const { total, items } = itemsOf(r.json);
             const hits = items.filter((x) => Object.values(x).some((v) => norm(v).includes(key)));
             note(`파라미터 ${p}: HTTP ${r.status} · totalCount ${total} · 받은 ${items.length}건 · 상호 일치 ${hits.length}건`);
-            hits.slice(0, 5).forEach((h) => note(`일치 레코드: ${JSON.stringify(h)}`));
-            if (hits.length) break;
+            note(`  ${p} 앞 5건 상호: ${items.slice(0, 5).map((x) => x.ENTP_NAME).join(' / ')}`);
           }
           EOF
           node diag.mjs
