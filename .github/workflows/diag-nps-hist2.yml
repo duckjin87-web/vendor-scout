@@ -18,7 +18,7 @@ jobs:
           cat > h2.mjs <<'JS'
           const note = (t) => console.log(`::notice::${String(t).replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 5000)}`);
           const strip = (h) => h.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-          for (const id of ['15094029', '15083277']) {
+          for (const id of ['15094029', '15083277']) { try {
             const pg = await (await fetch(`https://www.data.go.kr/data/${id}/fileData.do`)).text();
             const uddi = (pg.match(/uddi:[0-9a-f-]{20,}/i) || [])[0];
             const t = strip(pg);
@@ -32,6 +32,6 @@ jobs:
             const sns = [...new Set((h.match(/publicDataHistSn['"]?\s*[:=,]\s*['"]?(\d+)/g) || []))].slice(0, 20);
             const fns = [...new Set((h.match(/fn_[A-Za-z]+\([^)]{0,160}\)/g) || []))].slice(0, 10);
             note(`${id} 이력 응답 ${h.length}자 · 날짜 ${dates.join(',')} · 이력번호 ${sns.join(' ')} · 함수 ${fns.join(' | ').slice(0, 1500)} · 본문 ${ht.slice(0, 800)}`);
-          }
+          } catch (e) { note(`${id} 실패 ${e.message}`); } }
           JS
           node h2.mjs
