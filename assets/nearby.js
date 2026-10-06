@@ -205,7 +205,9 @@ function nbMfdsAll() {
   if (_nbMfds) return Promise.resolve(_nbMfds);
   if (_nbMfdsP) return _nbMfdsP;
   _nbMfdsP = (async () => {
-    const take = (d) => listOf(d, ['body.items', 'response.body.items.item', 'items']).map(nbUnwrap);
+    // 제조업만 — 같은 API에 책임판매업·맞춤형판매업이 섞여 온다(INDUTY로 가린다)
+    const take = (d) => listOf(d, ['body.items', 'response.body.items.item', 'items']).map(nbUnwrap)
+      .filter((r) => !r || r.INDUTY == null || (/제조/.test(String(r.INDUTY)) && !/판매/.test(String(r.INDUTY))));
     const first = await proxyOnlyGet('maker', { numOfRows: String(NB.MFDS_PAGE), pageNo: '1' });
     const raw = take(first);
     const total = nbTotalCount(first);

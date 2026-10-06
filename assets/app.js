@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 165;
+const BUILD = 166;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1859,7 +1859,10 @@ async function makerLookupRaw(nm) {
     if (s.status !== 'fulfilled') { lastErr = String(s.reason && s.reason.message || s.reason); continue; }
     anyOk = true;
     // 항목이 { item: {...} }로 한 겹 싸여 오는 응답도 있다 — 벗겨서 쓴다
-    const list = listOf(s.value, ['response.body.items.item', 'body.items', 'items']).map((r) => (r && r.item && typeof r.item === 'object' ? r.item : r));
+    // 이 API에는 제조업 말고 책임판매업(2.8만 건)·맞춤형판매업도 섞여 온다(진단 2026-10: 화장품제조 4,318 ·
+    // 화장품책임판매 28,374 · 맞춤형화장품판매 234). 업종이 '제조'가 아니면 제조업 등록으로 보지 않는다.
+    const list = listOf(s.value, ['response.body.items.item', 'body.items', 'items']).map((r) => (r && r.item && typeof r.item === 'object' ? r.item : r))
+      .filter((r) => !r || r.INDUTY == null || (/제조/.test(String(r.INDUTY)) && !/판매/.test(String(r.INDUTY))));
     for (const r of list) {
       const sig = JSON.stringify(r);
       if (seen.has(sig)) continue;      // 후보키 간 중복 제거

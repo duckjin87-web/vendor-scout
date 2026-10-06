@@ -6,8 +6,8 @@ const html = fs.readFileSync('index.html', 'utf8');
 const app = fs.readFileSync('assets/app.js', 'utf8');
 
 // 반드시 있어야 하는 자산. 하나가 빠져도(태그를 지웠거나 이름을 바꿨거나) 배포를 막는다.
-const REQUIRED = ['styles.css', 'samples.js', 'app.js', 'nearby.js'];
-const assets = [...html.matchAll(/(styles\.css|samples\.js|app\.js|nearby\.js)\?v=(\d+)/g)].map((m) => [m[1], Number(m[2])]);
+const REQUIRED = ['styles.css', 'samples.js', 'app.js', 'nearby.js', 'growth.js'];
+const assets = [...html.matchAll(/(styles\.css|samples\.js|app\.js|nearby\.js|growth\.js)\?v=(\d+)/g)].map((m) => [m[1], Number(m[2])]);
 const build = Number((app.match(/^const BUILD = (\d+);/m) || [])[1]);
 const fail = (msg) => { console.error('✗ ' + msg); process.exit(1); };
 
