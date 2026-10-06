@@ -1,0 +1,37 @@
+name: Diagnose NPS dataset history pages
+
+# 공공데이터포털의 국민연금 사업장 데이터셋(15094029 등)에 과거 달 파일 이력이 남아 있는지 확인한다.
+# 결과는 주석으로만 남기고 아무것도 커밋하지 않는다.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        run: |
+          cat > h2.mjs <<'JS'
+          const note = (t) => console.log(`::notice::${String(t).replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 5000)}`);
+          const strip = (h) => h.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          for (const id of ['15094029', '15083277']) {
+            const pg = await (await fetch(`https://www.data.go.kr/data/${id}/fileData.do`)).text();
+            const uddi = (pg.match(/uddi:[0-9a-f-]{20,}/i) || [])[0];
+            const t = strip(pg);
+            const title = (pg.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '';
+            note(`${id} ${title.trim()} · 업데이트 ${(t.match(/업데이트 주기\s*(\S+)/) || [])[1]} · 차기 ${(t.match(/차기 등록 예정일\s*(\S+)/) || [])[1]} · uddi ${uddi}`);
+            if (!uddi) continue;
+            const body = new URLSearchParams({ publicDataPk: id, publicDataDetailPk: uddi });
+            const h = await (await fetch('https://www.data.go.kr/tcs/dss/selectHistAndCsvData.do', { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded', Referer: `https://www.data.go.kr/data/${id}/fileData.do` } })).text();
+            const ht = strip(h);
+            const dates = [...new Set((h.match(/20\d{6}/g) || []))].slice(0, 40);
+            const sns = [...new Set((h.match(/publicDataHistSn['"]?\s*[:=,]\s*['"]?(\d+)/g) || []))].slice(0, 20);
+            const fns = [...new Set((h.match(/fn_[A-Za-z]+\([^)]{0,160}\)/g) || []))].slice(0, 10);
+            note(`${id} 이력 응답 ${h.length}자 · 날짜 ${dates.join(',')} · 이력번호 ${sns.join(' ')} · 함수 ${fns.join(' | ').slice(0, 1500)} · 본문 ${ht.slice(0, 800)}`);
+          }
+          JS
+          node h2.mjs
