@@ -68,16 +68,19 @@ jobs:
             const atch = (pg.t.match(/atchFileId['"]?\s*[:=]\s*['"]([A-Za-z0-9_]+)/) || [])[1];
             const sn = (pg.t.match(/fileDetailSn['"]?\s*[:=]\s*['"]?(\d+)/) || [])[1] || '1';
             const pk = (pg.t.match(/publicDataDetailPk['"]?\s*[:=]\s*['"]([A-Za-z0-9_-]+)/) || [])[1];
-            const allDl = [...new Set([...pg.t.matchAll(/(?:href|onclick|data-[a-z-]+)=["']([^"']*(?:[Dd]ownload|fileDetailSn|atchFileId|\.csv|\.zip)[^"']*)["']/g)].map((m) => m[1]))];
-            note(`다운로드 관련 링크 ${allDl.length}: ${allDl.slice(0, 15).join(' | ').slice(0, 1500)} · 파일 표기 ${[...new Set((pg.t.match(/[가-힣A-Za-z0-9_]+\.(?:csv|zip|xlsx|py)/gi) || []))].slice(0, 10).join(', ')}`);
-            for (const sn2 of ['2', '3', '4', '5']) {
-              try {
-                const r2 = await fetch(`https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atch}&fileDetailSn=${sn2}&insertDataPrcus=N`, { headers: { Range: 'bytes=0-3000000', 'User-Agent': 'Mozilla/5.0' } });
-                const b2 = new Uint8Array(await r2.arrayBuffer());
-                const t2 = /[가-힣]/.test(new TextDecoder('utf-8').decode(b2.slice(0, 4000))) ? new TextDecoder('utf-8').decode(b2) : new TextDecoder('euc-kr').decode(b2);
-                const ls = t2.split(/\r?\n/); const cos = ls.filter((l) => /화장품/.test(l));
-                note(`첨부 ${sn2}: HTTP ${r2.status} · ${r2.headers.get('content-disposition') || ''} · 범위 ${r2.headers.get('content-range') || r2.headers.get('content-length')} · ${ls.length}줄 · 첫 줄 ${ls[0].slice(0, 500)} · 둘째 ${String(ls[1] || '').slice(0, 300)} · 화장품 ${cos.length}줄 예 ${cos.slice(0, 2).join(' || ').slice(0, 600)}`);
-              } catch (e) { note(`첨부 ${sn2} 실패 ${e.message}`); }
+            const uddis = [...new Set((pg.t.match(/uddi:[0-9a-f-]{20,}/gi) || []))];
+            const fnCalls = [...new Set((pg.t.match(/fn_?[A-Za-z]*[Dd]own[A-Za-z]*\([^)]{0,200}\)/g) || []))].slice(0, 5);
+            note(`uddi ${uddis.join(', ') || '없음'} · 내려받기 함수 ${fnCalls.join(' | ').slice(0, 600)}`);
+            for (const u of uddis.slice(0, 2)) {
+              // 공공데이터포털 파일데이터 자동변환 API(odcloud)
+              const o = await get(`https://api.odcloud.kr/api/${id}/v1/${u}?page=1&perPage=3&serviceKey=${encodeURIComponent(KEY)}`);
+              note(`odcloud ${u} HTTP ${o.s} · ${o.t.slice(0, 1500)}`);
+              // 화장품 업종으로 거르기 시도
+              const o2 = await get(`https://api.odcloud.kr/api/${id}/v1/${u}?page=1&perPage=5&serviceKey=${encodeURIComponent(KEY)}&${encodeURIComponent('cond[사업장업종코드명::LIKE]')}=${encodeURIComponent('화장품')}`);
+              note(`odcloud 화장품 거르기 HTTP ${o2.s} · ${o2.t.slice(0, 1500)}`);
+              // 전체 파일 내려받기 시도(앞부분만)
+              const r3 = await fetch(`https://www.data.go.kr/tcs/dss/selectFileDataDownload.do?publicDataPk=${id}&publicDataDetailPk=${u}&fileDetailSn=1`, { headers: { Range: 'bytes=0-200000', 'User-Agent': 'Mozilla/5.0', Referer: `https://www.data.go.kr/data/${id}/fileData.do` } }).catch((e) => ({ status: 0, e }));
+              if (r3.status) { const b3 = new Uint8Array(await r3.arrayBuffer()); const t3 = new TextDecoder('euc-kr').decode(b3); note(`파일 내려받기 HTTP ${r3.status} · ${r3.headers.get('content-disposition') || ''} · ${r3.headers.get('content-range') || r3.headers.get('content-length')} · 앞 ${t3.split(/\r?\n/).slice(0, 2).join(' ⏎ ').slice(0, 900)}`); }
             }
             const linkRaw = (pg.t.match(/([^"'\s<>]*fileDownload\.do\?atchFileId=[^"'\s<>]+)/) || [])[1] || '';
             const link = linkRaw ? new URL(linkRaw.replace(/&amp;/g, '&'), 'https://www.data.go.kr/').href : '';
