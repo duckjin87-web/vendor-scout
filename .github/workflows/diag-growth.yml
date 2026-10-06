@@ -13,6 +13,10 @@ on:
         description: '업체명 (예: 코스맥스)'
         required: true
         type: string
+      only_file:
+        description: '1이면 국민연금 파일만 확인'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -25,12 +29,14 @@ jobs:
         env:
           KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
           NAME: ${{ inputs.vendor_name }}
+          ONLY_FILE: ${{ inputs.only_file }}
         run: |
           cat > probe.mjs <<'EOF'
           const KEY = process.env.KEY, NAME = process.env.NAME;
           const note = (t) => console.log(`::notice::${String(t).replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 6000)}`);
           const get = async (u, init) => { try { const r = await fetch(u, init); return { s: r.status, t: await r.text(), h: r.headers }; } catch (e) { return { s: 0, t: String(e) }; } };
           const itemsOf = (t) => { try { const j = JSON.parse(t); const b = (j.response && j.response.body) || j.body || {}; let it = b.items; if (it && it.item) it = it.item; return { total: b.totalCount, items: Array.isArray(it) ? it : (it ? [it] : []) }; } catch { return { total: null, items: [], raw: t.slice(0, 400) }; } };
+          if (process.env.ONLY_FILE !== '1') {
           // ① 국민연금 API
           const NPS = 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2';
           const q = (o) => new URLSearchParams({ serviceKey: KEY, dataType: 'json', pageNo: '1', numOfRows: '10', ...o });
@@ -49,8 +55,9 @@ jobs:
               if (pi.items.length) break;
             }
           }
+          }
           // ② 국민연금 가입 사업장 내역 파일 — 파일데이터 화면에서 내려받기 경로를 찾는다
-          for (const id of ['15083277', '3046071']) {
+          for (const id of ['15083277']) {
             const pg = await get(`https://www.data.go.kr/data/${id}/fileData.do`);
             const title = (pg.t.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '';
             const dl = [...new Set([...pg.t.matchAll(/(fileDownload[^"'\s<>]*|atchFileId=[A-Za-z0-9_]+[^"'\s<>]*|fileDetailSn=\d+)/g)].map((m) => m[1]))].slice(0, 8);
@@ -63,18 +70,21 @@ jobs:
             const pk = (pg.t.match(/publicDataDetailPk['"]?\s*[:=]\s*['"]([A-Za-z0-9_-]+)/) || [])[1];
             for (const u of [atch && `https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atch}&fileDetailSn=${sn}`,
                              pk && `https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${pk}&fileDetailSn=${sn}`].filter(Boolean)) {
-              const r = await fetch(u, { headers: { Range: 'bytes=0-65535' } }).catch((e) => ({ status: 0, e }));
+              const r = await fetch(u, { headers: { Range: 'bytes=0-4000000' } }).catch((e) => ({ status: 0, e }));
               if (!r.status) { note(`내려받기 실패 ${u}`); continue; }
               const buf = new Uint8Array(await r.arrayBuffer());
               const dec = (enc) => { try { return new TextDecoder(enc).decode(buf); } catch { return ''; } };
               const txt = /[가-힣]/.test(dec('utf-8')) ? dec('utf-8') : dec('euc-kr');
               const lines = txt.split(/\r?\n/);
-              const cos = lines.filter((l) => /화장품/.test(l)).slice(0, 3);
+              const cos = lines.filter((l) => /화장품/.test(l));
+              const codes = {}; lines.forEach((l) => { const m = l.match(/화장품[^,"]*/); if (m) codes[m[0]] = (codes[m[0]] || 0) + 1; });
+              note(`앞 4MB ${lines.length}줄 중 '화장품' 포함 ${cos.length}줄 · 표기별 ${JSON.stringify(codes).slice(0, 400)} · 예 ${cos.slice(0, 2).join(' || ').slice(0, 900)}`);
               note(`내려받기 ${u.slice(0, 120)} HTTP ${r.status} · 형식 ${r.headers.get('content-type')} · 크기 ${r.headers.get('content-range') || r.headers.get('content-length')} · 첫 줄 ${lines[0].slice(0, 700)}`);
-              note(`둘째 줄 ${String(lines[1] || '').slice(0, 600)} · 화장품 업종 줄 ${cos.length}: ${cos.join(' || ').slice(0, 1200)}`);
+              note(`둘째 줄 ${String(lines[1] || '').slice(0, 900)}`);
               break;
             }
           }
+          if (process.env.ONLY_FILE !== '1') {
           // ③ 건축HUB 건축인허가 — 한국콜마 기준점 지번(세종 전의면 755)으로
           const loc = { sigunguCd: '36110', bjdongCd: '34025', platGbCd: '0', bun: '0755', ji: '0000' };
           for (const base of ['https://apis.data.go.kr/1613000/ArchPmsHubService', 'https://apis.data.go.kr/1613000/ArchPmsService_V2']) {
@@ -83,6 +93,7 @@ jobs:
               const it = itemsOf(r.t);
               note(`인허가 ${base.split('/').pop()}/${op} HTTP ${r.s} · ${it.total}건 · ${JSON.stringify(it.items.slice(0, 2)).slice(0, 1500)}${it.items.length ? '' : ' 원문 ' + r.t.slice(0, 300)}`);
             }
+          }
           }
           EOF
           node probe.mjs
