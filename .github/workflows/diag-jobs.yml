@@ -1,0 +1,43 @@
+name: Diagnose job-site sources
+
+# 구인 사이트 자료를 어떤 경로로 받을 수 있는지 확인한다 — 공식 API 여부, robots.txt 허용 범위.
+# 결과는 주석으로만 남기고 아무것도 커밋하지 않는다.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: |
+          cat > j.mjs <<'JS'
+          const note = (t) => console.log(`::notice::${String(t).replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 3500)}`);
+          const get = async (u, init) => { try { const r = await fetch(u, { redirect: 'follow', ...init, headers: { 'User-Agent': 'Mozilla/5.0 (vendor-scout diag)', ...((init && init.headers) || {}) } }); return { s: r.status, t: await r.text() }; } catch (e) { return { s: 0, t: String(e) }; } };
+          // ① robots.txt — 검색·공고 경로를 막는지
+          const robots = [];
+          for (const h of ['www.saramin.co.kr', 'www.jobkorea.co.kr', 'www.incruit.com', 'www.linkedin.com', 'www.work24.go.kr']) {
+            const r = await get(`https://${h}/robots.txt`);
+            const lines = r.t.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^(user-agent|disallow|allow)/i.test(l));
+            // User-agent: * 구간만
+            const out = []; let star = false;
+            lines.forEach((l) => { if (/^user-agent/i.test(l)) star = /\*\s*$/.test(l); else if (star) out.push(l); });
+            robots.push(`${h} HTTP ${r.s}: ${out.slice(0, 40).join(' | ') || '(규칙 없음 또는 별도 UA만)'}`);
+          }
+          robots.forEach(note);
+          // ② 공식 API — 사람인(키 필요), 고용24 채용정보 OpenAPI(키 필요)
+          const sr = await get('https://oapi.saramin.co.kr/job-search?keywords=%ED%99%94%EC%9E%A5%ED%92%88&count=1');
+          note(`사람인 API(키 없이) HTTP ${sr.s} · ${sr.t.slice(0, 300)}`);
+          const w24 = await get('https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo210L01.do?authKey=x&callTp=L&returnType=XML&startPage=1&display=1&keyword=%ED%99%94%EC%9E%A5%ED%92%88');
+          note(`고용24 채용 API(가짜 키) HTTP ${w24.s} · ${w24.t.replace(/\s+/g, ' ').slice(0, 300)}`);
+          // ③ 공공데이터포털 키로 되는 채용 자료가 있는지 — 고용노동부 워크넷 채용정보(구) API
+          const wn = await get(`https://apis.data.go.kr/B490007/wantedInfoSrv/getWantedList?serviceKey=${encodeURIComponent(process.env.KEY)}&pageNo=1&numOfRows=1`);
+          note(`data.go.kr 워크넷 채용(추정 경로) HTTP ${wn.s} · ${wn.t.replace(/\s+/g, ' ').slice(0, 300)}`);
+          JS
+          node j.mjs
