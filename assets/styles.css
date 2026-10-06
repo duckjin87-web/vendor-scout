@@ -1697,7 +1697,7 @@ button.vd-badge:focus-visible { outline: 2px solid var(--accent); outline-offset
 @media print { .homebtn { display: none !important; } }
 
 /* 급성장 신호 — 기간 타일 · 추이 그래프 · 작은 추이 */
-.gr-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 14px 0 12px; }
+.gr-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 14px 0 12px; }
 .gr-tile { font: inherit; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
   background: var(--panel); color: var(--text); cursor: pointer; min-width: 0; transition: border-color .15s ease, box-shadow .15s ease; }
 .gr-tile span { font-size: 12px; color: var(--muted); font-weight: 600; }
@@ -1743,3 +1743,12 @@ button.vd-badge:focus-visible { outline: 2px solid var(--accent); outline-offset
 .gr-reqmsg.err { color: var(--risk); }
 .gr-reqmsg a { color: var(--accent); white-space: nowrap; }
 @media (max-width: 720px) { .gr-req { align-items: flex-start; max-width: none; } .gr-req small, .gr-reqmsg { text-align: left; } }
+
+/* 급성장 신호 — 채용공고 급증 */
+.gr-tile.jobs { border-style: dashed; }
+.gr-tile.jobs[aria-selected="true"] { border-style: solid; }
+.gr-posts a { display: block; color: var(--text); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.gr-posts a:hover { color: var(--accent); }
+.gr-posts small { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.gr-empty code { font-size: 12px; padding: 1px 5px; border-radius: 4px; background: var(--rule); }
+@media (min-width: 721px) and (max-width: 1000px) { .gr-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

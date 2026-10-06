@@ -120,7 +120,8 @@ function grHtml(st) {
     const cy = d.months[L - p.back];
     return `<button type="button" role="tab" class="gr-tile" data-gr-period="${p.id}" aria-selected="${st.period === p.id}">`
       + `<span>${esc(p.label)}</span><b>${n.toLocaleString()}곳</b><small>${esc(grYmS(cy))} → ${esc(grYmS(d.ym))} · +${Math.round(p.rate * 100)}%↑</small></button>`;
-  }).join('') + '</div>';
+  }).join('') + grJobsTile(st) + '</div>';
+  if (st.period === 'jobs') return h + grJobsHtml(st);
   // 업종 전체 추이 — 13개월이 모두 잡힌 사업장만 합한 가입자수
   if (d.industry && d.industry.total) {
     const T = d.industry.total, net = T[L] - T[B];
@@ -173,6 +174,45 @@ function grHtml(st) {
   return h;
 }
 
+// ── 채용공고 급증(최근 30일) — data/growth/jobs.json(사람인·고용24 공식 API, 조회 요청 때 집계) ──
+const GRJ = { MIN: 3, RATIO: 2, SHOW: 30 };
+const grJobRows = (j) => ((j && j.rows) || []).filter((r) => r.cur >= GRJ.MIN && r.cur >= GRJ.RATIO * (r.prev || 0))
+  .sort((a, b) => (b.cur - b.prev) - (a.cur - a.prev) || b.cur - a.cur);
+function grJobsTile(st) {
+  const j = st.jobs;
+  const ready = j && j.rows && Object.values(j.sources || {}).some((x) => x && x.ok);
+  return `<button type="button" role="tab" class="gr-tile jobs" data-gr-period="jobs" aria-selected="${st.period === 'jobs'}">`
+    + `<span>채용공고 급증 (최근 30일)</span><b>${ready ? `${grJobRows(j).length.toLocaleString()}곳` : '—'}</b>`
+    + `<small>${ready ? `${esc(j.window.from.slice(5))} ~ ${esc(j.window.to.slice(5))} · 직전 30일의 ${GRJ.RATIO}배↑` : '사람인·고용24 API 키 등록 필요'}</small></button>`;
+}
+function grJobsHtml(st) {
+  const j = st.jobs;
+  const srcTxt = (k, nm) => { const x = j && j.sources && j.sources[k]; return x ? `${nm} ${x.ok ? `✓ ${x.cur ?? 0}건` : `✗ ${x.err}`}` : `${nm} —`; };
+  if (!j || !Object.values(j.sources || {}).some((x) => x && x.ok)) {
+    return '<div class="gr-empty"><b>채용공고 급증은 공식 API 키가 있어야 집계됩니다.</b><br>'
+      + '구인 사이트 중 공식 API로 받을 수 있는 곳은 <b>사람인</b>(oapi.saramin.co.kr)과 <b>고용24</b>(work24.go.kr 오픈API)입니다. '
+      + '두 곳 모두 무료로 신청할 수 있고, 받은 키를 GitHub 저장소 Settings → Secrets에 <code>SARAMIN_KEY</code> · <code>WORK24_KEY</code>로 넣은 뒤 '
+      + '위 「최신 자료 조회 요청」을 누르면 함께 집계됩니다.<br>'
+      + '잡코리아는 공개 API가 없고, 인크루트·링크드인은 사이트가 자동 수집을 막고 있어(robots.txt Disallow: /) 넣지 않았습니다.'
+      + (j ? `<br><small>현재 상태: ${esc(srcTxt('saramin', '사람인'))} · ${esc(srcTxt('work24', '고용24'))}</small>` : '') + '</div>';
+  }
+  const rows = grJobRows(j);
+  let h = `<div class="gr-tools"><span class="gr-crit">급증 기준: 최근 30일(${esc(j.window.from)}~${esc(j.window.to)}) 공고 ${GRJ.MIN}건 이상이면서 직전 30일의 ${GRJ.RATIO}배 이상 · `
+    + `식약처 화장품 제조업 허가 업체만 · 출처 ${esc(srcTxt('saramin', '사람인'))} · ${esc(srcTxt('work24', '고용24'))}</span></div>`;
+  if (!rows.length) return `${h}<div class="gr-empty">최근 30일 동안 기준을 넘은 화장품 제조업체가 없습니다.</div>`;
+  h += `<p class="gr-count"><b>${rows.length}곳</b>의 채용공고가 최근 30일 동안 급증했습니다${rows.length > GRJ.SHOW ? ` — 상위 ${GRJ.SHOW}곳` : ''}.</p>`;
+  h += '<div class="gr-tw"><table class="gr-tbl"><thead><tr><th>#</th><th>업체</th><th class="n">최근 30일</th><th class="n">직전 30일</th><th class="n">생산·품질 직무</th><th>최근 공고</th><th></th></tr></thead><tbody>';
+  rows.slice(0, GRJ.SHOW).forEach((r, i) => {
+    const posts = (r.posts || []).slice(0, 3).map((p) => `<a href="${esc(p.u || '#')}" target="_blank" rel="noopener">${esc(p.t)}</a><small>${esc([p.d, p.s].filter(Boolean).join(' · '))}</small>`).join('');
+    h += `<tr><td class="n">${i + 1}</td><td><b>${esc(r.nm)}</b><div class="gr-bs">${Object.entries(r.src || {}).map(([k, v]) => `<span class="gr-b">${esc(k)} ${v}</span>`).join('')}</div></td>`
+      + `<td class="n up">${r.cur}건<small>+${r.cur - (r.prev || 0)}</small></td><td class="n">${r.prev || 0}건</td><td class="n">${r.prod}건</td>`
+      + `<td class="gr-posts">${posts}</td><td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.nm)}">사전검증</button></td></tr>`;
+  });
+  h += '</tbody></table></div>';
+  h += `<p class="gr-foot">공고 수는 같은 공고를 한 번만 셉니다(검색어가 달라 겹친 것 제외). 직전 30일은 사람인 게시일 범위로 세고, 고용24는 최근 1개월만 주므로 지난 집계 때 값과 비교합니다. ${esc(j.note || '')} 공고 급증은 증원·신규 라인·이직 증가 어느 쪽일 수도 있어 방문 때 확인할 질문거리입니다.</p>`;
+  return h;
+}
+
 // 선 그래프 위 마우스 — 가장 가까운 달의 값과 전달 대비 증감
 function grBindHover(box) {
   let tip = box.querySelector('.gr-tip');
@@ -208,6 +248,7 @@ function mountGrowth() {
     growthState.cw = Math.max(280, Math.round(box.clientWidth - 64));
     const tip = box.querySelector('.gr-tip'); box.innerHTML = grHtml(growthState); if (tip) box.appendChild(tip);
   };
+  growthState.repaint = () => { if (growthState.data) paint(); };
   let lastW = 0, rt = null;
   if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(box.clientWidth - lastW) < 24) return; lastW = box.clientWidth; clearTimeout(rt); rt = setTimeout(() => { if (growthState.data) paint(); }, 150); }).observe(box);
   box.addEventListener('click', (e) => {
@@ -235,9 +276,14 @@ function mountGrowth() {
   paint();
   grLoad().then(paint).catch((e) => { growthState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
 }
-const grLoad = (bust) => fetch(`data/growth/latest.json?v=${BUILD}-${bust || new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' })
-  .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-  .then((d) => { growthState.data = d; return d; });
+const grLoad = (bust) => {
+  const v = `${BUILD}-${bust || new Date().toISOString().slice(0, 10)}`;
+  // 채용공고 집계는 없어도 된다(키 미등록 등) — 실패해도 국민연금 쪽은 그대로 그린다
+  fetch(`data/growth/jobs.json?v=${v}`, { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).then((j) => { growthState.jobs = j; if (growthState.repaint) growthState.repaint(); }).catch(() => {});
+  return fetch(`data/growth/latest.json?v=${v}`, { cache: 'no-cache' })
+    .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then((d) => { growthState.data = d; return d; });
+};
 
 // 「최신 자료 조회 요청」 — 프록시가 GitHub Actions 집계를 돌리고, 끝나면 새 집계를 다시 읽는다.
 // 집계 작업은 포털의 최신 파일이 지난번과 같으면 내려받기·대조 없이 바로 끝난다.

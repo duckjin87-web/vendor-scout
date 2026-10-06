@@ -35,13 +35,21 @@ jobs:
           DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
           FORCE: ${{ inputs.force }}
         run: node scripts/build-growth.mjs
+      # 채용공고 급등(사람인·고용24 공식 API) — 키가 없으면 사유만 남기고 넘어간다. 국민연금 집계와 따로 실패해도 된다.
+      - name: Jobs
+        continue-on-error: true
+        env:
+          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          SARAMIN_KEY: ${{ secrets.SARAMIN_KEY }}
+          WORK24_KEY: ${{ secrets.WORK24_KEY }}
+        run: node scripts/build-jobs.mjs
       - name: Commit
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if [ -n "$(git status --porcelain data/growth)" ]; then
             git add data/growth
-            git commit -m "growth: 국민연금 월간 집계 갱신 ($(date -u +%F))"
+            git commit -m "growth: 국민연금·채용공고 집계 갱신 ($(date -u +%F))"
             git pull --rebase origin main
             git push origin HEAD:main
           else
