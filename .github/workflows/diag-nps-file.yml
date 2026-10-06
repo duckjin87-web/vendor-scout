@@ -5,7 +5,12 @@ name: Diagnose NPS workplace file (cosmetics)
 # 결과는 주석으로만 남기고 아무것도 커밋하지 않는다.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      hist:
+        description: '1이면 이전 달 파일 이력만 확인'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -17,13 +22,28 @@ jobs:
       - name: Probe
         env:
           KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          HIST: ${{ inputs.hist }}
         run: |
           cat > p.mjs <<'JS'
+          const main = async () => {
           const note = (t) => console.log(`::notice::${String(t).replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 6000)}`);
           const pg = await (await fetch('https://www.data.go.kr/data/15083277/fileData.do')).text();
           const uddi = (pg.match(/uddi:[0-9a-f-]{20,}/i) || [])[0];
           const meta = await (await fetch(`https://www.data.go.kr/tcs/dss/selectFileDataDownload.do?publicDataPk=15083277&publicDataDetailPk=${uddi}&fileDetailSn=1`, { headers: { Referer: 'https://www.data.go.kr/data/15083277/fileData.do' } })).text();
           const atch = (meta.match(/"atchFileId"\s*:\s*"(FILE_[0-9]+)"/) || [])[1];
+          if (process.env.HIST === '1') {
+            // 이전 달 파일이 남아 있는지 — 메타의 이력·파일 목록과 화면의 다른 FILE_ 번호
+            const ids = [...new Set((meta + pg).match(/FILE_[0-9]{9,}/g) || [])];
+            const hk = [...new Set((meta.match(/"[A-Za-z]*(?:[Hh]ist|[Vv]er|[Bb]efore|[Pp]rev|[Ll]ist)[A-Za-z]*"\s*:/g) || []))];
+            note(`FILE_ 번호들 ${ids.join(', ')} · 이력 관련 키 ${hk.join(' ')} · 메타 길이 ${meta.length}`);
+            const hist = [...pg.matchAll(/(\d{8})[^<]{0,40}(?:csv|CSV)/g)].map((m) => m[1]);
+            note(`화면의 날짜+csv 표기 ${[...new Set(hist)].join(', ')} · 이력 링크 ${[...new Set((pg.match(/[^"'\s<>]*(?:hist|History|Hist)[^"'\s<>]*/g) || []))].slice(0, 8).join(' | ')}`);
+            for (const sn2 of ['2', '3']) {
+              const m2 = await (await fetch(`https://www.data.go.kr/tcs/dss/selectFileDataDownload.do?publicDataPk=15083277&publicDataDetailPk=${uddi}&fileDetailSn=${sn2}`, { headers: { Referer: 'https://www.data.go.kr/data/15083277/fileData.do' } })).text();
+              note(`fileDetailSn=${sn2} 메타: ${(m2.match(/"(atchFileId|fileNm|orginlFileNm|dataNm|fileDetailSn)"\s*:\s*"?[^",}]*/g) || []).join(' ; ').slice(0, 800)}`);
+            }
+            return;
+          }
           const sn = (meta.match(/"fileDetailSn"\s*:\s*"?(\d+)/) || [])[1] || '1';
           const r = await fetch(`https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atch}&fileDetailSn=${sn}&insertDataPrcus=N`);
           const buf = new Uint8Array(await r.arrayBuffer());
@@ -59,5 +79,7 @@ jobs:
             }
             note(`기간별 현황(${name}, seq ${first && first.seq}, 검색 기준월 ${first && first.dataCrtYm}) → ${out.join(' ; ')}`);
           }
+          };
+          await main();
           JS
           node p.mjs
