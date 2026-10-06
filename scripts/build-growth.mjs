@@ -69,9 +69,18 @@ async function npsDownload(uddi) {
     { headers: { Referer: `https://www.data.go.kr/data/${DS}/fileData.do` } })).text();
   const atch = (meta.match(/"atchFileId"\s*:\s*"(FILE_[0-9]+)"/) || [])[1];
   if (!atch) throw new Error(`첨부 번호 없음(${uddi})`);
-  const r = await fetchOk(`https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atch}&fileDetailSn=1&insertDataPrcus=N`);
-  const buf = new Uint8Array(await r.arrayBuffer());
-  return new TextDecoder('euc-kr').decode(buf);
+  // 파일 하나가 약 115MB다. 포털이 느려도 한 파일에 10분 넘게 붙잡히지 않게 끊고 다시 시도한다.
+  const t0 = Date.now();
+  for (let i = 0; i < 2; i++) {
+    const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 10 * 60 * 1000);
+    try {
+      const r = await fetchOk(`https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atch}&fileDetailSn=1&insertDataPrcus=N`, { signal: ctrl.signal }, 2);
+      const buf = new Uint8Array(await r.arrayBuffer());
+      clearTimeout(tm);
+      log(`  ${atch} ${(buf.length / 1e6).toFixed(0)}MB · ${Math.round((Date.now() - t0) / 1000)}초`);
+      return new TextDecoder('euc-kr').decode(buf);
+    } catch (e) { clearTimeout(tm); if (i) throw e; log(`  ${atch} 다시 시도 (${e.message})`); }
+  }
 }
 function parseCsvLine(l) {
   const out = []; let cur = '', q = false;
@@ -161,19 +170,30 @@ async function main() {
   const want = Array.from({ length: MONTHS }, (_, i) => ymAdd(M, -(MONTHS - 1) + i));   // 오래된 달 → 최신
   const got = { [M]: latest };
   let downloaded = 1;
+  // 스냅숏이 없는 달만 내려받는다 — 처음 한 번은 12개 파일, 그 뒤로는 달마다 새 파일 하나. 세 개씩 동시에.
+  const missing = [];
   for (const ym of want.slice(0, -1)) {
     if (fs.existsSync(snapPath(ym))) { got[ym] = JSON.parse(fs.readFileSync(snapPath(ym), 'utf8')); continue; }
     const v = versions.find((x) => x.ym === ym);
     if (!v) { log(`${ym} 파일 없음`); continue; }
-    try {
-      const snap = extract(await npsDownload(v.uddi), byBz6);
-      downloaded++;
-      if (snap.ym !== ym) log(`주의: ${v.date} 파일의 기준월이 ${snap.ym}(예상 ${ym})`);
-      got[snap.ym] = snap;
-      fs.writeFileSync(snapPath(snap.ym), JSON.stringify(snap));
-      log(`${snap.ym} 스냅숏 ${snap.rows.length}곳`);
-    } catch (e) { log(`${ym} 내려받기 실패 ${e.message}`); }
+    missing.push({ ym, v });
   }
+  const failed = [];
+  let cursor = 0;
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    while (cursor < missing.length) {
+      const { ym, v } = missing[cursor++];
+      try {
+        const snap = extract(await npsDownload(v.uddi), byBz6);
+        downloaded++;
+        if (snap.ym !== ym) log(`주의: ${v.date} 파일의 기준월이 ${snap.ym}(예상 ${ym})`);
+        got[snap.ym] = snap;
+        fs.writeFileSync(snapPath(snap.ym), JSON.stringify(snap));   // 받는 대로 저장 — 중간에 끊겨도 다음 실행이 이어 받는다
+        log(`${snap.ym} 스냅숏 ${snap.rows.length}곳`);
+      } catch (e) { failed.push(ym); log(`${ym} 내려받기 실패 ${e.message}`); }
+    }
+  }));
+  if (failed.length) notice(`내려받지 못한 달: ${failed.join(', ')} — 다음 실행에서 다시 시도합니다`);
   // 오래된 스냅숏 정리 — 13개월만 남긴다
   fs.readdirSync(OUT).filter((f) => /^snap-\d{4}-\d{2}\.json$/.test(f) && f < `snap-${want[0]}.json`).forEach((f) => fs.unlinkSync(path.join(OUT, f)));
 
