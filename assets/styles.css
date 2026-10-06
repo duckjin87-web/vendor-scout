@@ -1735,3 +1735,11 @@ button.vd-badge:focus-visible { outline: 2px solid var(--accent); outline-offset
 .gr-nochart { font-size: 12.5px; color: var(--muted); padding: 10px 0; }
 @media (max-width: 720px) { .gr-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .homebtn { padding: 5px 10px; } }
 @media (prefers-reduced-motion: reduce) { .growth.enter { animation: none; } }
+
+/* 급성장 신호 — 조회 요청 */
+.gr-req { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 420px; }
+.gr-req small { font-size: 11.5px; color: var(--muted); text-align: right; }
+.gr-reqmsg { margin: 0; font-size: 12px; color: var(--text); text-align: right; line-height: 1.5; }
+.gr-reqmsg.err { color: var(--risk); }
+.gr-reqmsg a { color: var(--accent); white-space: nowrap; }
+@media (max-width: 720px) { .gr-req { align-items: flex-start; max-width: none; } .gr-req small, .gr-reqmsg { text-align: left; } }

@@ -313,6 +313,36 @@ ${SITE_SCHEMA}`;
   return jsonRes({ ok: true, data: obj });
 }
 
+// ── 급성장 집계 조회 요청 ──
+// 대시보드 버튼 → GitHub Actions growth.yml 실행. 토큰(GH_DISPATCH_TOKEN, 이 저장소 Actions 쓰기 권한만 준
+// fine-grained 토큰)은 Vercel 환경변수에만 둔다. 누구나 누를 수 있는 버튼이라 돌고 있거나 30분 안에 돈 적이
+// 있으면 새로 돌리지 않는다. 포털 파일이 지난번과 같으면 작업 자체도 내려받기 없이 바로 끝난다.
+const GH_REPO_DEFAULT = 'duckjin87-web/vendor-scout';
+async function ghApi(env, pathname, init = {}) {
+  const repo = env.GH_REPO || GH_REPO_DEFAULT;
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'vendor-scout-proxy', 'X-GitHub-Api-Version': '2022-11-28' };
+  if (env.GH_DISPATCH_TOKEN) headers.Authorization = `Bearer ${env.GH_DISPATCH_TOKEN}`;
+  return fetch(`https://api.github.com/repos/${repo}${pathname}`, { ...init, headers: { ...headers, ...(init.headers || {}) } });
+}
+async function growthLastRun(env) {
+  const r = await ghApi(env, '/actions/workflows/growth.yml/runs?per_page=1');
+  if (!r.ok) return { err: `GitHub HTTP ${r.status}` };
+  const j = await r.json();
+  const run = j.workflow_runs && j.workflow_runs[0];
+  return run ? { status: run.status, conclusion: run.conclusion, createdAt: run.created_at, updatedAt: run.updated_at, url: run.html_url } : { status: 'none' };
+}
+async function handleGrowth(env, op) {
+  const actionsUrl = `https://github.com/${env.GH_REPO || GH_REPO_DEFAULT}/actions/workflows/growth.yml`;
+  const last = await growthLastRun(env).catch((e) => ({ err: String(e && e.message || e) }));
+  if (op === 'status') return jsonRes({ ok: true, last, actionsUrl });
+  if (!env.GH_DISPATCH_TOKEN) return jsonRes({ error: 'GH_DISPATCH_TOKEN 미설정 — GitHub Actions 화면에서 직접 실행하세요', actionsUrl, last }, 501);
+  if (last && (last.status === 'queued' || last.status === 'in_progress')) return jsonRes({ ok: true, started: false, reason: '이미 집계 중입니다', last, actionsUrl });
+  if (last && last.createdAt && Date.now() - Date.parse(last.createdAt) < 30 * 60 * 1000) return jsonRes({ ok: true, started: false, reason: '30분 안에 이미 요청됐습니다', last, actionsUrl });
+  const d = await ghApi(env, '/actions/workflows/growth.yml/dispatches', { method: 'POST', body: JSON.stringify({ ref: 'main' }), headers: { 'Content-Type': 'application/json' } });
+  if (d.status !== 204) return jsonRes({ error: `실행 요청 실패(GitHub HTTP ${d.status})`, detail: (await d.text()).slice(0, 200), actionsUrl }, 502);
+  return jsonRes({ ok: true, started: true, actionsUrl });
+}
+
 export default async function handler(req) {
   try {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
@@ -324,6 +354,8 @@ export default async function handler(req) {
 
     // 카카오맵 지도(JavaScript SDK)용 키. JavaScript 키는 원래 브라우저에서 쓰는 공개 키라 내려 준다 —
     // 대신 카카오 개발자 콘솔에 등록한 도메인에서만 동작한다. 저장소에는 두지 않고 Vercel 환경변수에만 둔다.
+    if (service === 'growthRefresh')   return handleGrowth(env, 'refresh');
+    if (service === 'growthStatus')    return handleGrowth(env, 'status');
     if (service === 'kakaoMapKey')     return env.KAKAO_JS_KEY ? jsonRes({ key: env.KAKAO_JS_KEY }) : jsonRes({ error: 'KAKAO_JS_KEY 미설정 — 오픈스트리트맵으로 표시' }, 404);
     if (service === 'naverNews')       return handleNaver(url, env, 'news');
     if (service === 'naverWeb')        return handleNaver(url, env, 'webkr');

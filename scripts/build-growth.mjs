@@ -157,7 +157,17 @@ function extract(txt, byBz6) {
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
-  const [{ versions, next }, mfds] = await Promise.all([npsVersions(), mfdsRegister().catch((e) => { log('식약처 명단 실패', e.message); return []; })]);
+  // 조회 요청이 들어와도 포털의 최신 파일이 지난번과 같으면 아무것도 내려받지 않고 끝낸다
+  // (4천여 제조업체 대조·115MB 내려받기는 새 달 자료가 나왔을 때만). FORCE=1이면 다시 만든다.
+  const { versions, next } = await npsVersions();
+  try {
+    const prev = JSON.parse(fs.readFileSync(path.join(OUT, 'latest.json'), 'utf8'));
+    if (process.env.FORCE !== '1' && prev.fileDate && prev.fileDate === versions[0].date) {
+      notice(`최신 국민연금 파일(${versions[0].date})이 지난 집계와 같습니다 — 내려받기·대조 없이 끝냅니다. 다음 공개 예정 ${next || '미정'}`);
+      return;
+    }
+  } catch { /* 이전 집계 없음 */ }
+  const mfds = await mfdsRegister().catch((e) => { log('식약처 명단 실패', e.message); return []; });
   const byBz6 = new Map();
   mfds.forEach((m) => { if (!byBz6.has(m.bz6)) byBz6.set(m.bz6, []); byBz6.get(m.bz6).push(m); });
   const snapPath = (ym) => path.join(OUT, `snap-${ym}.json`);
@@ -220,7 +230,7 @@ async function main() {
   const industry = { months: want, total: want.map((_, k) => full.reduce((a, r) => a + r.s[k], 0)), firms: full.length };
   const have = want.filter((ym) => got[ym]);
   const doc = {
-    ym: M, months: want, have, nextUpdate: next, builtAt: new Date().toISOString(),
+    ym: M, months: want, have, nextUpdate: next, builtAt: new Date().toISOString(), fileDate: versions[0].date,
     source: '국민연금공단_국민연금 가입 사업장 내역(공공데이터포털 15083277, 월별 파일) · 식약처 화장품 제조업 공개 API',
     scope: '가입자 3인 이상 법인 사업장 · 업종 화장품 제조업(242403) 또는 식약처 제조업 허가 업체(사업자번호 앞 6자리·상호 일치)',
     counts: { rows: rows.length, cosmetics: rows.filter((r) => r.cos).length, mfds: rows.filter((r) => r.mfds).length, mfdsRegister: mfds.length },

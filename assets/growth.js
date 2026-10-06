@@ -18,7 +18,18 @@ const GR = {
   SMALL_BASE: 5,       // 비교 시점 인원 5명 미만은 '소규모' — 한두 명으로 비율이 크게 튄다
   SHOW: 30,
 };
-const growthState = { data: null, period: '1', sort: 'net', onlyCos: false, hideTemp: true, open: null, err: null };
+const growthState = { data: null, period: '1', sort: 'net', onlyCos: false, hideTemp: true, open: null, err: null, req: null };
+const GR_ACTIONS = 'https://github.com/duckjin87-web/vendor-scout/actions/workflows/growth.yml';
+const grWhen = (iso) => { if (!iso) return ''; const t = new Date(iso); return `${t.getMonth() + 1}월 ${t.getDate()}일 ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
+// 조회 요청 줄 — 집계는 자동으로 돌지 않고 이 버튼(또는 GitHub Actions 화면)으로만 돈다
+function grReqHtml(st) {
+  const d = st.data || {}, q = st.req || {};
+  const fd = d.fileDate ? d.fileDate.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') : '';
+  return `<div class="gr-req"><button type="button" class="nb-btn sm${q.busy ? '' : ' dark'}" data-gr-req${q.busy ? ' disabled' : ''}>${q.busy ? '집계 중…' : '최신 자료 조회 요청'}</button>`
+    + `<small>마지막 집계 ${esc(grWhen(d.builtAt) || '—')}${fd ? ` · 국민연금 파일 ${esc(fd)}` : ''} · 다음 공개 ${esc(d.nextUpdate || '미정')}</small>`
+    + (q.msg ? `<p class="gr-reqmsg${q.err ? ' err' : ''}" role="status">${esc(q.msg)}${q.link ? ` <a href="${esc(q.link)}" target="_blank" rel="noopener">GitHub에서 직접 실행 ↗</a>` : ''}</p>` : '')
+    + '</div>';
+}
 
 const grPer = (id) => GR.PERIODS.find((p) => p.id === id) || GR.PERIODS[0];
 function grRows(st, per = grPer(st.period)) {
@@ -102,7 +113,7 @@ function grHtml(st) {
   const L = d.months.length - 1, B = L - per.back;
   const cmpYm = d.months[B];
   let h = `<div class="gr-head"><div><h2>급성장 신호 <small>화장품 제조업 · 국민연금 가입자 기준</small></h2>`
-    + `<p class="gr-sub">기준월 <b>${esc(grYm(d.ym))}</b> (국민연금 최신 공개분) · 다음 갱신 ${esc(d.nextUpdate || '매월 말')} · 대상 ${d.counts.rows.toLocaleString()}개 사업장</p></div></div>`;
+    + `<p class="gr-sub">기준월 <b>${esc(grYm(d.ym))}</b> (국민연금 최신 공개분) · 대상 ${d.counts.rows.toLocaleString()}개 사업장</p></div>${grReqHtml(st)}</div>`;
   // 기간 고르기 = 기간별 급증 사업장 수 타일
   h += '<div class="gr-tiles" role="tablist" aria-label="비교 기간">' + GR.PERIODS.map((p) => {
     const n = grRows(st, p).length;
@@ -204,6 +215,7 @@ function mountGrowth() {
     const s = e.target.closest('[data-gr-sort]'); if (s) { growthState.sort = s.dataset.grSort; paint(); return; }
     const g = e.target.closest('[data-gr-go]');
     if (g) { const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = ''; lookup(g.dataset.grGo, ''); return; }
+    if (e.target.closest('[data-gr-req]')) { grRequest(paint); return; }
     const row = e.target.closest('[data-gr-row]');
     if (row) { growthState.open = growthState.open === row.dataset.grRow ? null : row.dataset.grRow; paint(); }
   });
@@ -221,9 +233,41 @@ function mountGrowth() {
   if (rep) new MutationObserver(sync).observe(rep, { attributes: true, attributeFilter: ['class'] });
   sync();
   paint();
-  fetch(`data/growth/latest.json?v=${BUILD}-${new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' })
-    .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-    .then((d) => { growthState.data = d; paint(); })
-    .catch((e) => { growthState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
+  grLoad().then(paint).catch((e) => { growthState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
+}
+const grLoad = (bust) => fetch(`data/growth/latest.json?v=${BUILD}-${bust || new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' })
+  .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then((d) => { growthState.data = d; return d; });
+
+// 「최신 자료 조회 요청」 — 프록시가 GitHub Actions 집계를 돌리고, 끝나면 새 집계를 다시 읽는다.
+// 집계 작업은 포털의 최신 파일이 지난번과 같으면 내려받기·대조 없이 바로 끝난다.
+async function grRequest(paint) {
+  const set = (o) => { growthState.req = { ...(growthState.req || {}), ...o }; paint(); };
+  if (!getProxy()) { set({ msg: '실데이터 연결(프록시)이 있어야 요청할 수 있습니다 — 우측 상단 「실데이터 연결」을 먼저 해 주세요.', err: true, link: GR_ACTIONS }); return; }
+  set({ busy: true, msg: '집계 요청 중…', err: false, link: null });
+  let r;
+  try { r = await proxyOnlyGet('growthRefresh', {}); } catch (e) {
+    set({ busy: false, msg: e.message || '요청 실패', err: true, link: GR_ACTIONS }); return;
+  }
+  if (!r.started) { set({ msg: `${r.reason || '지금은 새로 돌리지 않았습니다'} — 끝나면 자동으로 새 자료를 불러옵니다.`, link: r.actionsUrl }); }
+  else set({ msg: '집계를 시작했습니다. 새 달 자료가 있으면 내려받아 대조합니다(몇 분 + 사이트 반영 1~2분). 이 화면을 열어 두면 자동으로 바뀝니다.' });
+  const before = growthState.data && growthState.data.builtAt;
+  const t0 = Date.now();
+  // 작업이 끝날 때까지 20초마다 확인(최대 25분) → 끝나면 사이트 반영을 기다리며 새 집계 파일을 다시 읽는다
+  while (Date.now() - t0 < 25 * 60 * 1000) {
+    await new Promise((res) => setTimeout(res, 20000));
+    let st = null;
+    try { st = await proxyOnlyGet('growthStatus', {}); } catch { continue; }
+    const last = st && st.last;
+    if (!last || last.status !== 'completed') continue;
+    if (last.conclusion !== 'success') { set({ busy: false, msg: `집계 작업이 실패했습니다(${last.conclusion}).`, err: true, link: last.url }); return; }
+    for (let k = 0; k < 9; k++) {
+      try { const d = await grLoad(Date.now()); if (d.builtAt !== before) { set({ busy: false, msg: `새 자료로 바꿨습니다 — 기준월 ${grYm(d.ym)}.`, err: false, link: null }); return; } } catch { /* 반영 대기 */ }
+      await new Promise((res) => setTimeout(res, 20000));
+    }
+    set({ busy: false, msg: '새로 공개된 국민연금 자료가 없어 지난 집계를 그대로 씁니다(포털 최신 파일이 지난번과 같음).', err: false, link: null });
+    return;
+  }
+  set({ busy: false, msg: '아직 끝나지 않았습니다 — 잠시 뒤 새로고침해 주세요.', link: GR_ACTIONS });
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountGrowth); else mountGrowth();
