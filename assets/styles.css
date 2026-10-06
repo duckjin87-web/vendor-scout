@@ -1673,7 +1673,7 @@ button.vd-badge:focus-visible { outline: 2px solid var(--accent); outline-offset
 .gr-empty { margin-top: 12px; padding: 14px; border: 1px dashed var(--border); border-radius: 6px; font-size: 13px; color: var(--muted); line-height: 1.6; }
 .gr-empty b { color: var(--text); }
 .gr-tw { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.gr-tbl { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }
+.gr-tbl { width: 100%; min-width: 880px; border-collapse: collapse; font-size: 13px; }
 .gr-tbl th { text-align: left; font-size: 12px; font-weight: 700; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .gr-tbl td { padding: 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
 .gr-tbl .n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -1687,3 +1687,51 @@ button.vd-badge:focus-visible { outline: 2px solid var(--accent); outline-offset
 .gr-foot { margin: 10px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
 @media (max-width: 720px) { .growth { padding: 12px; } .gr-seg { width: 100%; } .gr-seg button { flex: 1; } }
 @media print { .growth { display: none !important; } }
+
+/* 머리줄 — 첫 화면(대시보드)으로 */
+.homebtn { font: inherit; font-size: 13px; font-weight: 700; padding: 6px 12px; min-height: 34px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); cursor: pointer; margin-right: 8px; white-space: nowrap; transition: border-color .15s ease, transform .12s ease; }
+.homebtn:hover { border-color: var(--accent); color: var(--accent); }
+.homebtn:active { transform: scale(.96); }
+.growth.enter { animation: paneIn .28s ease both; }
+@media print { .homebtn { display: none !important; } }
+
+/* 급성장 신호 — 기간 타일 · 추이 그래프 · 작은 추이 */
+.gr-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 14px 0 12px; }
+.gr-tile { font: inherit; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel); color: var(--text); cursor: pointer; min-width: 0; transition: border-color .15s ease, box-shadow .15s ease; }
+.gr-tile span { font-size: 12px; color: var(--muted); font-weight: 600; }
+.gr-tile b { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.gr-tile small { font-size: 11px; color: var(--muted); }
+.gr-tile:hover { border-color: var(--accent); }
+.gr-tile[aria-selected="true"] { border-color: var(--text); box-shadow: inset 0 -3px 0 var(--text); }
+.gr-ind, .gr-dbox { position: relative; border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px 6px; margin-bottom: 10px; }
+.gr-ind-h { font-size: 13px; margin-bottom: 4px; }
+.gr-ind-h small { color: var(--muted); margin-left: 4px; }
+.gr-svg { display: block; width: 100%; overflow: visible; }
+.gr-svg .gr-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.gr-svg .gr-grid { stroke: var(--rule); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.gr-svg .gr-band { fill: var(--accent-soft); opacity: .7; }
+.gr-svg .gr-ax { fill: var(--muted); font-size: 10.5px; }
+.gr-svg .gr-pl { fill: var(--text); font-size: 11px; font-weight: 700; }
+.gr-svg .gr-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+.gr-svg .gr-dot.cmp { fill: var(--panel); stroke: var(--accent); }
+.gr-svg .gr-cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.gr-tip { position: absolute; z-index: 5; pointer-events: none; padding: 6px 9px; font-size: 12px; line-height: 1.45; border-radius: 6px; min-width: 110px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); box-shadow: 0 6px 18px rgba(0, 0, 0, .12); }
+.gr-tip small { color: var(--muted); }
+.growth { position: relative; }
+.gr-spark { width: 96px; height: 26px; display: block; }
+.gr-spark path { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linejoin: round; }
+.gr-spark circle { fill: var(--accent); }
+.gr-spark circle.cmp { fill: var(--panel); stroke: var(--accent); stroke-width: 1.4; }
+.gr-row { cursor: pointer; }
+.gr-row:hover td, .gr-row.open td { background: var(--accent-soft); }
+.gr-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.gr-detail td { padding: 4px 8px 12px; background: var(--accent-soft); }
+.gr-dbox { background: var(--panel); margin: 0; }
+.gr-vals { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--muted); padding: 6px 0 4px; }
+.gr-vals b { color: var(--text); }
+.gr-nochart { font-size: 12.5px; color: var(--muted); padding: 10px 0; }
+@media (max-width: 720px) { .gr-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .homebtn { padding: 5px 10px; } }
+@media (prefers-reduced-motion: reduce) { .growth.enter { animation: none; } }

@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 166;
+const BUILD = 167;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -5491,8 +5491,22 @@ function trackStickyBars() {
   onScroll();
 }
 
+// 첫 화면(대시보드)으로 — 리포트는 지우지 않고 감춘다(최근 검색에서 다시 열 수 있다)
+function goHome() {
+  const root = $('#report');
+  if (root) root.classList.add('hidden');
+  document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+  window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  const g = document.getElementById('growth');
+  if (g) { g.classList.remove('enter'); void g.offsetWidth; g.classList.add('enter'); }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   trackStickyBars();
+  const hb = $('#homeBtn');
+  if (hb) hb.addEventListener('click', goHome);
+  const logo = document.querySelector('.topbar .logo');
+  if (logo) { logo.style.cursor = 'pointer'; logo.title = '첫 화면 대시보드로'; logo.addEventListener('click', goHome); }
   loadStaticIndex(); // 식약처 실데이터 인덱스 미리 로드 (있으면)
 
   // ?proxy= 로 들어오면 저장 (프록시 자동 연결)
