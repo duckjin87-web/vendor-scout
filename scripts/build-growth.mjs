@@ -8,7 +8,8 @@
 //          · 가입자수 · 당월고지금액 · 신규취득자수 · 상실가입자수
 //      — 공개 범위: 가입자 3인 이상 법인 사업장. 포털에는 최신 한 달치만 남는다(이전 달 파일 없음, 2026-10 확인).
 //   ② 식약처 화장품 제조업 공개 API(제조소 한 곳당 한 건, 상호·사업자번호) — 국민연금 업종이 '화장품 제조업'이
-//      아닌 허가 업체(도매업 등으로 등록)도 함께 잡으려고 쓴다.
+//      아닌 허가 업체(도매업 등으로 등록)도 함께 잡으려고 쓴다. 이 API에는 제조업 말고 다른 업종(INDUTY)도
+//      섞여 와서(코스트코·샤넬 등 책임판매업) INDUTY가 '제조'인 건만 쓴다.
 //
 // 대상: 국민연금 업종 242403(화장품 제조업) 사업장 + 식약처 제조업 허가 업체와 사업자번호 앞 6자리·상호가 맞는 사업장
 //
@@ -89,8 +90,12 @@ async function mfdsRegister() {
     got.forEach((g) => all.push(...g.items));
   }
   log(`식약처 제조업 명단 ${all.length}/${first.total}건`);
+  // 업종(INDUTY)별 건수 — 이 API에는 제조업 말고 다른 업종도 섞여 온다(코스트코·샤넬이 걸린 이유)
+  const ind = {}; all.forEach((x) => { ind[x.INDUTY] = (ind[x.INDUTY] || 0) + 1; });
+  log(`업종별: ${JSON.stringify(ind)}`);
+  console.log(`::notice::식약처 명단 업종별 건수 ${JSON.stringify(ind)}`);
   const seen = new Map();
-  all.forEach((x) => {
+  all.filter((x) => /제조/.test(String(x.INDUTY || '')) && !/책임판매|판매|수입/.test(String(x.INDUTY || ''))).forEach((x) => {
     const bz = String(x.BIZRNO || '').replace(/\D/g, '');
     const key = `${bz.slice(0, 6)}|${nk(x.ENTP_NAME)}`;
     if (!seen.has(key)) seen.set(key, { name: x.ENTP_NAME, bz6: bz.slice(0, 6), key: nk(x.ENTP_NAME), permit: x.ENTP_PERMIT_DATE || '' });
@@ -131,6 +136,7 @@ async function main() {
       temp: /비정규|일용|파견|계약직/.test(c[C.nm]),
     });
   }
+  console.log(`::notice::기준월 ${ym} · 대상 ${rows.length}곳 · 화장품 제조업 업종 ${rows.filter((r) => r.code === COSMETIC_CODE).length} · 식약처 제조업 일치 ${rows.filter((r) => r.mfds).length} · 식약처 제조업체 ${mfds.length}곳`);
   log(`기준월 ${ym} · 대상 사업장 ${rows.length}곳 (화장품 제조업 업종 ${rows.filter((r) => r.code === COSMETIC_CODE).length} · 식약처 허가 일치 ${rows.filter((r) => r.mfds).length})`);
 
   // 스냅숏 저장 — 다음 달 2개월 계산의 재료
