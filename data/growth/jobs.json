@@ -1,0 +1,1 @@
+{"builtAt":"2026-10-06T15:07:23.206Z","window":{"from":"2026-09-06","to":"2026-10-06"},"prevWindow":{"from":"2026-08-07","to":"2026-09-06"},"sources":{"saramin":{"ok":false,"err":"SARAMIN_KEY 미등록"},"work24":{"ok":false,"err":"WORK24_KEY 미등록"}},"rows":[],"note":"잡코리아는 공개 API가 없고, 인크루트·링크드인은 robots.txt가 수집을 막아 제외했습니다."}
