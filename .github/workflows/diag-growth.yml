@@ -68,10 +68,16 @@ jobs:
             const atch = (pg.t.match(/atchFileId['"]?\s*[:=]\s*['"]([A-Za-z0-9_]+)/) || [])[1];
             const sn = (pg.t.match(/fileDetailSn['"]?\s*[:=]\s*['"]?(\d+)/) || [])[1] || '1';
             const pk = (pg.t.match(/publicDataDetailPk['"]?\s*[:=]\s*['"]([A-Za-z0-9_-]+)/) || [])[1];
-            for (const u of [atch && `https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atch}&fileDetailSn=${sn}`,
-                             pk && `https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${pk}&fileDetailSn=${sn}`].filter(Boolean)) {
-              const r = await fetch(u, { headers: { Range: 'bytes=0-4000000' } }).catch((e) => ({ status: 0, e }));
-              if (!r.status) { note(`내려받기 실패 ${u}`); continue; }
+            const linkRaw = (pg.t.match(/([^"'\s<>]*fileDownload\.do\?atchFileId=[^"'\s<>]+)/) || [])[1] || '';
+            const link = linkRaw ? new URL(linkRaw.replace(/&amp;/g, '&'), 'https://www.data.go.kr/').href : '';
+            for (const u of [link, atch && `https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atch}&fileDetailSn=${sn}&insertDataPrcus=N`].filter(Boolean)) {
+              let r;
+              try {
+                const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 60000);
+                r = await fetch(u, { headers: { Range: 'bytes=0-4000000', 'User-Agent': 'Mozilla/5.0', Referer: `https://www.data.go.kr/data/${id}/fileData.do` }, signal: ctrl.signal });
+                clearTimeout(tm);
+              } catch (e) { note(`내려받기 실패 ${u} — ${e && e.message}`); continue; }
+              if (!r.ok && r.status !== 206) { note(`내려받기 HTTP ${r.status} ${u} · ${(await r.text()).slice(0, 300)}`); continue; }
               const buf = new Uint8Array(await r.arrayBuffer());
               const dec = (enc) => { try { return new TextDecoder(enc).decode(buf); } catch { return ''; } };
               const txt = /[가-힣]/.test(dec('utf-8')) ? dec('utf-8') : dec('euc-kr');
