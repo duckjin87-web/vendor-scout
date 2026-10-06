@@ -1,0 +1,59 @@
+name: Diagnose MFDS maker record
+
+# 식약처 화장품 제조업 API가 실제로 어떤 항목(필드)을 주는지 확인하는 진단용 워크플로우.
+# 업체명 하나로 조회해 상호가 맞는 원본 레코드를 작업 로그에 그대로 찍는다.
+# 아무것도 커밋하지 않는다. 키는 GitHub Secret에만 있고 로그에서는 가려진다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      vendor_name:
+        description: '업체명 (예: 코스맥스)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query MFDS maker API
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          NAME: ${{ inputs.vendor_name }}
+        run: |
+          cat > diag.mjs <<'EOF'
+          const BASE = 'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01';
+          const name = process.env.NAME;
+          const norm = (s) => String(s || '').replace(/\(주\)|㈜|주식회사|\s/g, '');
+          const key = norm(name);
+          const call = async (extra) => {
+            const q = new URLSearchParams({ serviceKey: process.env.KEY, type: 'json', pageNo: '1', numOfRows: '100', ...extra });
+            const r = await fetch(`${BASE}?${q}`);
+            const t = await r.text();
+            let j = null; try { j = JSON.parse(t); } catch {}
+            return { status: r.status, text: t, json: j };
+          };
+          const itemsOf = (j) => {
+            const b = (j && (j.body || (j.response && j.response.body))) || {};
+            let it = b.items; if (it && it.item) it = it.item;
+            it = Array.isArray(it) ? it : (it ? [it] : []);
+            return { total: b.totalCount, items: it.map((x) => (x && x.item && typeof x.item === 'object' ? x.item : x)) };
+          };
+          const first = await call({});
+          console.log('== 무필터 첫 응답 HTTP', first.status, '앞부분 ==');
+          console.log(first.text.slice(0, 1200));
+          const f = itemsOf(first.json);
+          console.log('== totalCount', f.total, '· 첫 레코드 키 ==', f.items[0] ? Object.keys(f.items[0]).join(', ') : '(없음)');
+          for (const p of ['bssh_nm', 'Bssh_Nm', 'BSSH_NM', 'entpName', 'entp_name', 'prmisnEntpNm', 'ENTP_NAME']) {
+            const r = await call({ [p]: name });
+            const { total, items } = itemsOf(r.json);
+            const hits = items.filter((x) => Object.values(x).some((v) => norm(v).includes(key)));
+            console.log(`== 파라미터 ${p}: HTTP ${r.status} · totalCount ${total} · 받은 ${items.length}건 · 상호 일치 ${hits.length}건`);
+            hits.slice(0, 5).forEach((h) => console.log(JSON.stringify(h, null, 1)));
+            if (hits.length) break;
+          }
+          EOF
+          node diag.mjs
