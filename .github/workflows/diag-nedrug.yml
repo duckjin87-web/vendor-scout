@@ -51,6 +51,23 @@ jobs:
             const pg = await get(`${H}${p}`);
             const title = (pg.t.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '';
             note(`${p} HTTP ${pg.s} · 제목 ${strip(title)} · 폼 ${forms(pg.t)} · 입력 ${inputs(pg.t)}`);
+            // 업종(cobCode) 선택지 — 값과 이름
+            const sel = (pg.t.match(/<select[^>]*name=["']cobCode["'][\s\S]*?<\/select>/i) || [''])[0];
+            const opts = [...sel.matchAll(/<option[^>]*value=["']([^"']*)["'][^>]*>([\s\S]*?)<\/option>/gi)].map((m) => `${m[1]}=${strip(m[2])}`);
+            const radios = [...pg.t.matchAll(/<input[^>]*name=["']cobCode["'][^>]*value=["']([^"']*)["'][^>]*>[\s\S]{0,200}?<label[^>]*>([\s\S]*?)<\/label>/gi)].map((m) => `${m[1]}=${strip(m[2])}`);
+            note(`${p} 업종 선택지: ${opts.concat(radios).join(' , ') || '(못 찾음) ' + (pg.t.match(/cobCode[\s\S]{0,600}/) || [''])[0].replace(/\s+/g, ' ')}`);
+            const cos = opts.concat(radios).find((x) => /화장품제조/.test(x));
+            if (cos) {
+              const code = cos.split('=')[0];
+              const r = await get(`${H}/pbp/CCBBA01/getList?searchYn=true&page=1&limit=10&cobCode=${encodeURIComponent(code)}&entpName=${encodeURIComponent(process.env.NAME)}`);
+              const rows = [...r.t.matchAll(/<tr[\s\S]*?<\/tr>/gi)].map((m) => m[0]).filter((x) => x.includes(process.env.NAME));
+              note(`화장품제조(cobCode=${code}) 검색 HTTP ${r.status || r.s} · ${(strip(r.t).match(/총\s*\d+\s*건/) || [''])[0]} · 행 ${rows.length}`);
+              rows.slice(0, 4).forEach((x) => note(`화장품 행: ${x.replace(/\s+/g, ' ').slice(0, 1200)}`));
+              if (rows[0]) {
+                const href = (rows[0].match(/href=["']([^"']+)["']/) || [])[1];
+                if (href) { const d = await get(`${H}${href.replace(/&amp;/g, '&')}`); note(`상세 ${href.slice(0, 120)} → ${strip(d.t).replace(/^[\s\S]*?(업체\s*기본정보)/, '$1').slice(0, 1500)}`); }
+              }
+            }
             const act = ((pg.t.match(/<form[^>]*id=["']searchForm["'][^>]*action=["']([^"']+)["']/i) || [])[1]) || p;
             for (const k of ['entpName', 'searchEntpName', 'bsshNm', 'searchBsshNm', 'entpNm', 'searchText']) {
               const r = await get(`${H}${act}?searchYn=true&page=1&limit=10&${k}=${encodeURIComponent(process.env.NAME)}`);
