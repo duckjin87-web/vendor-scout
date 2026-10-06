@@ -38,6 +38,18 @@ jobs:
             note(`FILE_ 번호들 ${ids.join(', ')} · 이력 관련 키 ${hk.join(' ')} · 메타 길이 ${meta.length}`);
             const hist = [...pg.matchAll(/(\d{8})[^<]{0,40}(?:csv|CSV)/g)].map((m) => m[1]);
             note(`화면의 날짜+csv 표기 ${[...new Set(hist)].join(', ')} · 이력 링크 ${[...new Set((pg.match(/[^"'\s<>]*(?:hist|History|Hist)[^"'\s<>]*/g) || []))].slice(0, 8).join(' | ')}`);
+            const hv = (k) => [...new Set((meta.match(new RegExp(`"${k}"\\s*:\\s*"?([^",}]*)`, 'g')) || []))].join(' ');
+            note(`이력 값: ${hv('publicDataHistSn')} | ${hv('prePublicDataHistSn')} | ${hv('beforeDetailPk')} | ${hv('publicHistDataAt')}`);
+            const at = pg.indexOf('histAndCsvData');
+            const jsUrls = [];
+            for (const src of [...pg.matchAll(/<script[^>]*src=["']([^"']+)["']/g)].map((m) => m[1]).filter((u) => /file|dss|data/i.test(u)).slice(0, 6)) {
+              const js = await (await fetch(new URL(src, 'https://www.data.go.kr/').href)).text().catch(() => '');
+              const i = js.indexOf('histAndCsvData');
+              if (i >= 0) jsUrls.push(`${src}: ${js.slice(Math.max(0, i - 200), i + 900).replace(/\s+/g, ' ')}`);
+            }
+            note(`화면 내 histAndCsvData 주변: ${at >= 0 ? pg.slice(Math.max(0, at - 300), at + 600).replace(/\s+/g, ' ') : '없음'}`);
+            note(`스크립트 내 정의: ${jsUrls.join(' || ').slice(0, 5000) || '못 찾음'}`);
+            return;
             for (const sn2 of ['2', '3']) {
               const m2 = await (await fetch(`https://www.data.go.kr/tcs/dss/selectFileDataDownload.do?publicDataPk=15083277&publicDataDetailPk=${uddi}&fileDetailSn=${sn2}`, { headers: { Referer: 'https://www.data.go.kr/data/15083277/fileData.do' } })).text();
               note(`fileDetailSn=${sn2} 메타: ${(m2.match(/"(atchFileId|fileNm|orginlFileNm|dataNm|fileDetailSn)"\s*:\s*"?[^",}]*/g) || []).join(' ; ').slice(0, 800)}`);
