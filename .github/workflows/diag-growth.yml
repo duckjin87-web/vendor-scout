@@ -64,13 +64,24 @@ jobs:
             const meta = (pg.t.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').match(/(파일데이터명[\s\S]{0,400})/) || [''])[0];
             note(`파일 ${id} HTTP ${pg.s} · ${title.trim()} · 내려받기 단서 ${dl.join(' | ') || '없음'} · ${meta.slice(0, 500)}`);
             const js = [...pg.t.matchAll(/(publicDataPk|publicDataDetailPk|atchFileId|fileDetailSn)\s*[:=]\s*['"]?([A-Za-z0-9_-]+)/g)].map((m) => `${m[1]}=${m[2]}`);
-            note(`파일 ${id} 식별자: ${[...new Set(js)].slice(0, 12).join(', ')}`);
+
             const atch = (pg.t.match(/atchFileId['"]?\s*[:=]\s*['"]([A-Za-z0-9_]+)/) || [])[1];
             const sn = (pg.t.match(/fileDetailSn['"]?\s*[:=]\s*['"]?(\d+)/) || [])[1] || '1';
             const pk = (pg.t.match(/publicDataDetailPk['"]?\s*[:=]\s*['"]([A-Za-z0-9_-]+)/) || [])[1];
+            const allDl = [...new Set([...pg.t.matchAll(/(?:href|onclick|data-[a-z-]+)=["']([^"']*(?:[Dd]ownload|fileDetailSn|atchFileId|\.csv|\.zip)[^"']*)["']/g)].map((m) => m[1]))];
+            note(`다운로드 관련 링크 ${allDl.length}: ${allDl.slice(0, 15).join(' | ').slice(0, 1500)} · 파일 표기 ${[...new Set((pg.t.match(/[가-힣A-Za-z0-9_]+\.(?:csv|zip|xlsx|py)/gi) || []))].slice(0, 10).join(', ')}`);
+            for (const sn2 of ['2', '3', '4', '5']) {
+              try {
+                const r2 = await fetch(`https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atch}&fileDetailSn=${sn2}&insertDataPrcus=N`, { headers: { Range: 'bytes=0-3000000', 'User-Agent': 'Mozilla/5.0' } });
+                const b2 = new Uint8Array(await r2.arrayBuffer());
+                const t2 = /[가-힣]/.test(new TextDecoder('utf-8').decode(b2.slice(0, 4000))) ? new TextDecoder('utf-8').decode(b2) : new TextDecoder('euc-kr').decode(b2);
+                const ls = t2.split(/\r?\n/); const cos = ls.filter((l) => /화장품/.test(l));
+                note(`첨부 ${sn2}: HTTP ${r2.status} · ${r2.headers.get('content-disposition') || ''} · 범위 ${r2.headers.get('content-range') || r2.headers.get('content-length')} · ${ls.length}줄 · 첫 줄 ${ls[0].slice(0, 500)} · 둘째 ${String(ls[1] || '').slice(0, 300)} · 화장품 ${cos.length}줄 예 ${cos.slice(0, 2).join(' || ').slice(0, 600)}`);
+              } catch (e) { note(`첨부 ${sn2} 실패 ${e.message}`); }
+            }
             const linkRaw = (pg.t.match(/([^"'\s<>]*fileDownload\.do\?atchFileId=[^"'\s<>]+)/) || [])[1] || '';
             const link = linkRaw ? new URL(linkRaw.replace(/&amp;/g, '&'), 'https://www.data.go.kr/').href : '';
-            for (const u of [link, atch && `https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atch}&fileDetailSn=${sn}&insertDataPrcus=N`].filter(Boolean)) {
+            for (const u of []) {
               let r;
               try {
                 const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 60000);
