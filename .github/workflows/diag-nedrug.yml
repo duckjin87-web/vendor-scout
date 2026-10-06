@@ -39,11 +39,11 @@ jobs:
           let paths = [];
           if (process.env.PATHQ) paths = [process.env.PATHQ];
           else {
-            const home = await get(`${H}/index`);
+            const home = await get(`${H}/pbp/CCBDB01`);   // 화장품 메뉴 화면 — 하위 메뉴 링크가 여기 다 있다
             const links = [...home.t.matchAll(/<a[^>]*href=["']([^"']*\/pbp\/[A-Z0-9]+[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)].map((m) => ({ href: m[1], text: strip(m[2]) }));
             const hit = links.filter((l) => /화장품/.test(l.text) || /(업체|업소|제조)/.test(l.text));
             note(`메뉴 HTTP ${home.s} · /pbp 링크 ${links.length}개 · 후보: ${hit.slice(0, 40).map((l) => `${l.text}=${l.href}`).join(' ; ')}`);
-            paths = [...new Set(hit.filter((l) => /화장품/.test(l.text)).map((l) => l.href.replace(H, '').split('?')[0]))].slice(0, 6);
+            paths = [...new Set(hit.filter((l) => /(업체|업소|제조업|책임판매)/.test(l.text)).map((l) => l.href.replace(H, '').split('?')[0]))].slice(0, 8);
             if (!paths.length) paths = ['/pbp/CCBAC01', '/pbp/CCBAC02', '/pbp/CCBAC03', '/pbp/CCBBA01', '/pbp/CCBBB01'];
           }
           // ② 각 화면의 제목·폼·입력 이름, 그리고 업체명으로 검색해 본 결과
@@ -51,8 +51,9 @@ jobs:
             const pg = await get(`${H}${p}`);
             const title = (pg.t.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '';
             note(`${p} HTTP ${pg.s} · 제목 ${strip(title)} · 폼 ${forms(pg.t)} · 입력 ${inputs(pg.t)}`);
-            for (const k of ['searchEntpName', 'entpName', 'searchBsshNm', 'bsshNm', 'searchText', 'entpNm']) {
-              const r = await get(`${H}${p}?${k}=${encodeURIComponent(process.env.NAME)}`);
+            const act = ((pg.t.match(/<form[^>]*id=["']searchForm["'][^>]*action=["']([^"']+)["']/i) || [])[1]) || p;
+            for (const k of ['entpName', 'searchEntpName', 'bsshNm', 'searchBsshNm', 'entpNm', 'searchText']) {
+              const r = await get(`${H}${act}?searchYn=true&page=1&limit=10&${k}=${encodeURIComponent(process.env.NAME)}`);
               const txt = strip(r.t);
               const at = txt.indexOf(process.env.NAME);
               if (r.s === 200 && at >= 0 && /총\s*\d+\s*건/.test(txt)) {
