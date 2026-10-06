@@ -816,9 +816,13 @@ function assembleLiveReport(name, corp, res) {
   const mkList = R.maker && R.maker.ok ? listOf(R.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const mk = matchByName(name, mkList);
   const mkReg = R.maker && R.maker.ok && R.maker.data ? R.maker.data.register : null;   // 명단 전체 재검색 여부
-  const mkNo = mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? mk.PRMISN_NO ?? mk.prmisnNo ?? null) : null;
+  // 의약품안전나라 업체정보 — 번지까지 있는 제조소 주소(곳별)·업허가번호. 공개 API는 시·군까지만 준다.
+  const ned = R.nedrug && R.nedrug.ok && R.nedrug.data && R.nedrug.data.found ? R.nedrug.data : null;
+  const nedSites = ned ? ned.sites : [];
+  const mkNo = (ned && ned.permitNo) || (mk ? (mk.LCNS_NO ?? mk.lcnsNo ?? mk.MAKER_REG_NO ?? mk.PRMISN_NO ?? mk.prmisnNo ?? null) : null);
   // 허가일자 — 설립일과 크게 벌어져 있으면 업종을 바꿔 들어온 것이다. 반드시 물어야 할 사항.
-  const mkDateRaw = mk ? pickByKey(mk, /PRMISN.*(DE|DT|DAY)|허가일|등록일|LCNS.*(DE|DT)|PRMS.*DE/i) : null;
+  // 공개 API의 허가일 항목은 ENTP_PERMIT_DATE — 예전 정규식이 PERMIT을 몰라 허가일이 늘 비었다
+  const mkDateRaw = (mk ? pickByKey(mk, /PRMISN.*(DE|DT|DAY)|PERMIT.*(DATE|DT|DE)|허가일|등록일|LCNS.*(DE|DT)|PRMS.*DE/i) : null) || (ned && ned.permitDate) || null;
   const mkDate = mkDateRaw && /(19|20)\d{6}|(19|20)\d{2}[-.\/]/.test(String(mkDateRaw)) ? fmtDate(String(mkDateRaw).replace(/\D/g, '')) : null;
 
   // 국세청 사업자상태 (odcloud: {data:[{b_stt, tax_type, ...}]})
@@ -911,8 +915,11 @@ function assembleLiveReport(name, corp, res) {
     f('대표자', repVal, repVal ? (corp?.rep ? 'A' : 'B') : 'D', repSrc, repVal ? today : null, repNote),
     f('설립일 / 등록일', estbVal, estbVal ? (corp?.estbDt ? 'A' : 'C') : 'D', estbSrc, estbVal || null, estbNote),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
-    f('제조업 등록', mk ? `등록${mkNo ? ` (허가 ${mkNo})` : ''}${mkDate ? ` · ${mkDate} 허가` : ''}` : null, mk ? 'A' : 'D', '식약처 화장품제조업 API', mk ? today : null,
-      mk ? ([mkRep ? `대표 ${mkRep}` : null, mkAddr ? `소재지 ${mkAddr}` : null,
+    f('제조업 등록', (mk || ned) ? `등록${mkNo ? ` (업허가 ${mkNo})` : ''}${mkDate ? ` · ${mkDate} 허가` : ''}` : null, (mk || ned) ? 'A' : 'D',
+      ned ? (mk ? '식약처 화장품제조업 API · 의약품안전나라' : '의약품안전나라 업체정보') : '식약처 화장품제조업 API', (mk || ned) ? today : null,
+      (mk || ned) ? ([mkRep ? `대표 ${mkRep}` : null,
+        nedSites.length ? `제조소 ${nedSites.length}곳` : (mkAddr ? `소재지 ${mkAddr}` : null),
+        !mk && ned ? '공개 API 명단에는 아직 없음(의약품안전나라에서 확인)' : null,
         // 허가일이 있으면 '화장품을 몇 년 했는가'가 나온다 — 회사 업력과는 다른 숫자다
         mkDate ? ((y) => (y < 1 ? '화장품 업력 1년 미만 — 신규 허가 업체' : `화장품 업력 약 ${y}년`))(Math.max(0, new Date().getFullYear() - Number(String(mkDate).slice(0, 4)))) : null,
       ].filter(Boolean).join(' · ') || '화장품 제조업 등록 확인') : (mkReg && mkReg.searched
@@ -921,10 +928,19 @@ function assembleLiveReport(name, corp, res) {
         ? `식약처 공개 API 명단 전체(${(mkReg.total || mkReg.size || 0).toLocaleString()}곳${mkReg.full ? '' : ' 중 일부만 수신'})에 이 상호가 없습니다. `
           + '최근 허가 업체는 공개 API 반영이 늦어 빠져 있을 수 있습니다 — 의약품안전나라(nedrug.mfds.go.kr) 업체 검색에서 허가 여부를 확인하세요. 거기에도 없으면 책임판매업만 등록(OEM 위탁)일 수 있습니다'
         : why('maker', '제조업 등록 결과 없음 — 책임판매업만 등록(OEM 위탁) 가능성'))),
-    f('공장/제조소 소재지', fctAddr || mkAddr || null, (fctAddr || mkAddr) ? 'A' : 'D',
-      fctAddr ? '산업단지공단 공장등록' : (mkAddr ? '식약처 화장품제조업 API' : '산업단지공단 공장등록'),
-      (fctAddr || mkAddr) ? today : null,
-      fctAddr ? fctNote : (mkAddr ? '식약처 제조업 허가상 제조소 소재지 (산단공 공장등록 없음)' : fctNote)),
+    // 제조소가 여러 곳이면 모두 적는다(코스맥스: 화성 향남 2곳 · 평택 청북 2곳). 공개 API는 시·군까지만 주므로
+    // 번지까지 있는 의약품안전나라 주소를 앞세우고, 없을 때만 API의 시·군을 적는다.
+    (() => {
+      const nedTxt = nedSites.map((x) => x.addr + (x.detail ? ` (${x.detail})` : '')).join(' / ');
+      const nedNote = nedSites.length ? `의약품안전나라 업체정보 등록 제조소 ${nedSites.length}곳${mkNo ? ` · 업허가 ${mkNo}` : ''}` : '';
+      if (fctAddr) return f('공장/제조소 소재지', fctAddr, 'A', '산업단지공단 공장등록', today,
+        fctNote + (nedSites.length ? ` · ${nedNote}: ${nedTxt}` : ''));
+      if (nedSites.length) return f('공장/제조소 소재지', nedTxt, 'A', '의약품안전나라 업체정보', today,
+        `${nedNote} — 식약처 제조업 허가상 제조소(공개 API는 시·군까지만 제공). 산단공 공장등록 없음`);
+      return f('공장/제조소 소재지', mkAddr || null, mkAddr ? 'A' : 'D',
+        mkAddr ? '식약처 화장품제조업 API' : '산업단지공단 공장등록', mkAddr ? today : null,
+        mkAddr ? '식약처 제조업 허가상 제조소 소재지 — 공개 API는 시·군까지만 줍니다(의약품안전나라 조회 실패 시)' : fctNote);
+    })(),
   ];
   // 국세청 사업자등록 진위확인 — 사업자번호+대표자+개업일 3요소 대조.
   //  일치(01)는 강한 실체 근거. 불일치(02)는 '가짜'가 아니라 '확인 불가'로만 해석해야 한다
@@ -1465,6 +1481,10 @@ function assembleLiveReport(name, corp, res) {
       detail: mk ? `제조업 등록 확인${mkRep ? ` · 대표 ${mkRep}` : ''}${mkAddr ? ` · ${mkAddr}` : ''}`
         : (!R.maker ? '자료 미제출/미등록' : (!R.maker.ok ? briefErr(R.maker.err)
           : (mkList.length ? `상호 일치 0건 (전체 ${mkList.length}건 중 미포함 — 제조업 미등록이거나 업소명 표기 상이)` : '등록 0건 — 책임판매업만 등록 가능성'))) },
+    R.nedrug ? { key: 'nedrug', name: '의약품안전나라 업체정보', ok: !!ned, warn: !ned && !!R.nedrug.ok,
+      detail: ned ? `제조소 ${nedSites.length}곳${mkNo ? ` · 업허가 ${mkNo}` : ''}${ned.permitDate ? ` · ${ned.permitDate} 허가` : ''}`
+        : (!R.nedrug.ok ? briefErr(R.nedrug.err) : (R.nedrug.data && R.nedrug.data.rows && R.nedrug.data.rows.length
+          ? `상호 일치 없음 (검색 ${R.nedrug.data.rows.length}건: ${R.nedrug.data.rows.slice(0, 3).join(', ')})` : '화장품제조업 검색 0건')) } : null,
     { key: 'factory', name: '산업단지공단 공장등록', ok: !!fctAddr, warn: !fctAddr && !!(R.factory && R.factory.ok),
       detail: fctAddr ? `공장 확인${fctEmpl ? ` · 종업원 ${fctEmpl}명` : ''}${fctProduct ? ' · ' + fctProduct : ''}`
         : (!R.factory ? '자료 미제출/미등록' : (!R.factory.ok ? briefErr(R.factory.err) : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '공장등록 0건(미등록/임대 가능)'))) },
@@ -1580,6 +1600,7 @@ function assembleLiveReport(name, corp, res) {
       version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
       bld: R.bld ? (R.bld.ok ? R.bld.data : { err: R.bld.err, queried: R.bld.queried }) : null,
       site: R.site && R.site.ok ? R.site.data : null,          // 실제 공장 소재지 선정 결과(후보·근거)
+      mfds_sites: nedSites.length ? nedSites : null,            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
       max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
       no_corp: !hasCorp, // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회 안내용
       biz_agg: agg ? { host: agg.host, url: agg.url } : null, // 외부 집계 보강 출처(비공식)

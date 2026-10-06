@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 164;
+const BUILD = 165;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1364,7 +1364,8 @@ function joinAddrFields(rec) {
   return parts.join(' ');
 }
 // 방문지로 쓸 만한 주소인가 — 시·도 이름만 있거나 번지 숫자가 없으면 좌표가 시·동 중심으로 떨어진다
-const isFullAddr = (a) => { const t = String(a || '').trim(); return t.length >= 8 && /\d/.test(t) && /[가-힣]+(로|길|동|리|가)\s*\d|[가-힣]+(로|길)\d/.test(t); };
+// 도로 이름에 숫자가 낀 경우('제약공단1길 27', '평천로73번길 14')도 번지까지 있는 주소다
+const isFullAddr = (a) => { const t = String(a || '').trim(); return t.length >= 8 && /\d/.test(t) && /[가-힣][가-힣0-9]*(로|길|동|리|가)\s*\d|[가-힣]+(로|길)\d/.test(t); };
 const pickFullAddr = (...cands) => cands.find(isFullAddr) || cands.find((a) => a && String(a).trim()) || null;
 // 주소 첫 토큰 → 시·도. '충청북도'와 '충북', '전북특별자치도'를 같은 값으로 모은다.
 const NB_SIDO = [['서울', '서울'], ['부산', '부산'], ['대구', '대구'], ['인천', '인천'], ['광주', '광주'],
@@ -1598,20 +1599,25 @@ async function kakaoPlaceOf(name, area) {
   if (!d) return null;
   return { addr: d.road_address_name || d.address_name, jibun: d.address_name || '', place: d.place_name, category: d.category_name || '', url: d.place_url || '' };
 }
-async function pickFactorySite({ name, fAddr, mAddr, hqAddr, npsAddr }) {
-  const cands = [['factory', fAddr], ['maker', mAddr], ['hq', hqAddr], ['nps', npsAddr]]
+async function pickFactorySite({ name, fAddr, mAddr, mAddrs, nedAddrs, hqAddr, npsAddr }) {
+  const makers = (mAddrs && mAddrs.length ? mAddrs : [mAddr]).filter(Boolean);
+  const ned = new Set(nedAddrs || []);
+  const cands = [['factory', fAddr], ...makers.map((a) => ['maker', a]), ['hq', hqAddr], ['nps', npsAddr]]
     .filter(([, a]) => a && String(a).trim())
     .map(([src, addr]) => ({ src, addr: String(addr).trim() }));
-  cands.forEach((c) => { c.p = nbAddrParts(c.addr); c.full = isFullAddr(c.addr); });
-  const anchorC = cands.find((c) => (c.src === 'factory' || c.src === 'maker') && c.p.sido);
+  cands.forEach((c) => { c.p = nbAddrParts(c.addr); c.full = isFullAddr(c.addr); if (c.src === 'maker' && ned.has(c.addr)) c.ned = true; });
+  // 제조소가 여러 시·군에 있으면(코스맥스: 화성·평택) 그 지역들이 모두 공장 지역이다
+  const anchors = cands.filter((c) => (c.src === 'factory' || c.src === 'maker') && c.p.sido);
+  const anchorC = anchors[0] || null;
   const area = anchorC ? anchorC.p : null;
+  const inAnyArea = (p) => anchors.some((a) => sameArea(a.p, p));
   const place = await kakaoPlaceOf(name, area).catch(() => null);
   if (place && place.addr) {
     const c = { src: 'place', addr: place.addr, jibun: place.jibun, place, p: nbAddrParts(place.addr), full: isFullAddr(place.addr) || isFullAddr(place.jibun) };
     cands.push(c);
   }
   cands.forEach((c) => {
-    c.inArea = area ? sameArea(area, c.p) : null;
+    c.inArea = area ? inAnyArea(c.p) : null;
     c.agree = cands.filter((o) => o !== c && o.p.sido && o.p.sido === c.p.sido && o.p.sgg === c.p.sgg && (!c.p.emd || !o.p.emd || o.p.emd === c.p.emd)).map((o) => o.src);
     c.score = (c.full ? 20 : 0) + (c.inArea === false ? -100 : 0) + SITE_W[c.src] + c.agree.length * 2;
   });
@@ -1620,14 +1626,19 @@ async function pickFactorySite({ name, fAddr, mAddr, hqAddr, npsAddr }) {
   const pick = ranked.find((c) => c.full && c.inArea !== false) || ranked.find((c) => c.inArea !== false) || ranked[0] || null;
   if (!pick) return null;
   const why = [];
-  if (area) why.push(`허가 기록상 공장 지역 ${siteRegion({ sido: area.sido, sgg: area.sgg })} (${SITE_SRC[anchorC.src]})`);
-  if (pick.agree.length) why.push(`${pick.agree.map((s) => SITE_SRC[s]).join('·')}와 같은 지역`);
+  if (area) {
+    const regs = [...new Set(anchors.map((a) => siteRegion({ sido: a.p.sido, sgg: a.p.sgg })))];
+    why.push(`허가 기록상 공장 지역 ${regs.join('·')} (${SITE_SRC[anchorC.src]})`);
+  }
+  const nMk = cands.filter((c) => c.src === 'maker' && c.full).length;
+  if (nMk > 1) why.push(`식약처 등록 제조소 ${nMk}곳 중 하나 — 나머지는 '공장 면적' 탭에서 합산할 수 있습니다`);
+  if (pick.agree.length) why.push(`${[...new Set(pick.agree.map((s) => SITE_SRC[s]))].join('·')}와 같은 지역`);
   if (!pick.full) why.push('번지까지 있는 주소가 없어 시·군 단위로만 확인');
   return {
     addr: pick.addr, src: pick.src, label: SITE_SRC[pick.src], why: why.join(' · '),
     area: area ? siteRegion({ sido: area.sido, sgg: area.sgg }) : null,
     place: place || null,
-    cands: ranked.map((c) => ({ src: c.src, label: SITE_SRC[c.src], addr: c.addr, full: c.full,
+    cands: ranked.map((c) => ({ src: c.src, label: c.ned ? '제조업 허가(의약품안전나라)' : SITE_SRC[c.src], addr: c.addr, full: c.full,
       state: c === pick ? 'pick' : c.inArea === false ? 'out' : !c.full ? 'partial' : 'alt' })),
   };
 }
@@ -1753,12 +1764,88 @@ function pickByKey(rec, re) {
   }
   return null;
 }
-// 식약처 화장품제조업(CsmtcsMfcrtrInfoService01) — 약 200만건, 서버측 상호(업소명) 필터가 필수.
-// 문제: 정확한 요청 파라미터명이 명세 비공개라 불확실. 잘못된 키는 API가 무시하고 일반(무필터)
-//        목록을 주고, '올바른 키'만 상호로 필터됨. → 후보 키들을 병렬로 시도해 결과를 합치면,
-//        올바른 키가 준 '이 업체 레코드'가 포함되고 matchByName이 그것만 정확히 집어냄(할루시네이션 없음).
-// 주의: numOfRows 최대 500(초과 시 전체 호출 거부). 각 후보 500건.
-const MAKER_NAME_PARAMS = ['bssh_nm', 'Bssh_Nm', 'BSSH_NM', 'entpName', 'entp_name', 'prmisnEntpNm'];
+// 식약처 화장품제조업(CsmtcsMfcrtrInfoService01) — 제조소(공장) 한 곳당 한 건, 전체 약 3.3만 건.
+// 실제 응답을 진단 워크플로우(diag-mfds)로 확인했다(2026-10):
+//   항목 = INDUTY · ENTP_SEQ · ENTP_NAME · ENTP_PERMIT_DATE · FACTORY_ADDR · BIZRNO
+//   FACTORY_ADDR는 '경기도 평택시'처럼 시·군·구까지만 준다 — 도로명·번지는 공개 API에 없다.
+//   상호 필터는 entp_name만 먹는다. bssh_nm·entpName 등은 무시되고 무필터 500건이 와서 시간만 잡아먹었다.
+// 번지까지 있는 제조소 주소는 의약품안전나라 업체정보(nedrugMaker)에서 따로 받는다.
+// 주의: numOfRows 최대 500(초과 시 전체 호출 거부).
+const MAKER_NAME_PARAMS = ['entp_name'];
+// ── 의약품안전나라 화장품제조업 업체정보 ──
+// 공개 API에 없는 '번지까지 있는 제조소 주소'와 업허가번호가 여기 있다(사용자가 보는 그 화면).
+//   목록: /pbp/CCBBA01/getList?cobCode=V(화장품제조)&entpName=상호 → 업체명·업종·허가일자·주소(제조소 전부를 한 줄로)
+//   상세: getItem?…&entpSeq= → 업허가번호와 공장정보 표(제조소 한 곳당 한 줄)
+// 화면을 읽는 것이라 구조가 바뀌면 조용히 빈 값이 된다 — 그때는 공개 API 값으로 물러선다.
+const NEDRUG = 'https://nedrug.mfds.go.kr';
+const nedTxt = (h) => String(h || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+function nedrugListRows(html) {
+  return [...String(html || '').matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => {
+    const tr = m[1];
+    const href = (tr.match(/href=["']([^"']*getItem[^"']*)["']/i) || [])[1];
+    if (!href) return null;
+    const tds = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((x) => nedTxt(x[1]));
+    // 순번 · 업체명 · 업종 · 허가일자 · 주소
+    return { href: href.replace(/&amp;/g, '&'), name: tds[1] || '', induty: tds[2] || '', date: tds[3] || '', addr: tds[4] || '',
+      seq: (href.match(/entpSeq=(\d+)/) || [])[1] || '' };
+  }).filter(Boolean);
+}
+function nedrugDetail(html) {
+  const h = String(html || '');
+  const t = nedTxt(h);
+  const permitNo = (t.match(/업허가번호\s*([0-9A-Za-z-]+)/) || [])[1] || null;
+  // 공장정보 표 — '공장정보' 뒤의 행들. 머리줄(th)은 건너뛴다.
+  const at = h.search(/공장정보/);
+  const seg = at >= 0 ? h.slice(at, at + 20000) : '';
+  const factories = [...seg.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => [...m[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((x) => nedTxt(x[1])))
+    .filter((tds) => tds.length >= 2 && /(시|군|구|도)\s/.test(tds[1]))
+    .map((tds) => ({ name: tds[0] && tds[0] !== 'N/A' ? tds[0] : '', addr: tds[1] }));
+  return { permitNo, factories };
+}
+// '경기도 화성시 만세구 향남읍 제약공단1길 27 , 2길 46, 경기도 평택시 청북읍 고렴산단로 51, 1동, 2동, …'
+// 처럼 한 줄에 여러 제조소가 이어진 주소를 곳별로 나눈다. 쉼표 뒤가
+//   시·도로 시작 → 새 주소 / '2길 46'처럼 길 번호만 → 앞 주소의 도로 이름을 이어 새 주소 /
+//   '○○로 12' → 앞 주소의 읍·면·동까지 붙여 새 주소 / 그 밖('1동', '2층') → 앞 주소의 상세
+function splitSiteAddrs(str) {
+  const SIDO = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주)/;
+  const out = [];
+  String(str || '').split(/\s*,\s*/).map((x) => x.trim()).filter(Boolean).forEach((tok) => {
+    const prev = out[out.length - 1];
+    if (SIDO.test(tok) || !prev) { out.push({ base: tok, detail: [] }); return; }
+    const road = prev.base.match(/^(.*?\s)([가-힣A-Za-z0-9]+?)(\d+)(번?길)\s*\d/);         // 제약공단1길 27 → 앞부분·도로 이름
+    if (/^\d+번?길\s*\d/.test(tok) && road) { out.push({ base: `${road[1]}${road[2]}${tok}`, detail: [] }); return; }
+    const region = prev.base.match(/^(.*?(?:읍|면|동|가)\s)/) || prev.base.match(/^(.*?(?:시|군|구)\s)/);
+    if (/^[가-힣A-Za-z0-9]+(?:로|길)\s*\d/.test(tok) && region) { out.push({ base: `${region[1]}${tok}`, detail: [] }); return; }
+    prev.detail.push(tok);
+  });
+  // 도로명 번호 뒤의 동·층('1동 1층 일부')은 주소가 아니라 상세다 — 좌표·건축물대장은 번호까지로 찾는다
+  return out.map((o) => {
+    const base = o.base.replace(/\s+/g, ' ').trim();
+    const m = base.match(/^(.*?(?:로|길)\s*\d+(?:-\d+)?)(?:\s+(.+))?$/);
+    return m ? { addr: m[1], detail: [m[2], ...o.detail].filter(Boolean).join(', ') } : { addr: base, detail: o.detail.join(', ') };
+  });
+}
+async function nedrugMakerRaw(name) {
+  const key = stripCorp(name).replace(/\s/g, '');
+  if (key.length < 2) return null;
+  const listUrl = `${NEDRUG}/pbp/CCBBA01/getList?searchYn=true&page=1&limit=50&cobCode=V&entpName=${encodeURIComponent(stripCorp(name))}`;
+  const lr = await proxyOnlyGet('fetchPage', { url: listUrl });
+  const rows = nedrugListRows(lr && lr.text);
+  const nk = (s) => stripCorp(s).replace(/\s/g, '');
+  const exact = rows.filter((r) => nk(r.name) === key);
+  const hit = exact[0] || (rows.length === 1 && nk(rows[0].name).includes(key) ? rows[0] : null);
+  if (!hit) return { found: false, rows: rows.map((r) => r.name), url: listUrl };
+  let det = { permitNo: null, factories: [] };
+  try { const d = await proxyOnlyGet('fetchPage', { url: `${NEDRUG}${hit.href}` }); det = nedrugDetail(d && d.text); } catch { /* 목록 주소로 */ }
+  // 공장정보 표가 있으면 그 줄들을, 없으면 목록의 한 줄 주소를 나눠 쓴다. 표의 한 줄에도 여러 곳이 이어질 수 있어 다시 나눈다.
+  const src = det.factories.length ? det.factories.map((f) => f.addr) : [hit.addr];
+  const seen = new Set();
+  const sites = src.flatMap(splitSiteAddrs).filter((x) => x.addr && !seen.has(x.addr) && seen.add(x.addr));
+  return { found: true, name: hit.name, induty: hit.induty, permitDate: hit.date, permitNo: det.permitNo, addrLine: hit.addr,
+    sites, entpSeq: hit.seq, url: `${NEDRUG}${hit.href}`, others: exact.length > 1 ? exact.length - 1 : 0 };
+}
+const nedrugMaker = (name) => memoAsync(`ned|${stripCorp(name)}`, 600000, () => nedrugMakerRaw(name));
+
 // 후보 추천(mfdsCandidates)과 리포트 조립(finishLive)이 같은 상호로 연달아 부른다 — 10분간 한 벌로
 const makerLookup = (nm) => memoAsync(`maker|${nm}`, 600000, () => makerLookupRaw(nm));
 async function makerLookupRaw(nm) {
@@ -1771,7 +1858,8 @@ async function makerLookupRaw(nm) {
   for (const s of settled) {
     if (s.status !== 'fulfilled') { lastErr = String(s.reason && s.reason.message || s.reason); continue; }
     anyOk = true;
-    const list = listOf(s.value, ['response.body.items.item', 'body.items', 'items']);
+    // 항목이 { item: {...} }로 한 겹 싸여 오는 응답도 있다 — 벗겨서 쓴다
+    const list = listOf(s.value, ['response.body.items.item', 'body.items', 'items']).map((r) => (r && r.item && typeof r.item === 'object' ? r.item : r));
     for (const r of list) {
       const sig = JSON.stringify(r);
       if (seen.has(sig)) continue;      // 후보키 간 중복 제거
@@ -1820,6 +1908,15 @@ async function mfdsCandidates(name) {
       mfds: true,
     });
     if (out.length >= 12) break;
+  }
+  // 공개 API에 없으면(최근 허가 등) 의약품안전나라 업체 검색으로 후보를 만든다
+  if (!out.length) {
+    try {
+      const url = `${NEDRUG}/pbp/CCBBA01/getList?searchYn=true&page=1&limit=50&cobCode=V&entpName=${encodeURIComponent(stripCorp(name))}`;
+      const r = await proxyOnlyGet('fetchPage', { url });
+      nedrugListRows(r && r.text).filter((x) => stripCorp(x.name).replace(/\s/g, '').includes(nk)).slice(0, 12)
+        .forEach((x) => out.push({ corpNm: x.name, rep: null, addr: x.addr, lcns: null, mfds: true, nedrug: true }));
+    } catch { /* 의약품안전나라도 못 읽으면 후보 없음 */ }
   }
   return out;
 }
@@ -2989,6 +3086,8 @@ async function finishLive(name, corp) {
     rpt: proxyGet('rpt', { name: nm, rows: '100' }),
     nps: npsLookup(nm, corp.bzno),
     maker: makerLookup(nm),
+    // 의약품안전나라 업체정보 — 번지까지 있는 제조소 주소(공개 API는 시·군까지만)·업허가번호
+    nedrug: nedrugMaker(corp.corpNm || name),
     // CGMP 적합업소·회수 목록 — 실시간 우선, 느리거나 실패하면 7일 이내 저장본(liveFirstList)
     gmp: liveFirstList('vs_c_gmp', () => proxyGet('gmp', { rows: '500' })),
     // 공장 상세(면적)는 생산정보가 주는 공장관리번호를 키로 써야 해서 순서를 지킨다
@@ -3020,7 +3119,7 @@ async function finishLive(name, corp) {
   // 방문지·면적 단계는 주소를 주는 소스(식약처 제조업·산단공·국민연금)만 기다린다.
   // 뉴스·채용·재무가 끝나길 기다릴 이유가 없고, 산단공이 19초 타임아웃으로 묶여도 기준 시간이 지나면 진행한다.
   const addrWait = new Promise((r) => setTimeout(r, LIVE_ADDR_MS));
-  await Promise.race([Promise.all([settleOf.maker, settleOf.nps, Promise.race([settleOf.factory, addrWait])]), soft]);
+  await Promise.race([Promise.all([settleOf.maker, settleOf.nps, Promise.race([settleOf.factory, addrWait]), Promise.race([settleOf.nedrug, addrWait])]), soft]);
   await liveBackfill(res, corp, name, nm);
   let siteSig = await liveSiteStage(res, corp, name);
   await Promise.race([allDone, soft]);
@@ -3088,15 +3187,22 @@ function liveSiteInputs(res, corp, name) {
   const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
   const mkHit = matchByNameApp(name, mList); // 상호 일치 건만(남의 회사 주소 오염 방지)
   const mAddr = mkHit ? (joinAddrFields(mkHit) || Object.values(mkHit).find(looksAddr) || null) : null;
+  // 제조소가 여러 곳이면 공개 API에 곳마다 한 건씩 온다 — 같은 회사(사업자번호·상호) 건을 모두 모은다
+  const sameCo = mkHit ? mList.filter((r) => r === mkHit || (mkHit.BIZRNO && r.BIZRNO === mkHit.BIZRNO) || (mkHit.ENTP_NAME && r.ENTP_NAME === mkHit.ENTP_NAME)) : [];
+  const apiAddrs = [...new Set(sameCo.map((r) => joinAddrFields(r)).filter(Boolean))];
+  // 의약품안전나라 — 번지까지 있는 제조소 주소. 있으면 이쪽을 앞세운다
+  const ned = res.nedrug && res.nedrug.ok && res.nedrug.data && res.nedrug.data.found ? res.nedrug.data : null;
+  const nedAddrs = ned ? ned.sites.map((x) => x.addr) : [];
+  const mAddrs = [...new Set([...nedAddrs, ...apiAddrs])];
   const npsSrch = res.nps && res.nps.ok && res.nps.data ? res.nps.data.search : null;
   const npsAddr = npsSrch ? (npsSrch.wkplRoadNmDetAddr || npsSrch.wkplRoadNmDtlAddr || npsSrch.ldongAddr || null) : null;
-  return { fAddr, mAddr, npsAddr, sig: [fAddr, mAddr, npsAddr].join('|') };
+  return { fAddr, mAddr: mAddrs[0] || mAddr, mAddrs, nedAddrs, npsAddr, sig: [fAddr, mAddrs.join(';'), npsAddr].join('|') };
 }
 // 실제 공장 소재지 선정 → 카카오 방문거리 + 건축물대장 면적. res.site · res.kakao · res.bld를 채운다.
 async function liveSiteStage(res, corp, name) {
-  const { fAddr, mAddr, npsAddr, sig } = liveSiteInputs(res, corp, name);
+  const { fAddr, mAddr, mAddrs, nedAddrs, npsAddr, sig } = liveSiteInputs(res, corp, name);
   // 선정이 실패해도(카카오 오류 등) 예전 순서(공장 > 제조소 > 본점)로 방문지를 정한다.
-  const site = await pickFactorySite({ name: corp.corpNm || name, fAddr, mAddr, hqAddr: corp.addr, npsAddr }).catch(() => null);
+  const site = await pickFactorySite({ name: corp.corpNm || name, fAddr, mAddr, mAddrs, nedAddrs, hqAddr: corp.addr, npsAddr }).catch(() => null);
   res.site = site ? { ok: true, data: site } : { ok: false, err: '공장 소재지 후보 주소 없음' };
   const visitAddr = site ? site.addr : pickFullAddr(fAddr, mAddr, corp.addr);
   // 방문 거리와 공장 면적(건축물대장)은 같은 주소로 부르므로 함께 돌린다
@@ -4709,7 +4815,8 @@ function renderAreaTab(report) {
     if (!B) {
       const why = (M.bld && M.bld.err) || '공장 주소가 없어 건축물대장을 조회하지 못했습니다';
       return `<div class="at-sec at-miss"><b>건축물대장에서 면적을 찾지 못했습니다</b><p>${esc(why)}</p>`
-        + '<p>실제 공장의 <b>지번</b>을 알면 위 <b>주소 수정</b>으로 다시 조회하세요. 카카오맵에서 공장을 찍으면 지번이 나옵니다.</p></div>';
+        + '<p>실제 공장의 <b>지번</b>을 알면 위 <b>주소 수정</b>으로 다시 조회하세요. 카카오맵에서 공장을 찍으면 지번이 나옵니다.</p>'
+        + allSitesHtml() + '</div>';
     }
     const stat = (lab, v, sub) => `<div class="at-stat"><span>${lab}</span><b>${v ? `약 ${py(v)}평` : '—'}</b><small>${[v ? m2(v) : '', sub].filter(Boolean).join(' · ')}</small></div>`;
     return `<div class="at-sec"><h4>합계 <small>${parts.length > 1 ? `${parts.length}개 필지 합산 · ` : ''}국토부 건축물대장 (${esc(B.src || '표제부')})</small></h4><div class="at-stats">`
@@ -4730,10 +4837,22 @@ function renderAreaTab(report) {
         + `<td>${i > 0 ? `<button type="button" class="nb-btn sm" data-act="at-drop" data-jibun="${esc(p.jibun)}" data-addr="${esc(p.queried || '')}">빼기</button>` : '<small>본 필지</small>'}</td></tr>`).join('')
       + '</tbody></table></div>'
       + (failed.length ? `<div class="at-warn">추가 필지 중 조회되지 않은 주소: ${failed.map((f) => `${esc(f.addr)} — ${esc(f.err)}`).join(' / ')}</div>` : '')
+      + allSitesHtml()
       + `<form class="ac-form" data-at="lot"><label for="atLotIn">필지 추가</label><div class="ac-frow">`
       + `<input id="atLotIn" class="ac-in" type="text" placeholder="같은 공장의 다른 필지 — 예: 충청남도 아산시 둔포면 신남리 731-26" autocomplete="off">`
       + `<button type="submit" class="nb-btn"${ui.busy ? ' disabled' : ''}>${ui.busy === 'lot' ? '조회 중…' : '추가해 합산'}</button></div>`
       + (ui.lotErr ? `<div class="nb-oerr" role="alert">${esc(ui.lotErr)}</div>` : '') + '</form></div>';
+  };
+  // 식약처(의약품안전나라)에 제조소가 여러 곳 등록돼 있으면 한 번에 모두 더할 수 있게 — 아직 안 더한 곳만 센다
+  const mfdsSites = (M.mfds_sites || []).map((x) => x.addr).filter(isFullAddr);
+  const siteKey = (a) => bldCompact(String(a || '').replace(/\([^)]*\)/g, ''));
+  const notYet = () => mfdsSites.filter((a) => !parts.some((p) => siteKey(p.queried) === siteKey(a)));
+  const allSitesHtml = () => {
+    if (mfdsSites.length < 2) return '';
+    const rest = notYet();
+    return `<div class="at-allsites">식약처 등록 제조소 <b>${mfdsSites.length}곳</b>: ${mfdsSites.map(esc).join(' / ')}`
+      + (rest.length ? ` <button type="button" class="nb-btn sm" data-act="at-allsites"${ui.busy ? ' disabled' : ''}>${ui.busy === 'all' ? '조회 중…' : `나머지 ${rest.length}곳도 합산`}</button>` : ' <small>— 모두 합산됨</small>')
+      + '</div>';
   };
   const bldgHtml = () => {
     if (!B) return '';
@@ -4812,6 +4931,18 @@ function renderAreaTab(report) {
         } catch (x) {
           commit({ err: x && x.message ? x.message : String(x), queried: (M.site && M.site.addr) || visitAddress(report) });
         }
+      });
+    } else if (act === 'at-allsites') {
+      run('all', async () => {
+        const rest = notYet();
+        const got = await mapLimit(rest, 2, (a) => bldAreaLookup(a, { name: M.vendor_name }).then((d) => ({ ...d, queried: a })).catch((e) => ({ err: e.message, queried: a })));
+        const okParts = got.filter((g) => !g.err);
+        if (!okParts.length && !B) throw new Error(got.map((g) => `${g.queried} — ${g.err}`).join(' / '));
+        const lots = [...new Set([...((ov && ov.lots) || (B && B.lots) || []), ...okParts.map((g) => g.queried)])];
+        areaOvSet(M.vendor_name, { addr: ov && ov.addr ? ov.addr : null, lots });
+        const base = B ? parts : [];
+        commit({ queried: (B && B.queried) || (okParts[0] && okParts[0].queried), ...bldCombine([...base, ...okParts], { edited: B && B.edited, lots,
+          failedLots: got.filter((g) => g.err).map((g) => ({ addr: g.queried, err: g.err })) }) });
       });
     } else if (act === 'at-drop') {
       const keep = parts.filter((p) => p.jibun !== b.dataset.jibun);
@@ -5149,7 +5280,7 @@ function render(report, opts = {}) {
 
 // 먼저 그린 리포트(finishLive의 _late)가 완성되면 같은 업체를 보고 있을 때만 바꿔 그린다.
 // 그 사이 사용자가 한 일(홈페이지 추적·심층분석·면적 수정·직접 입력)은 새 리포트로 옮긴다.
-const LIVE_SRC_NAME = { finance: '금융위 재무', rpt: '식약처 보고품목', nps: '국민연금', maker: '식약처 제조업', gmp: '식약처 CGMP',
+const LIVE_SRC_NAME = { finance: '금융위 재무', rpt: '식약처 보고품목', nps: '국민연금', maker: '식약처 제조업', nedrug: '의약품안전나라 제조소', gmp: '식약처 CGMP',
   factory: '산단공 공장등록', recall: '식약처 회수·판매중지', nts: '국세청 사업자상태', naverNews: '뉴스', oemTrace: '웹 언급',
   hiring: '채용공고', ntsVal: '국세청 진위확인' };
 function hookLateReport(report) {
