@@ -121,8 +121,9 @@ function grHtml(st) {
     const cy = d.months[L - p.back];
     return `<button type="button" role="tab" class="gr-tile" data-gr-period="${p.id}" aria-selected="${st.period === p.id}">`
       + `<span>${esc(p.label)}</span><b>${n.toLocaleString()}곳</b><small>${esc(grYmS(cy))} → ${esc(grYmS(d.ym))} · +${Math.round(p.rate * 100)}%↑</small></button>`;
-  }).join('') + grJobsTile(st) + '</div>';
+  }).join('') + grJobsTile(st) + nhTile(st) + '</div>';
   if (st.period === 'jobs') return h + grJobsHtml(st);
+  if (st.period === 'newhire') return h + nhHtml(st);
   // 업종 전체 추이 — 13개월이 모두 잡힌 사업장만 합한 가입자수
   if (d.industry && d.industry.total) {
     const T = d.industry.total, net = T[L] - T[B];
@@ -214,6 +215,116 @@ function grJobsHtml(st) {
   return h;
 }
 
+// ── 신규 허가 업체 채용 — 최근 1·2·3개월 안에 화장품 제조업 허가를 받은 업체(makers.json)의 채용공고 ──
+// 사전검증 리포트의 채용공고 추적(hiringTrace)과 같은 방식으로 네이버 웹문서에서 채용 사이트
+// (사람인·잡코리아·인크루트·고용24·잡플래닛 등) 결과만 추린다. 업체마다 페이지까지 여는 리포트와 달리
+// 검색 결과만 보는 가벼운 판이라 수십 곳을 한 번에 돌릴 수 있다. 결과는 이 브라우저에 7일 보관.
+const NH = { MONTHS: [1, 2, 3], TTL: 7 * 864e5, KEY: 'vs_nh|' };
+const nhState = { months: 1, onlyHit: false, res: {}, busy: false, done: 0, total: 0, err: null, tried: new Set() };
+const NH_SITE = [[/saramin/i, '사람인'], [/jobkorea/i, '잡코리아'], [/incruit/i, '인크루트'], [/work24|worknet/i, '고용24'], [/jobplanet/i, '잡플래닛'],
+  [/wanted/i, '원티드'], [/catch\.co/i, '캐치'], [/albamon|alba\.co/i, '알바몬·천국'], [/jobaba/i, '잡아바'], [/rocketpunch/i, '로켓펀치']];
+const nhSite = (u) => { for (const [re, nm] of NH_SITE) if (re.test(u)) return nm; return '기타'; };
+const nhName = (n) => stripCorp(n).replace(/\([^)]*\)/g, '').trim();
+function nhCached(nm) {
+  if (nhState.res[nm]) return nhState.res[nm];
+  try { const o = JSON.parse(localStorage.getItem(NH.KEY + nm) || 'null'); if (o && Date.now() - o.at < NH.TTL) { nhState.res[nm] = o; return o; } } catch { /* 없음 */ }
+  return null;
+}
+async function nhLookup(nm) {
+  const q = nhName(nm);
+  const qs = [`${q} 채용`, `${q} 채용공고`, `${q} 사람인`, `${q} 잡코리아`, `${q} 인크루트`];
+  const got = await mapLimit(qs, 3, async (x) => { try { return await proxyOnlyGet('naverWeb', { query: x, display: '30' }); } catch { return null; } });
+  if (got.every((g) => !g)) throw new Error('네이버 웹문서 검색 실패');
+  const strip = (t) => String(t || '').replace(/<[^>]+>/g, '').replace(/&[a-z]+;/gi, ' ').trim();
+  const seen = new Set(), posts = [];
+  got.forEach((d) => ((d && d.items) || []).forEach((it) => {
+    const link = String(it.link || ''), title = strip(it.title), desc = strip(it.description), blob = `${title} ${desc}`;
+    if (!HIRE_HOSTS.test(link) || !HIRE_WORDS.test(blob)) return;
+    // 상호가 '그 회사 이름'으로 나온 결과만 — 코미스킨 공고가 미스킨 공고로 잡히지 않게
+    if (!nameHits(blob, q).exact) return;
+    const id = link.replace(/[?#].*$/, ''); if (seen.has(id)) return; seen.add(id);
+    const ds = hireDates(blob).filter((x) => x.length === 7).sort();
+    posts.push({ t: title.slice(0, 80), u: link, s: nhSite(link), r: hireRole(blob), d: ds[ds.length - 1] || null });
+  }));
+  posts.sort((a, b) => String(b.d || '').localeCompare(String(a.d || '')));
+  const o = { at: Date.now(), posts: posts.slice(0, 12), n: posts.length };
+  nhState.res[nm] = o;
+  try { localStorage.setItem(NH.KEY + nm, JSON.stringify(o)); } catch { /* 저장 못 해도 화면엔 보인다 */ }
+  return o;
+}
+const nhRows = (months) => {
+  const d = mkState.data; if (!d) return [];
+  const lim = new Date(Date.now() - months * 30 * 864e5).toISOString().slice(0, 10);
+  return (d.recent || []).filter((r) => r.p && r.p >= lim);
+};
+async function nhRun(force) {
+  if (nhState.busy || !getProxy()) return;
+  // 자동 조회는 이번 접속에서 한 번 시도한 업체를 다시 부르지 않는다(실패가 무한 재시도로 번지지 않게)
+  const rows = nhRows(nhState.months).filter((r) => force || (!nhCached(r.n) && !nhState.tried.has(r.n)));
+  rows.forEach((r) => nhState.tried.add(r.n));
+  if (!rows.length) return;
+  nhState.busy = true; nhState.done = 0; nhState.total = rows.length; nhState.err = null;
+  let last = 0;
+  const tick = () => { if (Date.now() - last > 600) { last = Date.now(); if (growthState.repaint) growthState.repaint(); } };
+  await mapLimit(rows, 2, async (r) => {
+    try { await nhLookup(r.n); } catch (e) { nhState.err = e.message; }
+    nhState.done++; tick();
+  });
+  nhState.busy = false;
+  if (growthState.repaint) growthState.repaint();
+}
+function nhTile(st) {
+  const d = mkState.data;
+  const n = d ? nhRows(nhState.months).length : null;
+  return `<button type="button" role="tab" class="gr-tile jobs" data-gr-period="newhire" aria-selected="${st.period === 'newhire'}">`
+    + `<span>신규 허가 업체 채용</span><b>${n == null ? '—' : `${n}곳`}</b><small>최근 ${nhState.months}개월 제조업 허가 · 채용공고</small></button>`;
+}
+function nhHtml(st) {
+  const d = mkState.data;
+  if (!d) return `<div class="gr-empty">${esc(mkState.err || '제조업 명단을 불러오는 중…')}</div>`;
+  const all = nhRows(nhState.months);
+  const proxy = !!getProxy();
+  if (proxy && !nhState.busy && all.some((r) => !nhCached(r.n) && !nhState.tried.has(r.n))) setTimeout(() => nhRun(false), 0);   // 화면을 열면 바로 조회
+  const withRes = all.map((r) => ({ r, h: nhCached(r.n) }));
+  const hit = withRes.filter((x) => x.h && x.h.n);
+  const rows = nhState.onlyHit ? hit : withRes;
+  let h = '<div class="gr-tools"><span class="gr-seg" role="group" aria-label="허가 기간">'
+    + NH.MONTHS.map((m) => `<button type="button" data-nh-months="${m}" aria-selected="${nhState.months === m}">최근 ${m}개월 <small>${nhRows(m).length}</small></button>`).join('')
+    + '</span>'
+    + `<label><input type="checkbox" data-nh-only${nhState.onlyHit ? ' checked' : ''}> 채용공고 확인된 업체만</label>`
+    + (proxy ? `<button type="button" class="nb-btn sm" data-nh-refresh${nhState.busy ? ' disabled' : ''}>${nhState.busy ? `조회 중 ${nhState.done}/${nhState.total}` : '채용공고 다시 조회'}</button>` : '')
+    + '</div>';
+  if (!proxy) h += '<div class="gr-empty">채용공고 조회는 사전검증 리포트와 같은 네이버 검색을 씁니다 — 우측 상단 「실데이터 연결」을 하면 바로 조회됩니다. 아래 목록은 허가 정보만 보입니다.</div>';
+  const roles = {}; hit.forEach((x) => x.h.posts.forEach((p) => { roles[p.r] = (roles[p.r] || 0) + 1; }));
+  const roleTxt = Object.entries(roles).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} ${v}`).join(' · ');
+  h += `<p class="gr-count">최근 ${nhState.months}개월 화장품 제조업 허가 <b>${all.length}곳</b>`
+    + (proxy ? ` 중 채용공고 확인 <b>${hit.length}곳</b>${roleTxt ? ` <small class="nh-roles">공고 직무: ${esc(roleTxt)}</small>` : ''}${nhState.busy ? ' — 조회 중…' : ''}` : '')
+    + (nhState.err ? ` <small class="nh-err">일부 조회 실패: ${esc(nhState.err)}</small>` : '') + '</p>';
+  if (!rows.length) return h + `<div class="gr-empty">${nhState.onlyHit ? '채용공고가 확인된 업체가 없습니다.' : '기간 안에 허가받은 업체가 없습니다.'}</div>`;
+  h += '<table class="mk-tbl nh-tbl"><thead><tr><th>허가일</th><th>업체</th><th>확인된 정보</th><th>채용공고 <small>사람인·잡코리아·인크루트 등</small></th><th></th></tr></thead><tbody>';
+  rows.forEach(({ r, h: res }) => {
+    let jobs;
+    if (!res) jobs = `<span class="nh-wait">${proxy ? (nhState.busy ? '조회 중…' : '대기') : '—'}</span>`;
+    else if (!res.n) jobs = '<span class="nh-none">채용 사이트 공고 없음</span>';
+    else {
+      const sites = {}; res.posts.forEach((p) => { sites[p.s] = (sites[p.s] || 0) + 1; });
+      jobs = `<div class="nh-sum"><b>${res.n}건</b>${Object.entries(sites).map(([k, v]) => `<span class="mk-b dim">${esc(k)} ${v}</span>`).join('')}</div>`
+        + res.posts.slice(0, 3).map((p) => `<a class="nh-post" href="${esc(p.u)}" target="_blank" rel="noopener">${esc(p.t)}</a>`
+          + `<small class="nh-meta">${esc([p.r, p.d, p.s].filter(Boolean).join(' · '))}</small>`).join('')
+        + (res.posts.length > 3 ? `<small class="nh-meta">외 ${res.n - 3}건</small>` : '');
+    }
+    h += `<tr><td class="mk-d">${esc(mkDay(r.p))}</td><td><b class="mk-nm">${esc(r.n)}</b><small>${esc(grRegion(r.a) || '')}</small></td>`
+      + `<td class="mk-bs">${mkBadges({ ...r, add: false, job: undefined })}</td><td class="nh-jobs">${jobs}</td>`
+      + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button></td></tr>`;
+  });
+  h += '</tbody></table>';
+  h += '<p class="gr-foot">대상: 식약처 화장품 제조업 허가일이 최근 1·2·3개월(30일 단위) 안인 업체(매주 갱신되는 제조업 명단 기준). '
+    + '채용공고는 네이버 웹문서 검색에서 채용 사이트 결과 중 상호가 정확히 들어간 것만 셉니다 — 마감된 공고가 섞이고, 사이트가 검색에 노출하지 않은 공고는 빠집니다. '
+    + '날짜는 공고에 등록·마감일이 적혀 있을 때만 표시합니다. 「책임판매업 기존 보유」 업체는 제조 허가 전부터 내던 공고일 수 있습니다. '
+    + '결과는 이 브라우저에 7일간 보관되고, 「채용공고 다시 조회」로 새로 받을 수 있습니다.</p>';
+  return h;
+}
+
 // 선 그래프 위 마우스 — 가장 가까운 달의 값과 전달 대비 증감
 function grBindHover(box) {
   let tip = box.querySelector('.gr-tip');
@@ -255,6 +366,8 @@ function mountGrowth() {
   box.addEventListener('click', (e) => {
     const p = e.target.closest('[data-gr-period]'); if (p) { growthState.period = p.dataset.grPeriod; growthState.open = null; paint(); return; }
     const s = e.target.closest('[data-gr-sort]'); if (s) { growthState.sort = s.dataset.grSort; paint(); return; }
+    const nm = e.target.closest('[data-nh-months]'); if (nm) { nhState.months = Number(nm.dataset.nhMonths); paint(); return; }
+    if (e.target.closest('[data-nh-refresh]')) { nhRun(true); paint(); return; }
     const g = e.target.closest('[data-gr-go]');
     if (g) { const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = ''; lookup(g.dataset.grGo, ''); return; }
     if (e.target.closest('[data-gr-req]')) { grRequest(paint); return; }
@@ -267,13 +380,9 @@ function mountGrowth() {
   });
   box.addEventListener('change', (e) => {
     const o = e.target.closest('[data-gr-opt]'); if (o) { growthState[o.dataset.grOpt] = o.checked; paint(); }
+    if (e.target.closest('[data-nh-only]')) { nhState.onlyHit = e.target.checked; paint(); }
   });
   grBindHover(box);
-  // 리포트가 열려 있으면 숨긴다 — 첫 화면(대시보드)에서만 보이는 패널이다
-  const rep = document.getElementById('report');
-  const sync = () => { box.hidden = !!(rep && !rep.classList.contains('hidden')); };
-  if (rep) new MutationObserver(sync).observe(rep, { attributes: true, attributeFilter: ['class'] });
-  sync();
   paint();
   grLoad().then(paint).catch((e) => { growthState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
 }
@@ -350,6 +459,8 @@ function mkBars(monthly, w) {
 function mkBadges(r) {
   return [
     r.add ? '<span class="mk-b new">이번 조회 추가</span>' : '',
+    r.gmp === true ? '<span class="mk-b ok" title="식약처 CGMP(우수화장품 제조 및 품질관리기준) 적합업소 목록에 상호가 있음">CGMP 적합</span>'
+      : r.gmp === false ? '<span class="mk-b dim" title="식약처 CGMP 적합업소 목록에 상호가 없음(신청 전·심사 중이거나 미신청)">CGMP 미등재</span>' : '',
     r.on ? `<span class="mk-b warn" title="지난 조회 때 상호">상호 변경 · 이전 ${esc(r.on)}</span>` : '',
     r.nps != null ? `<span class="mk-b ok" title="국민연금 월간 파일(사업자번호 앞 6자리·상호 일치)">국민연금 ${r.nps.toLocaleString()}명</span>` : '<span class="mk-b dim" title="국민연금 월간 파일에 아직 없음(직원 3인 미만이거나 반영 전)">국민연금 미가입</span>',
     r.job ? `<span class="mk-b warn">채용공고 ${r.job}건</span>` : '',
@@ -373,7 +484,7 @@ function mkHtml(st) {
     + `<button type="button" class="gr-tile mk-t" data-mk-view="d30" aria-selected="${st.view === 'd30'}"><span>최근 30일 신규 허가</span><b>${c.d30}</b><small>90일 ${c.d90} · 1년 ${c.d365}</small></button>`
     + `<div class="gr-tile mk-t gone"><span>명단에서 빠짐</span><b>${d.base ? '—' : (c.removed ? `−${c.removed}` : '0')}</b><small>${c.renamed ? `상호 변경 ${c.renamed}곳 별도` : '폐업·취소 추정'}</small></div></div>`;
   h += `<div class="mk-sec">월별 신규 허가 <i>허가일 기준 · 최근 13개월 · 이번 달은 ${esc(d.at.slice(8))}일까지</i></div>`
-    + `<div class="mk-chart">${mkBars(d.monthly || [], Math.max(280, growthState.cw || 640))}</div>`;
+    + `<div class="mk-chart">${mkBars(d.monthly || [], mkState.cw || 640)}</div>`;
   // ── 새로 들어온 업체 ──
   const base = mkRows(st);
   const sidoN = {}; base.forEach((r) => { const k = mkSido(r.a); sidoN[k] = (sidoN[k] || 0) + 1; });
@@ -393,7 +504,7 @@ function mkHtml(st) {
   } else {
     h += '<table class="mk-tbl"><thead><tr><th>허가일</th><th>업체</th><th class="mk-addr">소재지</th><th>확인된 정보</th><th></th></tr></thead><tbody>'
       + rows.slice(0, 80).map((r) => `<tr><td class="mk-d">${esc(mkDay(r.p))}</td>`
-        + `<td><b>${esc(r.n)}</b><small>${esc(grRegion(r.a) || r.a || '')}</small></td>`
+        + `<td><b class="mk-nm">${esc(r.n)}</b><small>${esc(grRegion(r.a) || r.a || '')}</small></td>`
         + `<td class="mk-addr">${esc(r.ad || r.a || '')}</td><td class="mk-bs">${mkBadges(r)}</td>`
         + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button></td></tr>`).join('')
       + '</tbody></table>' + (rows.length > 80 ? `<p class="gr-foot">상위 80곳만 표시 — 전체 ${rows.length}곳</p>` : '');
@@ -402,10 +513,10 @@ function mkHtml(st) {
   const gone = d.removed || [], ren = d.renames || [];
   if (gone.length || ren.length) {
     h += `<details class="mk-gone"><summary>명단에서 빠진 업체 ${gone.length}곳${ren.length ? ` · 상호 변경 ${ren.length}곳` : ''} — 직전 조회(${esc(d.prevAt || '')})에는 있었음</summary><table class="mk-tbl"><tbody>`
-      + gone.map((r) => `<tr><td class="mk-d">${esc(mkDay(r.p))}</td><td><b>${esc(r.n)}</b><small>${esc(grRegion(r.a))}</small></td>`
+      + gone.map((r) => `<tr><td class="mk-d">${esc(mkDay(r.p))}</td><td><b class="mk-nm">${esc(r.n)}</b><small>${esc(grRegion(r.a))}</small></td>`
         + `<td class="mk-bs"><span class="mk-b gone">명단 제외</span>${r.nps != null ? `<span class="mk-b dim">국민연금 ${r.nps}명(${esc(grYmS(d.npsYm))})</span>` : ''}</td>`
         + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button></td></tr>`).join('')
-      + ren.map((r) => `<tr><td class="mk-d">—</td><td><b>${esc(r.from)} → ${esc(r.to)}</b><small>${esc(grRegion(r.a))}</small></td>`
+      + ren.map((r) => `<tr><td class="mk-d">—</td><td><b class="mk-nm">${esc(r.from)} → ${esc(r.to)}</b><small>${esc(grRegion(r.a))}</small></td>`
         + `<td class="mk-bs"><span class="mk-b warn">상호 변경</span><span class="mk-b dim">사업자번호 동일</span></td>`
         + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.to)}">사전검증</button></td></tr>`).join('')
       + '</tbody></table></details>';
@@ -418,7 +529,7 @@ function mkHtml(st) {
 function mountMakers() {
   const box = document.getElementById('makers');
   if (!box) return;
-  const paint = () => { box.innerHTML = mkHtml(mkState); };
+  const paint = () => { if (box.clientWidth) mkState.cw = Math.max(280, Math.round(box.clientWidth - 40)); box.innerHTML = mkHtml(mkState); };
   mkState.repaint = paint;
   let lastW = 0, rt = null;
   if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(box.clientWidth - lastW) < 24) return; lastW = box.clientWidth; clearTimeout(rt); rt = setTimeout(() => { if (mkState.data) paint(); }, 150); }).observe(box);
@@ -430,16 +541,47 @@ function mountMakers() {
     if (g) { const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = ''; lookup(g.dataset.grGo, ''); return; }
     if (e.target.closest('[data-gr-req]')) { grRequest(() => { if (growthState.repaint) growthState.repaint(); }); }
   });
-  const rep = document.getElementById('report');
-  const sync = () => { box.hidden = !!(rep && !rep.classList.contains('hidden')); };
-  if (rep) new MutationObserver(sync).observe(rep, { attributes: true, attributeFilter: ['class'] });
-  sync();
   paint();
-  mkLoad().then(paint).catch((e) => { mkState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
+  mkLoad().then(() => { paint(); dashTabsPaint(); if (growthState.repaint) growthState.repaint(); }).catch((e) => { mkState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
 }
 const mkLoad = (bust) => fetch(`data/growth/makers.json?v=${BUILD}-${bust || new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' })
   .then((r) => { if (r.status === 404) throw new Error('아직 첫 집계 전입니다 — 매주 월요일 아침 또는 「최신 자료 조회 요청」 때 만들어집니다'); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
   .then((d) => { mkState.data = d; mkState.err = null; return d; });
 
-const mountDash = () => { mountGrowth(); mountMakers(); };
+// ── 대시보드 탭 ── 급성장 신호 / 제조업 명단 변동. 리포트가 열리면 탭과 두 패널 모두 숨긴다.
+const DASH_TABS = [{ id: 'growth', label: '급성장 신호' }, { id: 'makers', label: '제조업 명단 변동' }];
+let dashTab = (() => { try { return localStorage.getItem('vs_dash_tab') || 'growth'; } catch { return 'growth'; } })();
+if (!DASH_TABS.some((t) => t.id === dashTab)) dashTab = 'growth';
+function dashTabsPaint() {
+  const nav = document.getElementById('dashTabs'); if (!nav) return;
+  const d = mkState.data;
+  const sub = { makers: d ? (d.base || !d.counts.added ? `30일 ${d.counts.d30}` : `+${d.counts.added}`) : '' };
+  nav.innerHTML = DASH_TABS.map((t) => `<button type="button" role="tab" class="rtab" data-dash-tab="${t.id}" aria-selected="${dashTab === t.id}" aria-controls="${t.id}">`
+    + `${esc(t.label)}${sub[t.id] ? `<span class="rtab-sub">${esc(sub[t.id])}</span>` : ''}</button>`).join('');
+}
+function dashSync() {
+  const rep = document.getElementById('report');
+  const open = !!(rep && !rep.classList.contains('hidden'));
+  const nav = document.getElementById('dashTabs'); if (nav) nav.hidden = open;
+  DASH_TABS.forEach((t) => { const el = document.getElementById(t.id); if (el) el.hidden = open || dashTab !== t.id; });
+}
+function mountDash() {
+  mountGrowth(); mountMakers();
+  const nav = document.getElementById('dashTabs');
+  if (nav) {
+    dashTabsPaint();
+    nav.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-dash-tab]'); if (!b || b.dataset.dashTab === dashTab) return;
+      dashTab = b.dataset.dashTab; try { localStorage.setItem('vs_dash_tab', dashTab); } catch { /* 저장 못 해도 동작 */ }
+      dashTabsPaint(); dashSync();
+      const el = document.getElementById(dashTab);
+      if (el) { el.classList.remove('enter'); void el.offsetWidth; el.classList.add('enter'); }
+      if (dashTab === 'growth' && growthState.repaint) growthState.repaint();
+      if (dashTab === 'makers' && mkState.repaint) mkState.repaint();
+    });
+  }
+  const rep = document.getElementById('report');
+  if (rep) new MutationObserver(dashSync).observe(rep, { attributes: true, attributeFilter: ['class'] });
+  dashSync();
+}
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountDash); else mountDash();

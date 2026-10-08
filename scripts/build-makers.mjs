@@ -57,6 +57,26 @@ async function register() {
 }
 
 // 의약품안전나라 목록 화면 — 번지까지 있는 제조소 주소(공개 API는 시·군까지만)
+// 식약처 CGMP(우수화장품 제조 및 품질관리기준) 적합업소 — 항목 이름이 확정되지 않아(BSSH_NM·ENTP_NAME 등)
+// 레코드의 모든 값을 상호 키로 바꿔 모은다. 사전검증 리포트(matchByName)와 같은 방식이다.
+async function gmpNames() {
+  const BASE = 'https://apis.data.go.kr/1471000/CsmtcsGmpStbltCompInfo/getCsmtcsGmpStbltCompInfo';
+  const page = async (n) => {
+    const q = new URLSearchParams({ serviceKey: KEY, type: 'json', pageNo: String(n), numOfRows: '500' });
+    const j = await (await fetchOk(`${BASE}?${q}`)).json();
+    const b = j.body || (j.response && j.response.body) || {};
+    let it = b.items; if (it && it.item) it = it.item;
+    it = Array.isArray(it) ? it : (it ? [it] : []);
+    return { total: Number(b.totalCount) || 0, items: it.map((x) => (x && x.item && typeof x.item === 'object' ? x.item : x)) };
+  };
+  const first = await page(1);
+  const all = [...first.items];
+  for (let p = 2; p <= Math.ceil(first.total / 500); p++) all.push(...(await page(p)).items);
+  const names = new Set();
+  all.forEach((x) => Object.values(x || {}).forEach((v) => { const k = nk(v); if (k.length >= 2 && !/^\d+$/.test(k)) names.add(k); }));
+  return { names, n: all.length };
+}
+
 async function nedrugAddr(name) {
   const nm = String(name || '').replace(/\(주\)|㈜|주식회사/g, '').trim();
   const url = `https://nedrug.mfds.go.kr/pbp/CCBBA01/getList?searchYn=true&page=1&limit=50&cobCode=V&entpName=${encodeURIComponent(nm)}`;
@@ -139,6 +159,9 @@ export async function main() {
       npsBy.set(key, { cnt: (o ? o.cnt : 0) + (Number(r.cnt) || 0) });
     });
   });
+  // CGMP 적합업소 — 실패해도 명단 갱신은 계속(배지만 '확인 못 함')
+  let gmp = null;
+  try { gmp = await gmpNames(); log(`CGMP 적합업소 ${gmp.n}건`); } catch (e) { log(`CGMP 목록 실패: ${e.message}`); }
   const jobs = readJson('jobs.json');
   const jobBy = new Map(((jobs && jobs.rows) || []).map((r) => [nk(r.nm), r.cur]));
 
@@ -155,6 +178,7 @@ export async function main() {
       more: other.some((o) => !o.sale && o.p && o.p < r.p) || undefined,
       nps: nps ? nps.cnt : null,
       job: jobBy.has(nk(r.n)) ? jobBy.get(nk(r.n)) : undefined,
+      gmp: gmp ? gmp.names.has(nk(r.n)) : null,          // true 적합 · false 목록에 없음 · null 목록 조회 실패
     };
   };
   const recent = [...showIds].map(view).sort((a, b) => String(b.p).localeCompare(String(a.p)) || a.n.localeCompare(b.n));
@@ -172,13 +196,14 @@ export async function main() {
   const doc = {
     builtAt: new Date(now).toISOString(), at: today, prevAt: base ? null : prev.at, base,
     source: '식약처 화장품 제조업 허가 명단(공개 API) · 번지 주소 의약품안전나라 · 인원 국민연금 월간 파일',
-    npsYm: snap ? snap.ym : null, jobsAt: jobs ? jobs.builtAt : null,
+    npsYm: snap ? snap.ym : null, gmpOk: !!gmp, gmpN: gmp ? gmp.n : null, jobsAt: jobs ? jobs.builtAt : null,
     total: live.length, counts: { d30: cnt(30), d90: cnt(90), d365: cnt(365), added: addedReal.length, removed: removedReal.length, renamed: renames.length },
     monthly, recent, removed: gone, renames, runs: runs.slice(-12),
   };
   fs.writeFileSync(path.join(OUT, 'makers-ledger.json'), JSON.stringify({ v: 1, at: today, runs, firms }));
   fs.writeFileSync(path.join(OUT, 'makers.json'), JSON.stringify(doc));
   notice(`제조업 명단 ${live.length}곳${base ? ' (첫 실행 — 기준 명단 저장)' : ` · 지난 조회(${prev.at}) 대비 추가 ${addedReal.length} · 빠짐 ${removedReal.length} · 상호변경 ${renames.length}`}`
+    + ` · CGMP 목록 ${gmp ? `${gmp.n}건(신규 중 적합 ${recent.filter((r) => r.gmp).length})` : '조회 실패'}`
     + ` · 최근 30일 허가 ${doc.counts.d30} · 번지 보강 ${nedOk}/${need.length}${nedErr ? ` (중단: ${nedErr})` : ''}`);
 }
 
