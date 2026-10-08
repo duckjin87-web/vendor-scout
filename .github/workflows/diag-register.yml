@@ -1,0 +1,44 @@
+name: Diagnose MFDS register freshness
+
+# 화장품 제조업 명단이 '신규 업체'를 얼마나 최근까지 반영하는지 확인하는 진단용. 아무것도 커밋하지 않는다.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan register
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: |
+          cat > d.mjs <<'JS'
+          const BASE = 'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01';
+          const page = async (n) => {
+            const q = new URLSearchParams({ serviceKey: process.env.KEY, type: 'json', pageNo: String(n), numOfRows: '500' });
+            const j = await (await fetch(`${BASE}?${q}`)).json();
+            const b = j.body || (j.response && j.response.body) || {};
+            let it = b.items; if (it && it.item) it = it.item;
+            it = Array.isArray(it) ? it : (it ? [it] : []);
+            return { total: Number(b.totalCount) || 0, items: it.map((x) => (x && x.item && typeof x.item === 'object' ? x.item : x)) };
+          };
+          const f = await page(1); const all = [...f.items]; const pages = Math.ceil(f.total / 500);
+          for (let p = 2; p <= pages; p += 4) (await Promise.all([p, p + 1, p + 2, p + 3].filter((x) => x <= pages).map((x) => page(x).catch(() => ({ items: [] }))))).forEach((g) => all.push(...g.items));
+          const mk = all.filter((x) => /제조/.test(x.INDUTY || '') && !/판매/.test(x.INDUTY || ''));
+          const keys = new Set(); all.forEach((x) => Object.keys(x).forEach((k) => keys.add(k)));
+          const d = (x) => String(x.ENTP_PERMIT_DATE || '').replace(/\D/g, '').slice(0, 8);
+          const ds = mk.map(d).filter((s) => s.length === 8).sort();
+          const now = new Date(); const ago = (n) => new Date(now - n * 864e5).toISOString().slice(0, 10).replace(/-/g, '');
+          const cnt = (n) => ds.filter((s) => s >= ago(n)).length;
+          const byMonth = {}; ds.filter((s) => s >= ago(400)).forEach((s) => { const m = s.slice(0, 6); byMonth[m] = (byMonth[m] || 0) + 1; });
+          const latest = mk.filter((x) => d(x) >= ago(60)).sort((a, b) => d(b).localeCompare(d(a))).slice(0, 8).map((x) => `${d(x)} ${x.ENTP_NAME} ${x.FACTORY_ADDR || ''}`);
+          const n = (t) => console.log('::notice::' + t);
+          n(`전체 ${all.length}/${f.total} · 제조 ${mk.length} · 허가일 있음 ${ds.length} · 필드 ${[...keys].join(',')}`);
+          n(`최신 허가일 ${ds[ds.length - 1]} · 30일 ${cnt(30)} · 90일 ${cnt(90)} · 365일 ${cnt(365)}`);
+          n(`월별(최근 13개월) ${JSON.stringify(byMonth)}`);
+          n(`최근 60일 신규 예: ${latest.join(' | ')}`);
+          JS
+          node d.mjs
