@@ -6,7 +6,7 @@
   <title>vendor-scout · 화장품 제조업체 사전검증 리포트</title>
   <meta name="description" content="업체명 입력 → 공공 API 실시간 조회 → 조회시점 스냅샷 리포트 → 방문 크로스체크. 화장품 제조업체 신규처 발굴용 사전 정보 확보·검증 서비스.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232f6df6'/><text x='50' y='70' font-size='60' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'>V</text></svg>">
-  <link rel="stylesheet" href="assets/styles.css?v=173">
+  <link rel="stylesheet" href="assets/styles.css?v=174">
   <!-- 저장해 둔 테마를 첫 그림 전에 입힌다. app.js는 문서 끝에서 로드돼서 거기서 하면
        밝은 화면이 한 번 번쩍인 뒤 어두워진다. 그래서 이 한 조각만 인라인으로 둔다. -->
   <script>
@@ -28,6 +28,8 @@
       <span class="spacer"></span>
       <!-- 첫 화면(급성장 신호 대시보드)으로 — 리포트를 보다가 언제든 돌아간다 -->
       <button type="button" id="homeBtn" class="homebtn" title="첫 화면 대시보드로">⌂ 대시보드</button>
+      <!-- 저장한 업체 목록과 당시 조회 결과(이 브라우저에 저장) -->
+      <button type="button" id="savedBtn" class="homebtn" title="저장한 업체 목록과 당시 조회 결과" aria-label="저장업체">★<span class="sv-lbl"> 저장업체</span></button>
       <div class="themesel" role="group" aria-label="화면 테마">
         <button type="button" class="thbtn" data-set-theme="light" title="밝은 화면으로 고정">밝게</button>
         <button type="button" class="thbtn" data-set-theme="dark" title="어두운 화면으로 고정">어둡게</button>
@@ -52,7 +54,7 @@
     <nav id="dashTabs" class="rtabs dash-tabs" role="tablist" aria-label="대시보드"></nav>
     <section id="growth" class="growth" aria-label="급성장 신호"></section>
     <!-- 화장품 제조업 명단 누적 관리 — 지난 조회 이후 새로 들어온·빠진 업체(assets/growth.js, data/growth/makers.json) -->
-    <section id="makers" class="growth mk" aria-label="화장품 제조업 명단 변동"></section>
+    <section id="makers" class="growth mk" aria-label="제조업 등록 현황"></section>
 
     <section id="report" class="report hidden"></section>
   </main>
@@ -65,9 +67,9 @@
     </div>
   </footer>
 
-  <script src="assets/samples.js?v=173"></script>
-  <script src="assets/app.js?v=173"></script>
-  <script src="assets/nearby.js?v=173"></script>
-  <script src="assets/growth.js?v=173"></script>
+  <script src="assets/samples.js?v=174"></script>
+  <script src="assets/app.js?v=174"></script>
+  <script src="assets/nearby.js?v=174"></script>
+  <script src="assets/growth.js?v=174"></script>
 </body>
 </html>

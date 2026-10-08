@@ -470,7 +470,7 @@ function mkBadges(r) {
 }
 function mkHtml(st) {
   const d = st.data;
-  const head = (sub) => `<div class="gr-head"><div><h2>화장품 제조업 명단 변동 <small>식약처 제조업 허가 명단 누적 관리</small></h2>${sub || ''}</div>`
+  const head = (sub) => `<div class="gr-head"><div><h2>제조업 등록 현황 <small>식약처 화장품 제조업 허가 명단 누적 관리</small></h2>${sub || ''}</div>`
     + `${grReqHtml(growthState, `명단 마지막 갱신 ${(st.data && grWhen(st.data.builtAt)) || '—'}`)}</div>`;
   if (st.err) return head() + `<div class="gr-empty">명단 변동 자료를 불러오지 못했습니다 — ${esc(st.err)}</div>`;
   if (!d) return head() + '<div class="gr-empty">불러오는 중…</div>';
@@ -506,7 +506,8 @@ function mkHtml(st) {
       + rows.slice(0, 80).map((r) => `<tr><td class="mk-d">${esc(mkDay(r.p))}</td>`
         + `<td><b class="mk-nm">${esc(r.n)}</b><small>${esc(grRegion(r.a) || r.a || '')}</small></td>`
         + `<td class="mk-addr">${esc(r.ad || r.a || '')}</td><td class="mk-bs">${mkBadges(r)}</td>`
-        + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button></td></tr>`).join('')
+        + `<td class="mk-acts"><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button>`
+        + `<button type="button" class="nb-btn sm mk-sv${svKeys.has(svKey(r.n)) ? ' on' : ''}" data-mk-save="${esc(r.id)}" title="${svKeys.has(svKey(r.n)) ? '저장 해제' : '저장 — 상단 「저장업체」에서 나중에 조회'}">${svKeys.has(svKey(r.n)) ? '★ 저장됨' : '☆ 저장'}</button></td></tr>`).join('')
       + '</tbody></table>' + (rows.length > 80 ? `<p class="gr-foot">상위 80곳만 표시 — 전체 ${rows.length}곳</p>` : '');
   }
   // ── 명단에서 빠진 업체 · 상호 변경 ──
@@ -537,6 +538,8 @@ function mountMakers() {
     const v = e.target.closest('[data-mk-view]'); if (v) { mkState.view = v.dataset.mkView; paint(); return; }
     const s = e.target.closest('[data-mk-sido]'); if (s) { mkState.sido = mkState.sido === s.dataset.mkSido ? null : s.dataset.mkSido; paint(); return; }
     if (e.target.closest('[data-mk-nps]')) { mkState.npsOnly = !mkState.npsOnly; paint(); return; }
+    const sv = e.target.closest('[data-mk-save]');
+    if (sv) { const r = (mkState.data.recent || []).find((x) => x.id === sv.dataset.mkSave); if (r) svToggleFirm(r).catch((er) => svToast(`저장하지 못했습니다 — ${er.message}`)); return; }
     const g = e.target.closest('[data-gr-go]');
     if (g) { const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = ''; lookup(g.dataset.grGo, ''); return; }
     if (e.target.closest('[data-gr-req]')) { grRequest(() => { if (growthState.repaint) growthState.repaint(); }); }
@@ -549,13 +552,12 @@ const mkLoad = (bust) => fetch(`data/growth/makers.json?v=${BUILD}-${bust || new
   .then((d) => { mkState.data = d; mkState.err = null; return d; });
 
 // ── 대시보드 탭 ── 급성장 신호 / 제조업 명단 변동. 리포트가 열리면 탭과 두 패널 모두 숨긴다.
-const DASH_TABS = [{ id: 'growth', label: '급성장 신호' }, { id: 'makers', label: '제조업 명단 변동' }];
+const DASH_TABS = [{ id: 'growth', label: '급성장 신호' }, { id: 'makers', label: '제조업 등록 현황' }];
 let dashTab = (() => { try { return localStorage.getItem('vs_dash_tab') || 'growth'; } catch { return 'growth'; } })();
 if (!DASH_TABS.some((t) => t.id === dashTab)) dashTab = 'growth';
 function dashTabsPaint() {
   const nav = document.getElementById('dashTabs'); if (!nav) return;
-  const d = mkState.data;
-  const sub = { makers: d ? (d.base || !d.counts.added ? `30일 ${d.counts.d30}` : `+${d.counts.added}`) : '' };
+  const sub = {};          // 탭에는 이름만(숫자 없이)
   nav.innerHTML = DASH_TABS.map((t) => `<button type="button" role="tab" class="rtab" data-dash-tab="${t.id}" aria-selected="${dashTab === t.id}" aria-controls="${t.id}">`
     + `${esc(t.label)}${sub[t.id] ? `<span class="rtab-sub">${esc(sub[t.id])}</span>` : ''}</button>`).join('');
 }

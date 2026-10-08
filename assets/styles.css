@@ -1873,3 +1873,68 @@ div.mk-t:hover { border-color: var(--border); }
 .tr-list small { color: var(--faint); font-size: 11px; white-space: nowrap; }
 @media (max-width: 720px) { .trend { padding: 12px; } .tr-title { font-size: 15px; } .tr-h small { display: block; margin: 2px 0 0; } }
 @media (prefers-reduced-motion: reduce) { .tr-card { animation: none; } .ld-spin { animation-duration: 2s; } }
+
+.srcfoot { margin: 14px 0 4px; font-size: 11.5px; color: var(--faint); line-height: 1.6; }
+
+/* ── 근처 업체: 큰 지도 + 아래 이분할(왼쪽 목록 · 오른쪽 상세) ── */
+.nb-body { display: block; }
+.nb-body > .nb-map { height: 560px; border-bottom: 1px solid var(--border); }
+.nb-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.nb-split > .nb-listcol { border-right: 1px solid var(--border); }
+.nb-split > .nb-sheet { position: sticky; top: calc(var(--topbar-h, 61px) + 52px); align-self: start; }
+.nb-row.open .nb-rowbtn { background: var(--accent-soft); }
+@media (max-width: 720px) {
+  .nb-body > .nb-map { height: 420px; }
+  .nb-split { grid-template-columns: 1fr; }
+  .nb-split > .nb-listcol { border-right: 0; border-bottom: 1px solid var(--border); }
+  .nb-split > .nb-sheet { position: static; scroll-margin-top: calc(var(--topbar-h, 61px) + 56px); }
+  .nb-rows { max-height: 360px; overflow-y: auto; }
+}
+@media print { .nb-body > .nb-map { height: 320px; } .nb-split > .nb-sheet { position: static; } }
+
+/* ── 공장 면적 탭: 건물 로드뷰 ── */
+.rv-stage { position: relative; height: 380px; border-radius: 8px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--border); }
+.rv-view { position: absolute; inset: 0; }
+.rv-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; text-align: center; font-size: 13px; color: var(--muted); line-height: 1.6; }
+.rv-foot { margin-top: 8px; font-size: 12.5px; }
+.rv-foot a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.rv-foot a:hover { text-decoration: underline; }
+.rv-foot small { display: block; margin-top: 3px; font-size: 11.5px; color: var(--muted); }
+@media (max-width: 720px) { .rv-stage { height: 280px; } }
+@media print { .rv { display: none; } }
+
+/* ── 저장 업체 ── */
+.vd-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.sv-btn { font: inherit; font-size: 13px; font-weight: 700; padding: 6px 12px; min-height: 34px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); cursor: pointer; white-space: nowrap; }
+.sv-btn:hover { border-color: var(--gC); color: var(--gC); }
+.sv-btn.on { background: var(--gC-bg); border-color: var(--gC); color: var(--gC); }
+.mk-acts { white-space: nowrap; }
+.mk-acts .nb-btn + .nb-btn { margin-left: 4px; }
+.mk-sv.on { background: var(--gC-bg); border-color: var(--gC); color: var(--gC); }
+#savedBtn b { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 2px; border-radius: 9px; background: var(--gC-bg); color: var(--gC); font-size: 11.5px; }
+.sv-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; margin-bottom: 12px; border-radius: 8px;
+  background: var(--gC-bg); color: var(--text); font-size: 13px; border: 1px solid var(--gC); }
+.sv-banner span { flex: 1; min-width: 200px; }
+.svl { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 16px 18px; }
+.svl-head h2 { margin: 0 0 10px; font-size: 18px; font-weight: 800; }
+.svl-head h2 small { font-size: 12.5px; font-weight: 500; color: var(--muted); margin-left: 6px; }
+.svl-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.svl-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.svl-main small { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.svl-acts { display: flex; gap: 6px; flex: none; }
+.vd-badge-mini { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px; font-size: 12px; font-weight: 800; }
+.sv-toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; z-index: 60;
+  background: var(--text); color: var(--panel); padding: 10px 16px; border-radius: 8px; font-size: 13px; max-width: calc(100vw - 32px); transition: opacity .2s, transform .2s; }
+.sv-toast.on { opacity: 1; transform: translate(-50%, 0); }
+@media (max-width: 720px) {
+  .svl { padding: 12px; }
+  .svl-row { flex-direction: column; align-items: stretch; }
+  .svl-acts { justify-content: flex-end; }
+  .mk-acts { display: flex; flex-direction: column; gap: 4px; }
+  .mk-acts .nb-btn + .nb-btn { margin-left: 0; }
+  .vd-side { align-items: flex-start; }
+}
+@media print { .sv-btn, .sv-banner, .sv-toast { display: none !important; } }
+.vd-side { order: 3; }
+@media (max-width: 520px) { #savedBtn .sv-lbl { display: none; } }

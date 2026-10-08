@@ -499,7 +499,7 @@ function nbSheetHtml(st) {
   let h = `<div class="nb-sum">반경 ${st.radius}km · 제조업 허가 업체 <b>${vis.length}</b>곳 (CGMP ${gmpN})`
     + (vis.length - placed ? ` <span class="nb-sum-warn">· 위치 미확인 ${vis.length - placed}곳은 지도에 없음</span>` : '') + '</div>';
   const s = st.items.find((v) => v.id === st.sel);
-  if (!s || !vis.includes(s)) return h + `<div class="nb-empty">${vis.length ? '지도나 목록에서 업체를 고르세요.' : '이 반경 안에서 찾은 업체가 없습니다. 반경을 넓혀 보세요.'}</div>`;
+  if (!s || !vis.includes(s)) return h + `<div class="nb-empty">${vis.length ? '지도나 왼쪽 목록에서 업체를 고르면 여기에 상세가 보입니다.' : '이 반경 안에서 찾은 업체가 없습니다. 반경을 넓혀 보세요.'}</div>`;
   const tel = s.phone ? `<a href="tel:${esc(s.phone.replace(/[^\d+]/g, ''))}">${esc(s.phone)}</a>` : '—';
   const pl = nbPlaced(s);
   const mapUrl = s.url || (pl
@@ -531,6 +531,8 @@ function nbSheetHtml(st) {
     + `<dt>위치 근거</dt><dd class="${pl ? '' : 'unk'}">${esc(nbGeoText(s))}</dd>`
     + `</dl>`
     + `<div class="nb-selacts">`
+    + (pl ? `<button type="button" class="nb-btn${st.route.includes(s.id) ? '' : ' blue'}" data-act="route" data-id="${esc(s.id)}">${st.route.includes(s.id) ? '동선에서 빼기' : '동선에 추가'}</button>`
+      : `<button type="button" class="nb-btn" disabled title="위치가 번지까지 확인되지 않아 동선에 넣지 않습니다">동선에 추가 불가</button>`)
     + (pl ? `<a class="nb-btn" href="${esc(nbKakaoRoute(st, [s]))}" target="_blank" rel="noopener">길찾기</a>`
       : `<button type="button" class="nb-btn" disabled title="위치가 번지까지 확인되지 않았습니다">길찾기</button>`)
     + `<a class="nb-btn" href="${esc(mapUrl)}" target="_blank" rel="noopener">카카오맵</a>`
@@ -540,8 +542,7 @@ function nbSheetHtml(st) {
 }
 
 function nbRowHtml(st, v) {
-  const open = st.open === v.id, inRoute = st.route.includes(v.id), pl = nbPlaced(v);
-  const tel = v.phone ? ` · <a href="tel:${esc(v.phone.replace(/[^\d+]/g, ''))}">${esc(v.phone)}</a>` : '';
+  const open = st.sel === v.id, inRoute = st.route.includes(v.id), pl = nbPlaced(v);
   const dist = pl ? `<b>${nbFmtKm(v.km)}</b><i>km</i>` : `<b class="nb-dq">—</b><i>${v.geo === 'pending' ? '확인 전' : '미확인'}</i>`;
   return `<div class="nb-row${open ? ' open' : ''}${st.sel === v.id ? ' sel' : ''}${pl ? '' : ' unplaced'}" data-row="${esc(v.id)}">`
     + `<button type="button" class="nb-rowbtn" data-act="pick" data-id="${esc(v.id)}" aria-expanded="${open}">`
@@ -553,14 +554,7 @@ function nbRowHtml(st, v) {
     + (v.cgmp ? '<span class="nb-chip">CGMP</span>' : '')
     + (inRoute ? '<span class="nb-inroute" title="동선에 담음">동선</span>' : '')
     + `</button>`
-    + (open ? `<div class="nb-more"><div class="nb-facts">${esc(v.lcns ? `허가 ${v.lcns}` : '제조업 허가')}${v.rep ? ` · 대표 ${esc(v.rep)}` : ''}${v.cgmp ? ' · CGMP 적합' : ''}${tel}</div>`
-      + (v.mapAddr && v.mapAddr.replace(/\s/g, '') !== String(v.addr || '').replace(/\s/g, '') ? `<div class="nb-addr">지도 위치: ${esc(v.mapAddr)}</div>` : '')
-      + `<div class="nb-geo${pl ? '' : ' warn'}">위치 근거: ${esc(nbGeoText(v))}</div>`
-      + `<div class="nb-acts">`
-      + (pl
-        ? `<button type="button" class="nb-btn${inRoute ? '' : ' blue'}" data-act="route" data-id="${esc(v.id)}">${inRoute ? '동선에서 빼기' : '동선에 추가'}</button>`
-        : `<button type="button" class="nb-btn" disabled title="위치가 번지까지 확인되지 않아 동선에 넣지 않습니다">동선에 추가 불가</button>`)
-      + `<button type="button" class="nb-btn" data-act="report" data-id="${esc(v.id)}">사전검증 리포트</button></div></div>` : '')
+    // 상세는 오른쪽 칸 한 곳에서만 보인다 — 줄 아래 펼침은 없앴다(같은 내용이 두 번 보였다)
     + `</div>`;
 }
 
@@ -588,7 +582,7 @@ function nbListHtml(st) {
   }
   const r = nbRouteOrder(st);
   const foot = `<div class="nb-route"><div><small>오늘 동선</small><b>기점 포함 ${r.stops.length + 1}곳</b>`
-    + (r.stops.length ? `<small>직선 합계 약 ${Math.round(r.km)}km · 차량 약 ${nbFmtMin(r.min)}(추정) · ${esc(r.stops.map((s) => s.name).join(' → '))}</small>` : '<small>목록에서 업체를 펼쳐 동선에 추가하세요 (위치가 확인된 곳만)</small>')
+    + (r.stops.length ? `<small>직선 합계 약 ${Math.round(r.km)}km · 차량 약 ${nbFmtMin(r.min)}(추정) · ${esc(r.stops.map((s) => s.name).join(' → '))}</small>` : '<small>업체를 고른 뒤 오른쪽 상세에서 동선에 추가하세요 (위치가 확인된 곳만)</small>')
     + `</div>`
     + (r.stops.length ? `<button type="button" class="nb-btn" data-act="clear">비우기</button>`
       + `<a class="nb-btn dark" href="${esc(nbKakaoRoute(st, r.stops.slice(0, 6)))}" target="_blank" rel="noopener">카카오맵 경로 보기</a>` : '')
@@ -616,8 +610,9 @@ function nbPaint(st) {
       + `<div class="nb-head"><div class="nb-title"></div>`
       + `<div class="nb-legend"><span><i class="nb-mark reg"></i>제조업 허가</span><span><i class="nb-mark gmp"></i>CGMP 적합</span></div>`
       + `<div class="nb-seg" role="group" aria-label="반경">${NB.RADII.map((r) => `<button type="button" data-act="radius" data-r="${r}">${r}km</button>`).join('')}</div></div>`
-      + `<div class="nb-body"><div class="nb-mapcol"><div class="nb-map" role="region" aria-label="근처 업체 지도"></div><div class="nb-sheet"></div></div>`
-      + `<div class="nb-listcol"></div></div>`
+      // 지도를 위에 크게, 그 아래를 이분할 — 왼쪽: 업체 거르기·목록 / 오른쪽: 고른 업체 상세(한 곳에서만)
+      + `<div class="nb-body"><div class="nb-map" role="region" aria-label="근처 업체 지도"></div>`
+      + `<div class="nb-split"><div class="nb-listcol"></div><div class="nb-sheet" aria-live="polite"></div></div></div>`
       + `<div class="nb-status"></div></div>`;
   }
   const title = pane.querySelector('.nb-title');
@@ -921,7 +916,11 @@ function nbBind(st) {
     const act = b.dataset.act, id = b.dataset.id;
     if (act === 'radius') { st.radius = Number(b.dataset.r); if (st.sel && !nbVisible(st).some((v) => v.id === st.sel)) st.sel = (nbVisible(st).find(nbPlaced) || {}).id || null; nbPaint(st); }
     else if (act === 'filter') { st.filter = b.dataset.f; nbPaint(st); }
-    else if (act === 'pick') { st.open = st.open === id ? null : id; nbSelect(st, id); }
+    else if (act === 'pick') {
+      nbSelect(st, id);
+      // 좁은 화면은 상세 칸이 목록 아래에 있다 — 고르면 상세로 내려 준다
+      if (window.matchMedia && window.matchMedia('(max-width: 720px)').matches) { const sh = st.pane.querySelector('.nb-sheet'); if (sh) sh.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+    }
     else if (act === 'route') { st.route = st.route.includes(id) ? st.route.filter((x) => x !== id) : st.route.concat(id); nbPaint(st); }
     else if (act === 'clear') { st.route = []; nbPaint(st); }
     else if (act === 'more') {

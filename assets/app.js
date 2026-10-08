@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 173;
+const BUILD = 174;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4186,7 +4186,9 @@ function renderVerdict(report) {
     + `<div class="vd-title"><h2>${esc(m.vendor_name || '')}</h2>`
     + `<div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div>`
     + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
-    + `<div class="vd-verd">${esc(v.label)}</div></div>`;
+    + `<div class="vd-side"><div class="vd-verd">${esc(v.label)}</div>`
+    + (m.live ? `<button type="button" class="sv-btn" data-act="save-firm" data-sv-key="${esc(svKey(m.vendor_name || ''))}" data-sv-kind="report">☆ 저장</button>` : '')
+    + '</div></div>';
   // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
   if (ups.length || downs.length) {
     html += `<div class="vd-why">`
@@ -4264,6 +4266,11 @@ function renderVerdict(report) {
     + `</div>`;
   box.innerHTML = html;
   box.querySelector('[data-act="verdict-why"]').addEventListener('click', () => openVerdictWhy(report));
+  const svb = box.querySelector('[data-act="save-firm"]');
+  if (svb) {
+    svPaintBtn(svb);
+    svb.addEventListener('click', () => { svSaveReport(report).catch((e) => svToast(`저장하지 못했습니다 — ${e.message}`)); });
+  }
   return box;
 }
 
@@ -4917,6 +4924,61 @@ function renderAreaCompare(report) {
 //   후보 주소: 공장 소재지 선정 때 본 주소들 — 눌러서 그 주소로 조회
 //   합계 · 필지별 내역(필지 추가·빼기) · 동별 건축물대장 표 · 주의할 점 · 한국콜마 3D 비교
 const BLD_HOW = { lot: '지번 일치', road: '같은 본번 · 새주소(도로명) 일치', name: '같은 본번 · 건물명(상호) 일치' };
+// ── 건물 로드뷰(카카오) ── 공장 면적 탭 '공장 규모' 아래. 면적 조회 주소의 건물을 거리에서 본 모습.
+// 카카오 지도 JS 키(KAKAO_JS_KEY)가 있어야 화면 안에 띄울 수 있다 — 없으면 카카오맵 로드뷰 링크만 준다.
+// 탭이 화면에 보일 때 처음 그린다(숨은 칸에서 그리면 크기가 0이라 깨진다).
+function rvBearing(a, b) {
+  const r = Math.PI / 180, y = Math.sin((b.lng - a.lng) * r) * Math.cos(b.lat * r);
+  const x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos((b.lng - a.lng) * r);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
+function renderRoadview(addr, name) {
+  const box = el('div', 'block full cat-prod rv');
+  box.innerHTML = `<h3>건물 로드뷰<span class="cnt">카카오 로드뷰 · ${esc(addr || '주소 없음')}</span></h3>`
+    + '<div class="rv-stage"><div class="rv-msg">로드뷰를 불러오는 중…</div></div><div class="rv-foot"></div>';
+  const stage = box.querySelector('.rv-stage'), foot = box.querySelector('.rv-foot');
+  const msg = (t) => { stage.innerHTML = `<div class="rv-msg">${t}</div>`; };
+  let started = false, rv = null;
+  const start = async () => {
+    started = true;
+    if (!addr) { msg('면적 조회 주소가 없어 로드뷰를 띄울 수 없습니다.'); return; }
+    let c = null;
+    try { c = await kakaoGeocode(addr); } catch { /* 아래에서 안내 */ }
+    if (!c) {
+      msg('주소의 위치를 찾지 못했습니다.');
+      foot.innerHTML = `<a href="https://map.kakao.com/link/search/${encodeURIComponent(addr)}" target="_blank" rel="noopener">카카오맵에서 주소 검색 ↗</a>`;
+      return;
+    }
+    foot.innerHTML = `<a href="https://map.kakao.com/link/roadview/${c.lat},${c.lng}" target="_blank" rel="noopener">카카오맵 로드뷰 크게 보기 ↗</a>`
+      + ` · <a href="https://map.kakao.com/link/map/${encodeURIComponent(String(name || '공장').replace(/[,/]/g, ' '))},${c.lat},${c.lng}" target="_blank" rel="noopener">지도 ↗</a>`
+      + '<small>로드뷰는 촬영 시점의 모습이라 지금과 다를 수 있습니다. 주소 위치에서 가장 가까운 촬영 지점을 보여 줍니다.</small>';
+    const eng = typeof nbMapEngine === 'function' ? await nbMapEngine() : 'leaflet';
+    if (eng !== 'kakao' || !window.kakao || !window.kakao.maps || !window.kakao.maps.Roadview) {
+      msg('카카오 지도 키가 연결되지 않아 화면 안에 띄우지 못했습니다 — 아래 링크로 카카오맵 로드뷰를 열어 보세요.');
+      return;
+    }
+    const K = window.kakao.maps, pos = new K.LatLng(c.lat, c.lng);
+    new K.RoadviewClient().getNearestPanoId(pos, 150, (panoId) => {
+      if (!panoId) { msg('이 주소 반경 150m 안에 로드뷰 촬영 지점이 없습니다(산업단지 안쪽 도로는 촬영되지 않은 곳이 많습니다).'); return; }
+      stage.innerHTML = '<div class="rv-view"></div>';
+      rv = new K.Roadview(stage.firstChild);
+      rv.setPanoId(panoId, pos);
+      // 촬영 지점에서 건물 쪽을 바라보게 돌린다
+      K.event.addListener(rv, 'init', () => {
+        const p = rv.getPosition();
+        try { rv.setViewpoint({ pan: rvBearing({ lat: p.getLat(), lng: p.getLng() }, c), tilt: 0, zoom: 0 }); } catch { /* 기본 방향 */ }
+      });
+    });
+  };
+  const io = window.IntersectionObserver ? new IntersectionObserver((es) => {
+    if (!es.some((e) => e.isIntersecting)) return;
+    if (!started) start();
+    else if (rv) { try { rv.relayout(); } catch { /* 무시 */ } }
+  }, { rootMargin: '4000px 0px' }) : null;      // 탭이 보이기만 하면(스크롤 아래여도) 바로 불러온다
+  if (io) io.observe(box); else setTimeout(start, 0);
+  return box;
+}
+
 function renderAreaTab(report) {
   const M = report.meta || {};
   if (!M.live) return null;
@@ -5035,6 +5097,9 @@ function renderAreaTab(report) {
     wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${candHtml()}${sumHtml()}${lotsHtml()}${bldgHtml()}${noteHtml()}`;
     const cmp = renderAreaCompare(report);
     if (cmp) wrap.appendChild(cmp);
+    // 공장 규모 아래 로드뷰 — 주소가 같으면 이미 띄운 것을 그대로 옮겨 붙인다(다시 불러오지 않게)
+    if (!ui.rv || ui.rvAddr !== curAddr) { ui.rv = renderRoadview(curAddr, nm); ui.rvAddr = curAddr; }
+    wrap.appendChild(ui.rv);
     if (ui.editing) { const i = wrap.querySelector('#atAddrIn'); if (i) { i.focus(); i.select(); } }
   };
   // 면적이 바뀌면 리포트의 면적·소재지 칸도 같은 값으로 고친 뒤 전부 다시 그린다(탭은 그대로 유지)
@@ -5154,6 +5219,17 @@ function render(report, opts = {}) {
   root.classList.remove('hidden');
 
   const m = report.meta;
+  // 저장업체에서 연 '당시 결과' — 지금 조회한 것이 아님을 맨 위에 밝힌다(다시 그려도 유지되게 리포트에 표시해 둔다)
+  if (opts.savedAt) Object.defineProperty(report, '_savedAt', { configurable: true, value: opts.savedAt });
+  if (report._savedAt) {
+    const d = new Date(report._savedAt);
+    const when = isNaN(d) ? '' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const sb = el('div', 'sv-banner', `<span>★ 저장된 결과입니다 — <b>${esc(when)}</b>에 조회한 내용이라 지금과 다를 수 있습니다.</span>`
+      + '<button type="button" class="nb-btn sm" data-sv-back>저장업체 목록</button><button type="button" class="nb-btn sm dark" data-sv-relook>지금 다시 조회</button>');
+    sb.querySelector('[data-sv-back]').addEventListener('click', () => svOpenList());
+    sb.querySelector('[data-sv-relook]').addEventListener('click', () => { const q = $('#q'); if (q) q.value = m.vendor_name; const bz = $('#bno'); if (bz) bz.value = ''; lookup(m.vendor_name, ''); });
+    root.appendChild(sb);
+  }
 
   // 제외된 소스는 필드/블록/집계에서 모두 숨김
   const excl = getExcluded();
@@ -5247,9 +5323,7 @@ function render(report, opts = {}) {
 
   // 데이터 출처 배너
   if (m.live) {
-    root.appendChild(el('div', 'livenote',
-      '🟢 <b>실데이터</b> — data.go.kr 공공 API 조회 결과입니다. ' +
-      '값이 없는 항목은 <code>data_gap</code>으로 명시합니다.'));
+    // '실데이터 — data.go.kr 공공 API 조회 결과' 배너는 뺐다 — 출처는 리포트 맨 아래 한 줄로(srcFoot)
     // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회임을 안내
     if (m.no_corp) {
       root.appendChild(el('div', 'gennote',
@@ -5419,6 +5493,13 @@ function render(report, opts = {}) {
     '<span class="item"><b>신뢰도</b></span>' +
     ['A', 'B', 'C', 'D'].map((g) => `<span class="item"><span class="dot badge-${g}"></span>${g} · ${GRADE_LABEL[g]}</span>`).join('');
   root.appendChild(lg);
+  // 출처 — 맨 아래 한 줄로 간략히
+  if (report.meta && report.meta.live) {
+    const at = report.meta.query_at ? new Date(report.meta.query_at) : null;
+    root.appendChild(el('div', 'srcfoot', `출처: 공공데이터포털(data.go.kr) 식약처·금융위·국민연금·국세청·산업단지공단 API, 의약품안전나라, 국토부 건축물대장, 네이버·카카오 검색`
+      + (at && !isNaN(at) ? ` · 조회 ${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')} ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}` : '')
+      + ' · 값이 없는 항목은 「자료 없음」으로 표시'));
+  }
 
   // 리포트 내용을 '사전검증 리포트' 탭으로 감싸고 옆에 '근처 업체' 탭을 붙인다(nearby.js)
   if (typeof mountReportTabs === 'function') mountReportTabs(root, report, actions, areaTab);
@@ -5727,6 +5808,129 @@ function trackStickyBars() {
 }
 
 // 첫 화면(대시보드)으로 — 리포트는 지우지 않고 감춘다(최근 검색에서 다시 열 수 있다)
+// ═══ 저장 업체 ═══
+// 리포트(조회 결과 통째)나 대시보드 「제조업 등록 현황」의 업체를 저장해 두고, 상단 「저장업체」에서
+// 목록과 당시 조회 결과를 다시 본다. 리포트는 수백 KB라 localStorage(약 5MB) 대신 IndexedDB에 둔다.
+// 이 브라우저에만 저장된다 — 다른 기기·다른 사람과는 공유되지 않는다.
+const SV = { DB: 'vs_saved', ST: 'firms' };
+let _svDbP = null;
+const svKeys = new Set();                         // 버튼 상태를 바로 그리기 위한 저장 키 목록(메모리)
+const svKey = (name) => stripCorp(name).replace(/\s/g, '').toLowerCase();
+function svDb() {
+  if (!_svDbP) {
+    _svDbP = new Promise((res, rej) => {
+      if (!window.indexedDB) { rej(new Error('이 브라우저는 저장소(IndexedDB)를 쓸 수 없습니다')); return; }
+      const r = indexedDB.open(SV.DB, 1);
+      r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(SV.ST)) r.result.createObjectStore(SV.ST, { keyPath: 'key' }); };
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error || new Error('저장소를 열지 못했습니다'));
+    });
+    _svDbP.catch(() => { _svDbP = null; });
+  }
+  return _svDbP;
+}
+async function svReq(mode, fn) {
+  const db = await svDb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(SV.ST, mode);
+    const q = fn(tx.objectStore(SV.ST));
+    tx.oncomplete = () => res(q ? q.result : undefined);
+    tx.onerror = () => rej(tx.error || new Error('저장 실패'));
+    tx.onabort = () => rej(tx.error || new Error('저장 취소됨(저장 공간 부족일 수 있음)'));
+  });
+}
+const svAll = () => svReq('readonly', (st) => st.getAll()).then((a) => (a || []).sort((x, y) => String(y.savedAt).localeCompare(String(x.savedAt))));
+const svGet = (key) => svReq('readonly', (st) => st.get(key));
+async function svPut(rec) { await svReq('readwrite', (st) => st.put(rec)); svKeys.add(rec.key); svChanged(); }
+async function svDel(key) { await svReq('readwrite', (st) => st.delete(key)); svKeys.delete(key); svChanged(); }
+function svChanged() {
+  const b = $('#savedBtn'); if (b) b.innerHTML = `★<span class="sv-lbl"> 저장업체</span>${svKeys.size ? ` <b>${svKeys.size}</b>` : ''}`;
+  document.querySelectorAll('[data-sv-key]').forEach((x) => svPaintBtn(x));
+  if (typeof mkState !== 'undefined' && mkState.repaint) mkState.repaint();
+}
+function svPaintBtn(b) {
+  const on = svKeys.has(b.dataset.svKey);
+  b.classList.toggle('on', on);
+  if (b.dataset.svKind === 'report') {
+    b.textContent = on ? '★ 저장됨' : '☆ 저장';
+    b.title = on ? '누르면 지금 보고 있는 조회 결과로 저장본을 바꿉니다' : '이 조회 결과를 저장 — 상단 「저장업체」에서 다시 볼 수 있습니다';
+  }
+}
+function svToast(t) {
+  let x = document.getElementById('svToast');
+  if (!x) { x = el('div', 'sv-toast'); x.id = 'svToast'; x.setAttribute('role', 'status'); document.body.appendChild(x); }
+  x.textContent = t; x.classList.add('on');
+  clearTimeout(x._t); x._t = setTimeout(() => x.classList.remove('on'), 2600);
+}
+const svRegion = (a) => (String(a || '').match(/^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청북|충청남|충북|충남|전라북|전라남|전북|전남|경상북|경상남|경북|경남|제주)[가-힣]*\s*([가-힣]+(?:시|군|구))?/) || [''])[0];
+// 리포트 저장(같은 업체면 지금 결과로 바꿔 쓴다)
+async function svSaveReport(report) {
+  const m = report.meta || {};
+  const key = svKey(m.vendor_name);
+  const B = report.basic || [];
+  const bv = (k) => { const x = B.find((y) => y.key === k); return x && x.value ? String(x.value) : ''; };
+  const old = await svGet(key).catch(() => null);
+  const now = new Date().toISOString();
+  await svPut({ ...(old || {}), key, name: m.vendor_name, savedAt: (old && old.savedAt) || now, updatedAt: now,
+    region: svRegion(bv('공장/제조소 소재지') || bv('본점주소')), grade: m.overall_grade || null, queryAt: m.query_at || now,
+    report: JSON.parse(JSON.stringify(report)) });
+  svToast(old && old.report ? `「${m.vendor_name}」 저장본을 지금 조회 결과로 바꿨습니다` : `「${m.vendor_name}」을(를) 저장했습니다 — 상단 「저장업체」에서 볼 수 있습니다`);
+}
+// 대시보드(제조업 등록 현황) 업체 저장 — 조회 전이라 허가 정보만. 이미 저장돼 있으면 빼기.
+async function svToggleFirm(r) {
+  const key = svKey(r.n);
+  if (svKeys.has(key)) {
+    const old = await svGet(key).catch(() => null);
+    if (old && old.report && !confirm(`「${r.n}」의 저장된 조회 결과도 함께 지웁니다. 저장을 해제할까요?`)) return;
+    await svDel(key); svToast(`「${r.n}」 저장을 해제했습니다`); return;
+  }
+  const now = new Date().toISOString();
+  await svPut({ key, name: r.n, savedAt: now, updatedAt: now, region: svRegion(r.ad || r.a) || r.a || '', grade: null, report: null,
+    info: { permit: r.p || null, addr: r.ad || r.a || '', gmp: r.gmp ?? null, nps: r.nps ?? null, from: '제조업 등록 현황' } });
+  svToast(`「${r.n}」을(를) 저장했습니다 — 상단 「저장업체」에서 조회하세요`);
+}
+// 저장업체 화면 — 리포트 자리에 목록을 그린다(대시보드는 자동으로 숨는다)
+async function svOpenList() {
+  const root = $('#report');
+  root.classList.remove('hidden');
+  root.innerHTML = '<div class="empty">저장 업체를 불러오는 중…</div>';
+  let list;
+  try { list = await svAll(); } catch (e) { root.innerHTML = `<div class="empty">저장 업체를 불러오지 못했습니다 — ${esc(e.message)}</div>`; return; }
+  const fmt = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  const box = el('div', 'svl');
+  const paint = () => {
+    box.innerHTML = `<div class="svl-head"><h2>저장 업체 <small>${list.length}곳 · 이 브라우저에 저장(다른 기기와 공유되지 않음)</small></h2></div>`
+      + (list.length ? '<div class="svl-list">' + list.map((r) => {
+        const rep = r.report, info = r.info || {};
+        const meta = [r.region, rep ? `조회 ${fmt(r.queryAt)}` : (info.permit ? `제조업 허가 ${info.permit}` : ''), `저장 ${fmt(r.savedAt).slice(0, 10)}`].filter(Boolean).join(' · ');
+        const badges = (rep && r.grade ? `<span class="vd-badge-mini badge-${esc(r.grade)}">${esc(r.grade)}</span>` : '')
+          + (rep ? '<span class="mk-b ok">조회 결과 저장됨</span>' : `<span class="mk-b dim">${esc(info.from || '업체만 저장')} · 조회 전</span>`)
+          + (info.gmp === true ? '<span class="mk-b ok">CGMP 적합</span>' : '');
+        return `<div class="svl-row"><div class="svl-main"><b class="mk-nm">${esc(r.name)}</b>${badges}<small>${esc(meta)}</small></div>`
+          + '<div class="svl-acts">'
+          + (rep ? `<button type="button" class="nb-btn sm dark" data-sv-open="${esc(r.key)}">당시 결과 보기</button>` : '')
+          + `<button type="button" class="nb-btn sm${rep ? '' : ' dark'}" data-sv-look="${esc(r.name)}">${rep ? '다시 조회' : '사전검증 조회'}</button>`
+          + `<button type="button" class="nb-btn sm" data-sv-del="${esc(r.key)}" aria-label="${esc(r.name)} 저장 삭제">삭제</button></div></div>`;
+      }).join('') + '</div>'
+        : '<div class="gr-empty">저장한 업체가 없습니다. 사전검증 리포트 위쪽의 「☆ 저장」이나 대시보드 「제조업 등록 현황」의 「저장」으로 추가하세요.</div>');
+  };
+  paint();
+  box.addEventListener('click', async (e) => {
+    const o = e.target.closest('[data-sv-open]');
+    if (o) { const r = list.find((x) => x.key === o.dataset.svOpen); if (r && r.report) render(r.report, { savedAt: r.queryAt || r.updatedAt }); return; }
+    const l = e.target.closest('[data-sv-look]');
+    if (l) { const q = $('#q'); if (q) q.value = l.dataset.svLook; const bz = $('#bno'); if (bz) bz.value = ''; lookup(l.dataset.svLook, ''); return; }
+    const d = e.target.closest('[data-sv-del]');
+    if (d) {
+      const r = list.find((x) => x.key === d.dataset.svDel);
+      if (!r || !confirm(`「${r.name}」을(를) 저장 목록에서 지울까요?${r.report ? ' 저장된 조회 결과도 함께 지워집니다.' : ''}`)) return;
+      await svDel(r.key); list = list.filter((x) => x.key !== r.key); paint();
+    }
+  });
+  root.innerHTML = ''; root.appendChild(box);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function goHome() {
   const root = $('#report');
   if (root) root.classList.add('hidden');
@@ -5742,6 +5946,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (getProxy()) setTimeout(() => { trendNews().catch(() => {}); }, 2500);
   const hb = $('#homeBtn');
   if (hb) hb.addEventListener('click', goHome);
+  const sb = $('#savedBtn');
+  if (sb) sb.addEventListener('click', () => svOpenList());
+  svAll().then((l) => { l.forEach((r) => svKeys.add(r.key)); svChanged(); }).catch(() => { if (sb) sb.title = '이 브라우저에서는 저장 기능을 쓸 수 없습니다'; });
   const logo = document.querySelector('.topbar .logo');
   if (logo) { logo.style.cursor = 'pointer'; logo.title = '첫 화면 대시보드로'; logo.addEventListener('click', goHome); }
   loadStaticIndex(); // 식약처 실데이터 인덱스 미리 로드 (있으면)

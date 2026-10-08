@@ -1182,16 +1182,7 @@ function assembleLiveReport(name, corp, res) {
               ? `취득·상실 필드를 응답에서 찾지 못했습니다 (응답 내 수치 항목: ${npsData.numKeys})`
               : why('nps', '취득·상실 자료 없음')));
     })(),
-    (() => {
-      const amt = npsData ? Number(npsData.payrollEst || 0) : 0;
-      const eok = amt > 0 ? (amt / 1e8) : 0;
-      const val = amt > 0 ? (eok >= 1 ? `월 약 ${eok.toFixed(1)}억 원 이상` : `월 약 ${Math.round(amt / 1e4).toLocaleString()}만 원 이상`) : null;
-      return f('추정 인건비 규모 (연금 고지액 기준)', val, amt > 0 ? 'C' : 'D', '국민연금 사업장 API',
-        amt > 0 ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null,
-        amt > 0
-          ? '★ 당월 연금 고지금액 ÷ 보험료율 9% = 기준소득월액 합계(하한 추정). 기준소득월액에 상한·하한이 있어 고소득자는 과소 반영되므로 실제 인건비는 이보다 큽니다. 재무가 오래된 업체의 현재 규모 가늠용'
-          : why('nps', '고지금액 자료 없음'));
-    })(),
+    // 추정 인건비(연금 고지액 ÷ 9%)는 뺐다 — 기준소득월액 상·하한 때문에 신뢰도가 낮고 방문 판단에 쓰이지 않았다(사용자 요청)
     (() => {
       // 도착지를 반드시 표기한다. 어느 주소로 계산했는지 안 보이면, 주소가 틀렸을 때
       // 거리만 보고는 알아챌 방법이 없다(본점·공장·연금 사업장 주소가 서로 다른 업체가 많다).
