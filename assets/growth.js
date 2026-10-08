@@ -22,11 +22,12 @@ const growthState = { data: null, period: '1', sort: 'net', onlyCos: false, hide
 const GR_ACTIONS = 'https://github.com/duckjin87-web/vendor-scout/actions/workflows/growth.yml';
 const grWhen = (iso) => { if (!iso) return ''; const t = new Date(iso); return `${t.getMonth() + 1}월 ${t.getDate()}일 ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
 // 조회 요청 줄 — 집계는 자동으로 돌지 않고 이 버튼(또는 GitHub Actions 화면)으로만 돈다
-function grReqHtml(st) {
+// meta: 버튼 아래 줄 — 기본은 국민연금 집계 시각, 명단 변동 패널은 자기 집계 시각을 넘긴다
+function grReqHtml(st, meta) {
   const d = st.data || {}, q = st.req || {};
   const fd = d.fileDate ? d.fileDate.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') : '';
   return `<div class="gr-req"><button type="button" class="nb-btn sm${q.busy ? '' : ' dark'}" data-gr-req${q.busy ? ' disabled' : ''}>${q.busy ? '집계 중…' : '최신 자료 조회 요청'}</button>`
-    + `<small>마지막 집계 ${esc(grWhen(d.builtAt) || '—')}${fd ? ` · 국민연금 파일 ${esc(fd)}` : ''} · 다음 공개 ${esc(d.nextUpdate || '미정')}</small>`
+    + `<small>${meta != null ? esc(meta) : `마지막 집계 ${esc(grWhen(d.builtAt) || '—')}${fd ? ` · 국민연금 파일 ${esc(fd)}` : ''} · 다음 공개 ${esc(d.nextUpdate || '미정')}`}</small>`
     + (q.msg ? `<p class="gr-reqmsg${q.err ? ' err' : ''}" role="status">${esc(q.msg)}${q.link ? ` <a href="${esc(q.link)}" target="_blank" rel="noopener">GitHub에서 직접 실행 ↗</a>` : ''}</p>` : '')
     + '</div>';
 }
@@ -288,7 +289,8 @@ const grLoad = (bust) => {
 // 「최신 자료 조회 요청」 — 프록시가 GitHub Actions 집계를 돌리고, 끝나면 새 집계를 다시 읽는다.
 // 집계 작업은 포털의 최신 파일이 지난번과 같으면 내려받기·대조 없이 바로 끝난다.
 async function grRequest(paint) {
-  const set = (o) => { growthState.req = { ...(growthState.req || {}), ...o }; paint(); };
+  // 두 패널(급성장 신호·명단 변동)이 같은 요청 버튼을 쓴다 — 상태가 바뀌면 둘 다 다시 그린다
+  const set = (o) => { growthState.req = { ...(growthState.req || {}), ...o }; paint(); if (typeof mkState !== 'undefined' && mkState.repaint) mkState.repaint(); };
   if (!getProxy()) { set({ msg: '실데이터 연결(프록시)이 있어야 요청할 수 있습니다 — 우측 상단 「실데이터 연결」을 먼저 해 주세요.', err: true, link: GR_ACTIONS }); return; }
   set({ busy: true, msg: '집계 요청 중…', err: false, link: null });
   let r;
@@ -308,6 +310,7 @@ async function grRequest(paint) {
     if (!last || last.status !== 'completed') continue;
     if (last.conclusion !== 'success') { set({ busy: false, msg: `집계 작업이 실패했습니다(${last.conclusion}).`, err: true, link: last.url }); return; }
     for (let k = 0; k < 9; k++) {
+      mkLoad(Date.now()).then(() => mkState.repaint && mkState.repaint()).catch(() => {});
       try { const d = await grLoad(Date.now()); if (d.builtAt !== before) { set({ busy: false, msg: `새 자료로 바꿨습니다 — 기준월 ${grYm(d.ym)}.`, err: false, link: null }); return; } } catch { /* 반영 대기 */ }
       await new Promise((res) => setTimeout(res, 20000));
     }
@@ -316,4 +319,127 @@ async function grRequest(paint) {
   }
   set({ busy: false, msg: '아직 끝나지 않았습니다 — 잠시 뒤 새로고침해 주세요.', link: GR_ACTIONS });
 }
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountGrowth); else mountGrowth();
+
+// ═══ 화장품 제조업 명단 변동 — data/growth/makers.json(scripts/build-makers.mjs, 매주 + 조회 요청 때) ═══
+// 식약처 제조업 명단을 누적 관리해, 지난 조회 이후 새로 들어온 업체와 빠진 업체를 보여 준다.
+const mkState = { data: null, err: null, view: null, sido: null, npsOnly: false };
+const MK_VIEWS = [{ id: 'add', label: '이번 조회 추가' }, { id: 'd30', label: '최근 30일 허가', days: 30 }, { id: 'd90', label: '최근 90일', days: 90 }];
+const mkSido = (a) => grRegion(a).split(' ')[0] || '기타';
+const mkDay = (iso) => (iso ? iso.slice(5) : '—');
+function mkRows(st) {
+  const d = st.data; if (!d) return [];
+  const v = MK_VIEWS.find((x) => x.id === st.view) || MK_VIEWS[1];
+  let rows = d.recent || [];
+  if (v.id === 'add') rows = rows.filter((r) => r.add);
+  else { const lim = new Date(Date.now() - v.days * 864e5).toISOString().slice(0, 10); rows = rows.filter((r) => r.p && r.p >= lim); }
+  return rows;
+}
+function mkBars(monthly, w) {
+  const H = 150, pad = 22, n = monthly.length, bw = (w - 8) / n;
+  const max = Math.max(5, ...monthly.map((m) => m.n)) * 1.1;
+  let s = `<svg class="mk-bars" viewBox="0 0 ${w} ${H}" width="${w}" height="${H}" role="img" aria-label="월별 신규 허가 막대 그래프">`;
+  monthly.forEach((m, i) => {
+    const h = Math.max(1, (H - pad - 16) * m.n / max), bwi = Math.min(36, bw * 0.64), x = 4 + i * bw + (bw - bwi) / 2, y = H - pad - h;
+    const lbl = i === 0 || m.ym.endsWith('-01') ? `${m.ym.slice(2, 4)}.${m.ym.slice(5)}` : m.ym.slice(5);
+    s += `<rect class="${i === n - 1 ? 'cur' : ''}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bwi.toFixed(1)}" height="${h.toFixed(1)}" rx="3"><title>${esc(grYm(m.ym))}: ${m.n}곳</title></rect>`
+      + `<text x="${(x + bwi / 2).toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" class="v">${m.n}</text>`
+      + `<text x="${(x + bwi / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle" class="m">${esc(lbl)}</text>`;
+  });
+  return s + '</svg>';
+}
+function mkBadges(r) {
+  return [
+    r.add ? '<span class="mk-b new">이번 조회 추가</span>' : '',
+    r.on ? `<span class="mk-b warn" title="지난 조회 때 상호">상호 변경 · 이전 ${esc(r.on)}</span>` : '',
+    r.nps != null ? `<span class="mk-b ok" title="국민연금 월간 파일(사업자번호 앞 6자리·상호 일치)">국민연금 ${r.nps.toLocaleString()}명</span>` : '<span class="mk-b dim" title="국민연금 월간 파일에 아직 없음(직원 3인 미만이거나 반영 전)">국민연금 미가입</span>',
+    r.job ? `<span class="mk-b warn">채용공고 ${r.job}건</span>` : '',
+    r.sale ? '<span class="mk-b dim" title="같은 사업자번호로 먼저 받은 책임판매업 허가가 있음">책임판매업 기존 보유</span>' : '',
+    r.more ? '<span class="mk-b warn" title="같은 사업자번호로 먼저 받은 제조업 허가(다른 제조소)가 있음">기존 제조사 제조소 추가</span>' : '',
+  ].join('');
+}
+function mkHtml(st) {
+  const d = st.data;
+  const head = (sub) => `<div class="gr-head"><div><h2>화장품 제조업 명단 변동 <small>식약처 제조업 허가 명단 누적 관리</small></h2>${sub || ''}</div>`
+    + `${grReqHtml(growthState, `명단 마지막 갱신 ${(st.data && grWhen(st.data.builtAt)) || '—'}`)}</div>`;
+  if (st.err) return head() + `<div class="gr-empty">명단 변동 자료를 불러오지 못했습니다 — ${esc(st.err)}</div>`;
+  if (!d) return head() + '<div class="gr-empty">불러오는 중…</div>';
+  if (!st.view) st.view = d.base || !d.counts.added ? 'd30' : 'add';
+  const c = d.counts;
+  let h = head(`<p class="gr-sub">${d.prevAt ? `지난 조회 <b>${esc(d.prevAt)}</b> → 이번 조회 <b>${esc(d.at)}</b>` : `첫 조회 <b>${esc(d.at)}</b> — 기준 명단을 저장했습니다`} · 매주 월요일 아침 자동 갱신</p>`);
+  h += '<div class="gr-tiles mk-tiles">'
+    + `<div class="gr-tile mk-t"><span>누적 관리 업체</span><b>${d.total.toLocaleString()}</b><small>현재 명단 기준</small></div>`
+    + `<button type="button" class="gr-tile mk-t new" data-mk-view="add" aria-selected="${st.view === 'add'}"><span>이번 조회에 추가</span><b>${d.base ? '—' : `+${c.added}`}</b>`
+    + `<small>${d.base ? '다음 조회부터 집계' : '지난 조회 이후 명단에 새로 생김'}</small></button>`
+    + `<button type="button" class="gr-tile mk-t" data-mk-view="d30" aria-selected="${st.view === 'd30'}"><span>최근 30일 신규 허가</span><b>${c.d30}</b><small>90일 ${c.d90} · 1년 ${c.d365}</small></button>`
+    + `<div class="gr-tile mk-t gone"><span>명단에서 빠짐</span><b>${d.base ? '—' : (c.removed ? `−${c.removed}` : '0')}</b><small>${c.renamed ? `상호 변경 ${c.renamed}곳 별도` : '폐업·취소 추정'}</small></div></div>`;
+  h += `<div class="mk-sec">월별 신규 허가 <i>허가일 기준 · 최근 13개월 · 이번 달은 ${esc(d.at.slice(8))}일까지</i></div>`
+    + `<div class="mk-chart">${mkBars(d.monthly || [], Math.max(280, growthState.cw || 640))}</div>`;
+  // ── 새로 들어온 업체 ──
+  const base = mkRows(st);
+  const sidoN = {}; base.forEach((r) => { const k = mkSido(r.a); sidoN[k] = (sidoN[k] || 0) + 1; });
+  const sidos = Object.entries(sidoN).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  if (st.sido && !sidoN[st.sido]) st.sido = null;
+  let rows = base.filter((r) => (!st.sido || mkSido(r.a) === st.sido) && (!st.npsOnly || r.nps != null));
+  h += '<div class="mk-sec">새로 들어온 업체</div><div class="mk-chips">'
+    + MK_VIEWS.filter((v) => !(d.base && v.id === 'add')).map((v) => {
+      const n = v.id === 'add' ? c.added : v.id === 'd30' ? c.d30 : c.d90;
+      return `<button type="button" class="mk-chip${st.view === v.id ? ' on' : ''}" data-mk-view="${v.id}">${esc(v.label)} ${n}</button>`;
+    }).join('')
+    + '<span class="mk-sep"></span>'
+    + sidos.map(([k, n]) => `<button type="button" class="mk-chip${st.sido === k ? ' on' : ''}" data-mk-sido="${esc(k)}">${esc(k)} ${n}</button>`).join('')
+    + `<button type="button" class="mk-chip${st.npsOnly ? ' on' : ''}" data-mk-nps="1">국민연금 가입만</button></div>`;
+  if (!rows.length) {
+    h += `<div class="gr-empty">${st.view === 'add' ? '지난 조회 이후 명단에 새로 들어온 업체가 없습니다.' : '조건에 맞는 업체가 없습니다.'}</div>`;
+  } else {
+    h += '<table class="mk-tbl"><thead><tr><th>허가일</th><th>업체</th><th class="mk-addr">소재지</th><th>확인된 정보</th><th></th></tr></thead><tbody>'
+      + rows.slice(0, 80).map((r) => `<tr><td class="mk-d">${esc(mkDay(r.p))}</td>`
+        + `<td><b>${esc(r.n)}</b><small>${esc(grRegion(r.a) || r.a || '')}</small></td>`
+        + `<td class="mk-addr">${esc(r.ad || r.a || '')}</td><td class="mk-bs">${mkBadges(r)}</td>`
+        + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button></td></tr>`).join('')
+      + '</tbody></table>' + (rows.length > 80 ? `<p class="gr-foot">상위 80곳만 표시 — 전체 ${rows.length}곳</p>` : '');
+  }
+  // ── 명단에서 빠진 업체 · 상호 변경 ──
+  const gone = d.removed || [], ren = d.renames || [];
+  if (gone.length || ren.length) {
+    h += `<details class="mk-gone"><summary>명단에서 빠진 업체 ${gone.length}곳${ren.length ? ` · 상호 변경 ${ren.length}곳` : ''} — 직전 조회(${esc(d.prevAt || '')})에는 있었음</summary><table class="mk-tbl"><tbody>`
+      + gone.map((r) => `<tr><td class="mk-d">${esc(mkDay(r.p))}</td><td><b>${esc(r.n)}</b><small>${esc(grRegion(r.a))}</small></td>`
+        + `<td class="mk-bs"><span class="mk-b gone">명단 제외</span>${r.nps != null ? `<span class="mk-b dim">국민연금 ${r.nps}명(${esc(grYmS(d.npsYm))})</span>` : ''}</td>`
+        + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button></td></tr>`).join('')
+      + ren.map((r) => `<tr><td class="mk-d">—</td><td><b>${esc(r.from)} → ${esc(r.to)}</b><small>${esc(grRegion(r.a))}</small></td>`
+        + `<td class="mk-bs"><span class="mk-b warn">상호 변경</span><span class="mk-b dim">사업자번호 동일</span></td>`
+        + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.to)}">사전검증</button></td></tr>`).join('')
+      + '</tbody></table></details>';
+  }
+  h += `<p class="gr-foot">출처: ${esc(d.source)}. 「이번 조회 추가」는 직전 조회의 누적 명단에 없던 업체입니다(식약처 업체 일련번호 기준). `
+    + '사업자번호가 같은 채 상호만 바뀐 업체는 신규·빠짐으로 세지 않고 「상호 변경」으로 따로 봅니다. 명단에 폐업 표시가 없어 「빠짐」은 폐업·허가 취소를 추정한 것입니다. '
+    + `소재지는 공개 API가 시·군까지만 주어, 신규 업체는 의약품안전나라 목록의 번지 주소로 보강합니다. 국민연금 인원은 ${esc(grYm(d.npsYm) || '최근')} 월간 파일 기준이며, 허가 직후 업체는 대부분 미가입(직원 3인 미만 또는 반영 전)입니다.</p>`;
+  return h;
+}
+function mountMakers() {
+  const box = document.getElementById('makers');
+  if (!box) return;
+  const paint = () => { box.innerHTML = mkHtml(mkState); };
+  mkState.repaint = paint;
+  let lastW = 0, rt = null;
+  if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(box.clientWidth - lastW) < 24) return; lastW = box.clientWidth; clearTimeout(rt); rt = setTimeout(() => { if (mkState.data) paint(); }, 150); }).observe(box);
+  box.addEventListener('click', (e) => {
+    const v = e.target.closest('[data-mk-view]'); if (v) { mkState.view = v.dataset.mkView; paint(); return; }
+    const s = e.target.closest('[data-mk-sido]'); if (s) { mkState.sido = mkState.sido === s.dataset.mkSido ? null : s.dataset.mkSido; paint(); return; }
+    if (e.target.closest('[data-mk-nps]')) { mkState.npsOnly = !mkState.npsOnly; paint(); return; }
+    const g = e.target.closest('[data-gr-go]');
+    if (g) { const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = ''; lookup(g.dataset.grGo, ''); return; }
+    if (e.target.closest('[data-gr-req]')) { grRequest(() => { if (growthState.repaint) growthState.repaint(); }); }
+  });
+  const rep = document.getElementById('report');
+  const sync = () => { box.hidden = !!(rep && !rep.classList.contains('hidden')); };
+  if (rep) new MutationObserver(sync).observe(rep, { attributes: true, attributeFilter: ['class'] });
+  sync();
+  paint();
+  mkLoad().then(paint).catch((e) => { mkState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
+}
+const mkLoad = (bust) => fetch(`data/growth/makers.json?v=${BUILD}-${bust || new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' })
+  .then((r) => { if (r.status === 404) throw new Error('아직 첫 집계 전입니다 — 매주 월요일 아침 또는 「최신 자료 조회 요청」 때 만들어집니다'); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then((d) => { mkState.data = d; mkState.err = null; return d; });
+
+const mountDash = () => { mountGrowth(); mountMakers(); };
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountDash); else mountDash();

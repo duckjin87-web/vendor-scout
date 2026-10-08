@@ -1767,3 +1767,46 @@ button.vd-badge:focus-visible { outline: 2px solid var(--accent); outline-offset
 .rx-why { margin-left: 6px; font-size: 11px; color: var(--risk); }
 .rx-why.maybe { color: var(--gC); }
 .rx-date { margin-left: 6px; font-size: 10.5px; color: var(--faint); }
+
+/* ── 화장품 제조업 명단 변동(대시보드) ── */
+.mk-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.mk-t.new b { color: var(--accent); }
+.mk-t.gone b { color: var(--risk); }
+div.mk-t { cursor: default; }
+div.mk-t:hover { border-color: var(--border); }
+.mk-sec { margin: 16px 0 6px; font-size: 13.5px; font-weight: 800; }
+.mk-sec i { font-style: normal; font-weight: 400; font-size: 12px; color: var(--muted); margin-left: 6px; }
+.mk-chart { overflow: hidden; }
+.mk-bars { display: block; max-width: 100%; height: auto; }
+.mk-bars rect { fill: var(--accent); }
+.mk-bars rect.cur { fill: var(--accent-soft); stroke: var(--accent); stroke-dasharray: 3 2; }
+.mk-bars text { font-size: 10.5px; }
+.mk-bars text.v { fill: var(--muted); }
+.mk-bars text.m { fill: var(--faint); }
+.mk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; align-items: center; }
+.mk-chip { font: inherit; font-size: 12.5px; border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; background: var(--panel); color: var(--muted); cursor: pointer; }
+.mk-chip:hover { border-color: var(--accent); }
+.mk-chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 700; }
+.mk-sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
+.mk-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mk-tbl th { text-align: left; font-size: 12px; font-weight: 700; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.mk-tbl td { padding: 9px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; overflow-wrap: anywhere; }
+.mk-tbl td small { display: block; font-size: 11.5px; color: var(--muted); }
+.mk-tbl .mk-d { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+.mk-tbl .mk-addr { font-size: 12px; color: var(--muted); max-width: 260px; }
+.mk-bs { line-height: 1.9; }
+.mk-b { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 0 6px; border-radius: 9px; margin-right: 3px; white-space: nowrap; }
+.mk-b.new { background: var(--accent-soft); color: var(--accent); }
+.mk-b.ok { background: var(--gA-bg); color: var(--gA); }
+.mk-b.warn { background: var(--gC-bg); color: var(--gC); }
+.mk-b.gone { background: var(--risk-bg); color: var(--risk); }
+.mk-b.dim { background: var(--gD-bg); color: var(--gD); }
+.mk-gone { margin-top: 14px; border-top: 1px dashed var(--border); padding-top: 8px; font-size: 13px; }
+.mk-gone summary { cursor: pointer; color: var(--muted); font-weight: 700; }
+@media (max-width: 720px) {
+  .mk-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mk-tbl .mk-addr { display: none; }
+  .mk-tbl td, .mk-tbl th { padding: 8px 4px; }
+  .mk-tbl .mk-b { white-space: normal; }
+}
+@media (max-width: 720px) { .mk-tbl .nb-btn.sm { padding: 4px 7px; font-size: 11.5px; } .mk-tbl td:first-child { width: 42px; } }

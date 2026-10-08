@@ -43,13 +43,19 @@ jobs:
           SARAMIN_KEY: ${{ secrets.SARAMIN_KEY }}
           WORK24_KEY: ${{ secrets.WORK24_KEY }}
         run: node scripts/build-jobs.mjs
+      # 화장품 제조업 명단 누적 비교(매주 자동으로도 돈다 — makers.yml). 실패해도 다른 집계는 커밋한다.
+      - name: Makers
+        continue-on-error: true
+        env:
+          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: node scripts/build-makers.mjs
       - name: Commit
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if [ -n "$(git status --porcelain data/growth)" ]; then
             git add data/growth
-            git commit -m "growth: 국민연금·채용공고 집계 갱신 ($(date -u +%F))"
+            git commit -m "growth: 국민연금·채용공고·제조업 명단 집계 갱신 ($(date -u +%F))"
             git pull --rebase origin main
             git push origin HEAD:main
           else

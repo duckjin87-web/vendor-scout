@@ -1,0 +1,43 @@
+name: Update cosmetics maker ledger (weekly)
+
+# 화장품 제조업 명단 누적 관리 — 매주 월요일 아침(한국 시간 08:47)에 식약처 명단을 받아 지난번 누적 명단과 비교한다.
+# 결과: data/growth/makers-ledger.json(누적 명단) · data/growth/makers.json(대시보드 「명단 변동」 패널).
+# 대시보드의 「최신 자료 조회 요청」(growth.yml)도 같은 스크립트를 돌린다. 키는 Secret에만 있다.
+on:
+  schedule:
+    - cron: '47 23 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: growth
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build
+        env:
+          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: node scripts/build-makers.mjs
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data/growth)" ]; then
+            git add data/growth
+            git commit -m "makers: 화장품 제조업 명단 누적 갱신 ($(date -u +%F))"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          else
+            echo "변경 없음 — 커밋 생략"
+          fi
