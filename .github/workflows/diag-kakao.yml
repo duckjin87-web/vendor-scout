@@ -1,0 +1,69 @@
+name: Diagnose Kakao map / roadview
+
+# 배포된 사이트에서 카카오 지도·로드뷰가 실제로 뜨는지 확인하는 진단용(실제 브라우저). 아무것도 커밋하지 않는다.
+# 후보 주소마다: 프록시가 KAKAO_JS_KEY를 주는지 → 그 도메인에서 SDK가 로드되는지 → 한국콜마 기준점 근처 로드뷰 지점을 찾는지.
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: '확인할 사이트 주소(공백 구분)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          npm i -s playwright@1.56.1 >/dev/null 2>&1 && npx -y playwright@1.56.1 install --with-deps chromium >/dev/null 2>&1
+          cat > d.mjs <<'JS'
+          import { chromium } from 'playwright';
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 900));
+          const b = await chromium.launch();
+          for (const base of process.env.URLS.split(/\s+/).filter(Boolean)) {
+            const out = [];
+            try {
+              const r = await fetch(`${base}/api/proxy?service=kakaoMapKey`);
+              const t = await r.text();
+              out.push(`kakaoMapKey HTTP ${r.status} ${/"key"/.test(t) ? '키 있음' : t.slice(0, 80)}`);
+              if (r.status === 200 && /"key"/.test(t)) {
+                const page = await b.newPage();
+                const errs = [];
+                page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 120)); });
+                page.on('response', (res) => { if (/dapi\.kakao|daumcdn|kakao\.com/.test(res.url()) && res.status() >= 400) errs.push(`${res.status()} ${res.url().slice(0, 90)}`); });
+                await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                const res = await page.evaluate(async (proxy) => {
+                  localStorage.setItem('vs_proxy', proxy);
+                  const eng = await nbMapEngine();
+                  if (eng !== 'kakao') return { eng };
+                  const K = window.kakao.maps;
+                  const c = await kakaoGeocode('세종특별자치시 전의면 산단길 22-17').catch((e) => ({ err: e.message }));
+                  if (!c || c.err) return { eng, geo: c && c.err };
+                  const pano = await new Promise((ok) => { const t = setTimeout(() => ok('timeout'), 15000); new K.RoadviewClient().getNearestPanoId(new K.LatLng(c.lat, c.lng), 150, (id) => { clearTimeout(t); ok(id); }); });
+                  // 실제 로드뷰 화면 생성까지
+                  let view = 'skip';
+                  if (pano && pano !== 'timeout') {
+                    const d = document.createElement('div'); d.style.cssText = 'width:600px;height:400px'; document.body.appendChild(d);
+                    view = await new Promise((ok) => { const t = setTimeout(() => ok('init 없음(15초)'), 15000); const rv = new K.Roadview(d); K.event.addListener(rv, 'init', () => { clearTimeout(t); ok('init 성공'); }); rv.setPanoId(pano, new K.LatLng(c.lat, c.lng)); });
+                  }
+                  return { eng, lat: c.lat, lng: c.lng, pano, view };
+                }, `${base}/api/proxy`);
+                out.push(`엔진 ${res.eng}${res.geo ? ` · 주소검색 실패 ${res.geo}` : ''}${res.pano !== undefined ? ` · 로드뷰 지점 ${res.pano} · 화면 ${res.view}` : ''}`);
+                if (errs.length) out.push(`오류 ${[...new Set(errs)].slice(0, 4).join(' | ')}`);
+                await page.close();
+              }
+            } catch (e) { out.push(`실패 ${e.message}`); }
+            n(`${base} → ${out.join(' · ')}`);
+          }
+          await b.close();
+          JS
+          node d.mjs
