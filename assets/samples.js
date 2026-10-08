@@ -1016,14 +1016,30 @@ function assembleLiveReport(name, corp, res) {
   const kkTravel = R.kakao && R.kakao.ok ? R.kakao.data : null;
   const kkNavi = kkTravel && kkTravel.method === 'navi';
 
-  // 네이버 뉴스 (최근 기사) — 제목/본문에 업체명이 실제 포함된 관련 기사만 채택
+  // ── 뉴스·웹 언급 관련성 검증 ──
+  // 예전에는 제목·요약에 상호 글자가 들어 있기만 하면 채택했다. '미스킨'을 조회하면 코미스킨·
+  // 아이미스킨랩 기사, 화장품과 무관한 '미스킨' 기사가 그대로 '관련기사'로 나왔다. 이제 상호가
+  // 다른 상호의 일부가 아닌 자리에 나오고, 소재 시·군·대표자·사업자번호·홈페이지 같은 근거가
+  // 붙은 자료만 관련으로 보이고, 나머지는 제외 사유와 함께 접어 둔다(relevanceOf, app.js).
+  const relCtx = relCtxOf(name, {
+    addrs: [corp?.addr, fctAddr, npsAddr, mkAddr, ...nedSites.map((x) => x && x.addr),
+      ...((R.hiring && R.hiring.ok && R.hiring.data && R.hiring.data.workAddrs) || [])],
+    rep: corp?.rep || null, bzno: bznoVal, hosts: [fctHmpadr].filter(Boolean),
+    tels: ((R.hiring && R.hiring.ok && R.hiring.data && R.hiring.data.contacts && R.hiring.data.contacts.tels) || []).map((t) => t.v),
+  });
+  const parsePubDate = (v) => { const d = new Date(v); return isNaN(d) ? null : d.toISOString().slice(0, 10); };
+  const relText = (n) => `${n.title || ''} ${n.description || ''} ${n.originallink || ''} ${n.link || ''}`;
+  const rel_excluded = [];
+  const judge = (kind) => (n) => {
+    const r = relevanceOf(relText(n), relCtx);
+    if (r.level === 'rel') { n._rel = r.why; return true; }
+    rel_excluded.push({ kind, level: r.level, why: r.why, title: String(n.title || '').replace(/<\/?b>/g, ''),
+      link: n.originallink || n.link || '', date: n.pubDate ? parsePubDate(n.pubDate) : null });
+    return false;
+  };
   const newsRaw = R.naverNews && R.naverNews.ok ? R.naverNews.data : null;
   const newsItems = newsRaw && newsRaw.items ? newsRaw.items : [];
-  const newsKey = stripCorp(name).replace(/\s/g, '');
-  const relevantNews = newsKey.length >= 2 ? newsItems.filter((n) => {
-    const t = (String(n.title || '') + ' ' + String(n.description || '')).replace(/<\/?b>/g, '').replace(/\s/g, '');
-    return t.includes(newsKey);
-  }) : [];
+  const relevantNews = newsItems.filter(judge('뉴스'));
   const news = relevantNews.length ? relevantNews.slice(0, 5) : null;
 
   // 📰 뉴스·웹 인사이트 — 업체명 포함 기사에서 '시점 있는 신호'를 분류·타임라인화(성장/거래/리스크).
@@ -1041,10 +1057,7 @@ function assembleLiveReport(name, corp, res) {
     { tag: '재무위험', tone: 'down', re: /적자|영업\s*손실|자본\s*잠식|부도|법정\s*관리|회생\s*절차|파산|워크아웃|구조조정|감원/i },
   ];
   const parsePub = (s) => { const d = new Date(s || ''); return isNaN(d) ? null : d.toISOString().slice(0, 10); };
-  const relForInsight = newsKey.length >= 2 ? newsItems.filter((n) => {
-    const t = (String(n.title || '') + ' ' + String(n.description || '')).replace(/<\/?b>/g, '').replace(/\s/g, '');
-    return t.includes(newsKey);
-  }) : [];
+  const relForInsight = relevantNews;
   const insightItems = [];
   for (const n of relForInsight) {
     const txt = (String(n.title || '') + ' ' + String(n.description || '')).replace(/<\/?b>/g, '');
@@ -1056,7 +1069,7 @@ function assembleLiveReport(name, corp, res) {
       date: parsePub(n.pubDate), tag: pick.tag, tone: pick.tone,
       title: String(n.title || '').replace(/<\/?b>/g, ''),
       link: n.originallink || n.link || '',
-      desc: String(n.description || '').replace(/<\/?b>/g, '').slice(0, 140),
+      desc: String(n.description || '').replace(/<\/?b>/g, '').slice(0, 140), rel: n._rel || null,
     });
   }
   insightItems.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
@@ -1079,20 +1092,16 @@ function assembleLiveReport(name, corp, res) {
   // 웹 언급 추적 — 업체를 언급한 웹문서를 유형(제조원·채용·기업보고서)으로 분류(활동·거래 단서)
   const oemRaw = R.oemTrace && R.oemTrace.ok ? R.oemTrace.data : null;
   const oemItems = (oemRaw && oemRaw.items) || [];
-  const oemKey = stripCorp(name).replace(/\s/g, '');
-  const MFG = /(제조원|제조사|OEM|ODM|생산|납품)/i;
   const oemTag = (host, txt) => /saramin|jobkorea|wanted|incruit|jobplanet|catch\.co|albamon/i.test(host) ? '채용'
     : /happycampus|nice|kisline|kportal|cretop|kised|creditn|report|기업보고서|신용/i.test(host + txt) ? '기업보고서'
     : /제조원|OEM|ODM|납품/i.test(txt) ? '제조원/납품' : '언급';
-  const oem_trace = oemKey.length >= 2 ? oemItems.filter((it) => {
-    const t = (String(it.title || '') + ' ' + String(it.description || '')).replace(/<\/?b>/g, '');
-    return t.replace(/\s/g, '').includes(oemKey) && MFG.test(t);
-  }).slice(0, 6).map((it) => {
-    let host = ''; try { host = new URL(it.link).hostname; } catch { /* ignore */ }
-    const title = String(it.title || '').replace(/<\/?b>/g, '');
-    const desc = String(it.description || '').replace(/<\/?b>/g, '').slice(0, 120);
-    return { title, link: it.link || '', desc, tag: oemTag(host, title + ' ' + desc) };
-  }) : [];
+  // 제조원 표기(제조원·OEM·납품 등)를 요구하던 조건은 관련성 검증으로 대신한다 — 소재지·대표자로 확인된 언급이면 활동 단서다
+  const oem_trace = oemItems.filter(judge('웹 언급')).slice(0, 6).map((it) => {
+      let host = ''; try { host = new URL(it.link).hostname; } catch { /* ignore */ }
+      const title = String(it.title || '').replace(/<\/?b>/g, '');
+      const desc = String(it.description || '').replace(/<\/?b>/g, '').slice(0, 120);
+      return { title, link: it.link || '', desc, tag: oemTag(host, title + ' ' + desc), rel: it._rel || null };
+    });
 
   // 지자체 공장정보 페이지에서 대표자·연락처·종업원수를 발췌한다(있으면)
   const pubBizFacts = publicBizFacts(oem_trace);
@@ -1610,7 +1619,10 @@ function assembleLiveReport(name, corp, res) {
       visit_coord: (kkTravel && kkTravel.dest && isFinite(kkTravel.dest.lat) && isFinite(kkTravel.dest.lng)) ? { lat: kkTravel.dest.lat, lng: kkTravel.dest.lng } : null,
     },
     basic, capacity, finance, finance_history, finance_health, cross_diag, recalls, oem_trace, crosscheck, risk_flags, diff_from_prev: [],
-    news, insights, homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
+    news, insights,
+    // 관련성 검증에서 걸러낸 뉴스·웹 언급(사유 포함)과 판정에 쓴 근거 — 화면에서 접어 보여 준다
+    rel_check: { excluded: rel_excluded.slice(0, 40), regions: relCtx.regions, rep: !!relCtx.rep, bzno: !!relCtx.bzno },
+    homepage: R.homepage && R.homepage.ok ? R.homepage.data : null,
     // 채용공고 추적 — 수집은 조회 단계에서, 판정은 재직자수가 확정된 여기서
     hiring,
   };

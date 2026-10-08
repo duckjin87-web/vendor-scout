@@ -1752,3 +1752,18 @@ button.vd-badge:focus-visible { outline: 2px solid var(--accent); outline-offset
 .gr-posts small { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 .gr-empty code { font-size: 12px; padding: 1px 5px; border-radius: 4px; background: var(--rule); }
 @media (min-width: 721px) and (max-width: 1000px) { .gr-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* ── 뉴스·웹 언급 관련성 검증 ── */
+.rel-ev { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 9px; font-size: 10.5px; font-weight: 600;
+  color: var(--gA); background: var(--gA-bg); vertical-align: 1px; white-space: nowrap; }
+.rel-none { font-size: 12.5px; color: var(--muted); padding: 8px 0; }
+.rel-x { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 8px; font-size: 12px; }
+.rel-x summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+.rel-x ul { list-style: none; margin: 4px 0 6px; padding: 0; }
+.rel-x li { padding: 4px 0; border-bottom: 1px solid var(--border); line-height: 1.45; overflow-wrap: anywhere; }
+.rel-x li a { color: var(--muted); }
+.rx-sec { margin-top: 8px; font-size: 11.5px; color: var(--faint); }
+.rx-kind { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; font-size: 10.5px; color: var(--gD); background: var(--gD-bg); }
+.rx-why { margin-left: 6px; font-size: 11px; color: var(--risk); }
+.rx-why.maybe { color: var(--gC); }
+.rx-date { margin-left: 6px; font-size: 10.5px; color: var(--faint); }

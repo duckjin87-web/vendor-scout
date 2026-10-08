@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 169;
+const BUILD = 170;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1178,8 +1178,109 @@ function extContacts(text, html) {
   return { tel, email: mails[0] || null };
 }
 
+// ── 업체 소재 시·군 ──
+// 본점 주소 하나만 보던 탓에, 금융위에 없는 업체(개인·소규모 법인)나 본점과 공장이 다른 업체는
+// '양주시 미스킨' 같은 지역+상호 검색을 아예 하지 않았다. 공장등록·식약처·의약품안전나라·
+// 국민연금·채용공고 근무지 주소를 모두 받아 시·군(광역시는 구)을 뽑는다.
+function addrRegions(addrs) {
+  const out = [];
+  (addrs || []).forEach((a) => {
+    const s = String(a || '').replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!s) return;
+    const p = nbAddrParts(s);
+    let sgg = p.sgg || (s.match(/(?:^|\s)([가-힣]{1,5}(?:시|군))(?=\s|$)/) || [])[1] || '';
+    if (/(특별시|광역시|특별자치시|특별자치도)$/.test(sgg)) sgg = '';
+    if (!sgg && p.sido === '세종') sgg = '세종시';
+    if (sgg && !out.includes(sgg)) out.push(sgg);
+  });
+  return out;
+}
+// '양주시' → '양주'. 기사·웹문서는 '양주 소재', '양주의' 식으로 시·군을 떼고 쓰는 일이 많다.
+const regionShort = (r) => (String(r || '').length >= 3 ? String(r).replace(/(시|군)$/, '') : String(r || ''));
+
+// ── 상호가 '그 회사 이름으로' 나왔는가 ──
+// '미스킨'은 '코미스킨'·'아이미스킨랩'·'픽미스킨'에도 들어 있다. 글자가 포함됐는지만 보면 남의 회사
+// 기사가 그대로 섞인다. 앞 글자가 한글이면(코|미스킨) 다른 상호의 일부로, 뒤에 조사·회사 표지가
+// 아닌 한글이 붙으면(미스킨|랩) 역시 다른 상호로 본다.
+const NAME_TAIL_OK = /^(?:은|는|이|가|을|를|의|에|와|과|도|만|로|으로|에서|에게|측|이다|입니다|대표|회장|사장|공장|본사|화장품|코스메틱|주식회사|㈜|\(주\))/;
+function nameHits(text, nm) {
+  const key = stripCorp(nm).replace(/\s/g, '');
+  if (key.length < 2) return { exact: 0, similar: [] };
+  const T = String(text || '').replace(/<\/?b>/g, '');
+  // 상호 글자 사이 공백 허용('미 스킨'은 드물지만 '한국 콜마'는 흔하다)
+  const re = new RegExp(key.split('').map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s?'), 'g');
+  let exact = 0; const similar = new Set();
+  for (const m of T.matchAll(re)) {
+    const before = T.slice(Math.max(0, m.index - 6), m.index);
+    const after = T.slice(m.index + m[0].length, m.index + m[0].length + 6);
+    const headCorp = /(\(주\)|㈜|주식회사)\s?$/.test(before);
+    const prevHan = /[가-힣A-Za-z0-9]$/.test(before) && !headCorp;
+    const nextHan = /^[가-힣A-Za-z0-9]/.test(after) && !NAME_TAIL_OK.test(after);
+    if (prevHan || nextHan) {
+      const w = ((before.match(/[가-힣A-Za-z0-9]*$/) || [''])[0] + m[0] + (after.match(/^[가-힣A-Za-z0-9]*/) || [''])[0]).slice(0, 14);
+      similar.add(w);
+    } else exact++;
+  }
+  return { exact, similar: [...similar] };
+}
+// ── 뉴스·웹문서가 이 업체 이야기인가 ──
+// ctx: { name, regions[], rep, bzno, hosts[], tels[] }
+// 상호가 정확히 나오고(다른 상호의 일부가 아니고) 업체를 가리키는 근거(지역·대표자·사업자번호·
+// 홈페이지·전화)가 하나라도 있으면 '관련'. 상호만 있으면 화장품 문맥이 있을 때 '관련 가능',
+// 상호가 다른 회사 이름의 일부로만 나오거나 아예 없으면 '무관'으로 거른다.
+function relevanceOf(text, ctx) {
+  const T = String(text || '').replace(/<\/?b>/g, '');
+  const flat = T.replace(/\s/g, '');
+  const h = nameHits(T, ctx.name);
+  if (!h.exact) {
+    return { level: 'off', why: h.similar.length ? `다른 상호(${h.similar.slice(0, 2).join('·')})` : '업체명 없음' };
+  }
+  const ev = [];
+  const regions = ctx.regions || [];
+  const rHit = regions.find((r) => flat.includes(r) || flat.includes(regionShort(r)));
+  if (rHit) ev.push(`소재지(${regionShort(rHit)})`);
+  const rep = String(ctx.rep || '').replace(/\s/g, '');
+  if (rep.length >= 2 && flat.includes(rep)) ev.push('대표자');
+  const bz = String(ctx.bzno || '').replace(/\D/g, '');
+  if (bz.length === 10 && flat.replace(/-/g, '').includes(bz)) ev.push('사업자번호');
+  if ((ctx.hosts || []).some((x) => x && T.toLowerCase().includes(x))) ev.push('홈페이지');
+  if ((ctx.tels || []).some((x) => x && T.replace(/\D/g, '').includes(x))) ev.push('전화');
+  const cos = /화장품|코스메틱|cosmetic|OEM|ODM|제조|스킨케어|기초화장|색조|뷰티/i.test(T);
+  // 다른 상호가 같은 글에 함께 나오면(코미스킨·미스킨 나란히) 근거가 있어도 한 번 더 본다
+  const mixed = h.similar.length ? ` · 비슷한 상호 ${h.similar.slice(0, 2).join('·')} 함께 언급` : '';
+  if (ev.length) return { level: 'rel', why: ev.join('·') + mixed, ev };
+  if (cos) {
+    // 네 글자 이상 상호는 화장품 문맥만으로도 같은 회사일 공산이 크다. 짧은 상호(미스킨)는 아니다.
+    const longName = stripCorp(ctx.name).replace(/\s/g, '').length >= 4;
+    return longName ? { level: 'rel', why: `상호·화장품 문맥${mixed}`, ev: ['상호'] }
+      : { level: 'maybe', why: `상호·화장품 문맥만(지역·대표자 미확인)${mixed}` };
+  }
+  return { level: 'off', why: '화장품·업체 근거 없음(동명 다른 뜻일 수 있음)' };
+}
+// 리포트에서 관련성 판정 맥락을 만든다(뉴스·웹 언급과 홈페이지 추적이 같이 쓴다)
+function relCtxOf(name, o) {
+  const tels = (o.tels || []).map((t) => String(t || '').replace(/\D/g, '')).filter((t) => t.length >= 9);
+  const hosts = (o.hosts || []).map((x) => { try { return new URL(/^https?:/i.test(x) ? x : `https://${x}`).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } }).filter(Boolean);
+  return { name, regions: addrRegions(o.addrs), rep: o.rep || '', bzno: o.bzno || '', hosts, tels };
+}
+
+// 리포트가 아는 업체 주소 전부 — 본점·공장/제조소·연금 사업장·선정 공장·의약품안전나라 제조소·채용 근무지
+function reportAddrs(report) {
+  const b = (report && report.basic) || [];
+  const m = (report && report.meta) || {};
+  const v = (k) => { const f = b.find((x) => x.key === k); return f && f.value ? String(f.value) : ''; };
+  return [...new Set([v('본점주소'), ...v('공장/제조소 소재지').split(/\n|\s+\/\s+/), v('사업장 주소 (연금기준)'),
+    m.visit_addr, m.site && m.site.addr, ...((m.mfds_sites || []).map((x) => x && x.addr)),
+    ...(((report && report.hiring && report.hiring.workAddrs) || []))]
+    .map((a) => String(a || '').trim()).filter(Boolean))];
+}
+
 async function findHomepage(nm, corp, hpHints) {
   if (!getProxy()) return null;
+  // 본점 주소만 보던 것을 확장 — 공장·제조소·연금·채용 근무지 주소를 모두 지역 단서로 쓴다
+  const allAddrs = [corp && corp.addr, ...((corp && corp.addrs) || [])].filter(Boolean);
+  const regions = addrRegions(allAddrs);
+  const knownTels = ((corp && corp.tels) || []).map((t) => String(t || '').replace(/\D/g, '')).filter((t) => t.length >= 9);
   // 공장등록부에 홈페이지가 있으면 그게 공식 확정 — 웹검색보다 신뢰
   // 공장등록부에 적힌 주소는 유력한 후보지만 그대로 확정하면 안 된다. 신고 당시 주소라
   //   도메인이 팔려 엉뚱한 사이트가 되어 있거나, 그룹사 대표 사이트가 적혀 있기도 한다.
@@ -1193,10 +1294,15 @@ async function findHomepage(nm, corp, hpHints) {
     try { host = new URL(link).hostname.replace(/^www\./, ''); } catch { return; }
     const why = hpSkipReason(host);
     if (why) { skipped[why] = (skipped[why] || 0) + 1; return; }
-    if (seen.has(host)) return;
+    if (seen.has(host)) {
+      // 지역+상호 검색에서 다시 나온 후보는 표시만 해 둔다(줄 세울 때 앞으로)
+      if (via === 'region') { const c = cands.find((x) => x.host === host); if (c) c.regionQ = true; }
+      return;
+    }
     seen.add(host);
     // url은 후보 '시작점'일 뿐 — fetchPageSmart가 https/http·www 변형을 시도해 실제 열리는 주소를 찾는다.
-    cands.push({ url: `https://${host}`, host, origLink: link, title: String(title || '').replace(/<\/?b>/g, ''), via });
+    cands.push({ url: `https://${host}`, host, origLink: link, title: String(title || '').replace(/<\/?b>/g, ''),
+      via: via === 'region' ? 'web' : via, regionQ: via === 'region' });
   };
 
   // ⓪ 공장등록부에 적힌 주소 — 가장 유력한 출발점이라 맨 앞에 둔다(대조는 똑같이 받는다)
@@ -1208,30 +1314,38 @@ async function findHomepage(nm, corp, hpHints) {
   // ① 네이버 지역검색 — 사업자 등록정보 기반이라 link가 곧 그 업체의 홈페이지다.
   //    웹문서 검색보다 정확한데 지금까지 쓰지 않고 있었다(프록시에는 이미 열려 있었다).
   let localHit = null;
-  try {
-    const lo = await proxyOnlyGet('naverLocal', { query: nm, display: '5' });
-    const lit = (lo && lo.items) || [];
-    const nk = stripCorp(nm).replace(/\s/g, '');
-    for (const it of lit) {
-      const t = String(it.title || '').replace(/<\/?b>/g, '').replace(/\s/g, '');
-      if (nk && !t.includes(nk) && !nk.includes(t)) continue;      // 동명 타업소 배제
-      if (it.link) { addCand(it.link, it.title, 'local'); if (!localHit) localHit = { link: it.link, addr: it.roadAddress || it.address || '' }; }
-    }
-  } catch { /* 지역검색 실패는 치명적이지 않다 — 웹문서로 계속 */ }
+  const nkLocal = stripCorp(nm).replace(/\s/g, '');
+  // 상호만으로 찾으면 전국의 동명 업소가 섞여 5건 안에 안 들어온다 — 소재 시·군을 붙인 질의도 던진다
+  const localQs = [nm, ...regions.slice(0, 2).map((r) => `${regionShort(r)} ${stripCorp(nm)}`)];
+  for (const lq of localQs) {
+    try {
+      const lo = await proxyOnlyGet('naverLocal', { query: lq, display: '5' });
+      const lit = (lo && lo.items) || [];
+      for (const it of lit) {
+        const t = String(it.title || '').replace(/<\/?b>/g, '').replace(/\s/g, '');
+        if (nkLocal && !t.includes(nkLocal) && !nkLocal.includes(t)) continue;      // 동명 타업소 배제
+        // 상호가 다른 상호의 일부로만 맞는 업소(코미스킨)는 버린다
+        if (!nameHits(it.title, nm).exact) continue;
+        const la = it.roadAddress || it.address || '';
+        if (regions.length && la && !regions.some((r) => la.includes(regionShort(r)))) continue;   // 다른 지역 동명 업소
+        if (it.link) { addCand(it.link, it.title, 'local'); if (!localHit) localHit = { link: it.link, addr: la }; }
+      }
+    } catch { /* 지역검색 실패는 치명적이지 않다 — 웹문서로 계속 */ }
+  }
 
   // ② 웹문서 다각도 검색 — 한 질의로는 후보가 3~4건뿐이고 그마저 노이즈인 경우가 많다.
   //    상호 단독·업종·홈페이지·소재지 조합으로 넓힌다.
-  const region = (String((corp && corp.addr) || '').match(/([가-힣]+(?:시|군|구))/) || [])[1] || '';
   const qs = [`${nm} 화장품`, `${nm} OEM ODM`, `${nm} 홈페이지`, `"${nm}"`, `${nm} 제조`,
     // 소규모 업체는 자기 도메인 없이 빌더에 얹는 경우가 많아, 회사소개·공식 표현으로도 훑는다
     `${nm} 회사소개`, `${nm} 공식홈페이지`];
-  if (region) qs.push(`${nm} ${region}`);
-  const webs = await mapLimit(qs, 3, async (q) => {
-    try { return await proxyOnlyGet('naverWeb', { query: q, display: '20' }); } catch { return null; }
+  // 지역+상호 — '양주시 미스킨'처럼 사람이 실제로 찾는 방식. 상호가 짧고 흔할수록 이 질의가 결정적이다.
+  const regionQs = regions.slice(0, 3).flatMap((r) => [`${r} ${stripCorp(nm)}`, `${stripCorp(nm)} ${regionShort(r)} 화장품`]);
+  const webs = await mapLimit([...regionQs, ...qs], 3, async (q) => {
+    try { return { q, r: await proxyOnlyGet('naverWeb', { query: q, display: '20' }) }; } catch { return { q, r: null }; }
   });
   let webErr = null;
-  if (webs.every((w) => !w)) webErr = '네이버 웹문서 검색 실패';
-  webs.forEach((w) => ((w && w.items) || []).forEach((it) => addCand(it.link, it.title, 'web')));
+  if (webs.every((w) => !w.r)) webErr = '네이버 웹문서 검색 실패';
+  webs.forEach((w) => ((w.r && w.r.items) || []).forEach((it) => addCand(it.link, it.title, regionQs.includes(w.q) ? 'region' : 'web')));
 
   if (!cands.length) {
     const why = Object.entries(skipped).map(([k, v]) => `${k} ${v}건`).join(' · ');
@@ -1244,20 +1358,29 @@ async function findHomepage(nm, corp, hpHints) {
   // 잘려 나간다. 페이지를 열기 전에도 알 수 있는 단서로 먼저 줄을 세우고 자른다.
   const nameForRank = stripCorp(nm).replace(/\s/g, '');
   const VIA_RANK = { factory: 0, hire: 1, local: 2, web: 3 };   // 출처 자체가 근거인 것부터
+  // 지역+상호 질의에서 나온 후보는 웹문서라도 공식 등록 다음 순서로 — '양주시 미스킨'에서 나온
+  //   miskinvenus.com이 '미스킨 화장품'류 질의의 다른 미스킨들에 밀려 12개 밖으로 잘리던 문제
   const preScore = (c) => (domainAffinity(nm, c.host) ? 2 : 0)
-    + (nameForRank && String(c.title || '').replace(/\s/g, '').includes(nameForRank) ? 1 : 0);
+    + (nameForRank && String(c.title || '').replace(/\s/g, '').includes(nameForRank) ? 1 : 0)
+    + (c.regionQ ? 2 : 0);
   cands.sort((a, b) => (VIA_RANK[a.via] ?? 9) - (VIA_RANK[b.via] ?? 9) || preScore(b) - preScore(a));
-  cands.splice(12);                          // 대조 비용 상한 — 노이즈를 걸러낸 뒤라 이 정도면 충분
+  // 대조 비용 상한 — 다만 도메인이 상호와 닮았거나 지역+상호 질의에서 나온 후보는 상한 밖이어도 연다
+  const head = cands.slice(0, 12);
+  const extra = cands.slice(12).filter((c) => c.regionQ || domainAffinity(nm, c.host)).slice(0, 6);
+  cands.splice(0, cands.length, ...head, ...extra);
 
   const nameCore = stripCorp(nm).replace(/\s/g, '');
   const rep = corp && corp.rep ? String(corp.rep).replace(/\s/g, '') : '';
   const bz = corp && corp.bzno ? String(corp.bzno).replace(/\D/g, '') : '';
   const bzFmt = bz.length === 10 ? `${bz.slice(0, 3)}-${bz.slice(3, 5)}-${bz.slice(5)}` : '';
-  const addrCores = hpAddrCores(corp && corp.addr);
+  // 주소 대조도 본점 주소 하나가 아니라 공장·제조소·연금 주소 전부로(시·도 이름처럼 흔한 토막은 뺀다)
+  const addrCores = [...new Set(allAddrs.flatMap((a) => hpAddrCores(a)))]
+    .filter((a) => !/(특별시|광역시|특별자치시|특별자치도|도)$/.test(a) || /(로|길)$/.test(a));
 
   // 근거별 가중치 — 사업자번호가 가장 확실하고, 도메인·제목은 페이지 본문을 못 읽어도 얻을 수 있는 단서.
   // 지역등록: 네이버 지역검색은 사업자 등록정보 기반이라 사업자번호에 준하는 근거로 본다.
-  const W = { 사업자번호: 4, 지역등록: 4, 공장등록부: 3, 채용사이트: 3, 상호: 3, 대표자: 3, 주소: 2, 도메인: 2, 제목: 2, 업종: 1 };
+  // 지역: 본문에 소재 시·군이 나옴(주소 번지까지는 못 맞춰도 같은 고장의 같은 상호)
+  const W = { 사업자번호: 4, 지역등록: 4, 대표번호: 4, 공장등록부: 3, 채용사이트: 3, 상호: 3, 대표자: 3, 주소: 2, 도메인: 2, 제목: 2, 지역: 1, 업종: 1 };
   const scored = await Promise.all(cands.map(async (c) => {
     // https/http · www 변형을 시도(국내 중소사 홈페이지는 http·www 전용이 흔함)
     let got = await fetchPageSmart(c.url);
@@ -1269,15 +1392,19 @@ async function findHomepage(nm, corp, hpHints) {
     const rawHtml = String(got.html || '');
     const url = got.url || c.url;                 // 실제 열린 주소로 갱신
     // ★ 본문만 보지 않는다 — meta·임베드 JSON·이미지 alt까지 훑어야 SPA·이미지형 사이트에서도 잡힌다
-    const text = (rawHtml ? harvestFromHtml(rawHtml, url).text : '').replace(/\s/g, '');
+    const rawText = rawHtml ? harvestFromHtml(rawHtml, url).text : '';
+    const text = rawText.replace(/\s/g, '');
     const title = String(c.title || '').replace(/\s/g, '');
     const m = [];
-    if (nameCore && text.includes(nameCore)) m.push('상호');
+    // 상호는 '다른 상호의 일부'가 아닌 자리에 나와야 한다(코미스킨 사이트에서 '미스킨' 글자를 근거로 삼지 않게)
+    if (nameCore && text.includes(nameCore) && nameHits(rawText, nm).exact) m.push('상호');
     if (rep && text.includes(rep)) m.push('대표자');
     if (bz && (text.includes(bz) || (bzFmt && text.includes(bzFmt)))) m.push('사업자번호');
     if (addrCores.length && addrCores.some((a) => text.includes(a))) m.push('주소');
+    else if (regions.length && regions.some((r) => text.includes(r))) m.push('지역');
+    if (knownTels.length && knownTels.some((t) => text.replace(/\D/g, '').includes(t))) m.push('대표번호');
     // 페이지를 못 읽어도 판단할 수 있는 단서 두 가지
-    if (nameCore && title.includes(nameCore)) m.push('제목');
+    if (nameCore && title.includes(nameCore) && nameHits(c.title, nm).exact) m.push('제목');
     if (domainAffinity(nm, c.host)) m.push('도메인');
     if (c.via === 'local') m.push('지역등록');     // 네이버 지역검색이 이 업체 홈페이지로 등록한 주소
     if (c.via === 'factory') m.push('공장등록부');  // 공장등록 신고서에 적힌 주소
@@ -1287,7 +1414,7 @@ async function findHomepage(nm, corp, hpHints) {
     const score = m.reduce((s, k) => s + (W[k] || 1), 0);
     // 본문을 실제로 읽어 확인한 근거와, 페이지를 안 열고도 알 수 있는 근거(제목·도메인·등록)는
     // 무게가 다르다. 둘을 갈라 둬야 '본문에 상호가 없는데 확정된' 상황을 잡아낼 수 있다.
-    const BODY = new Set(['상호', '대표자', '사업자번호', '주소']);
+    const BODY = new Set(['상호', '대표자', '사업자번호', '주소', '대표번호']);
     const bodyHits = m.filter((k) => BODY.has(k));
     return { ...c, url, matches: m, score, bodyHits, chars: text.length, html: rawHtml };
   }));
@@ -3489,14 +3616,21 @@ function renderCheckWeb(report) {
   const assess = ins && ins.assessment;
   const oem = report.oem_trace || [];
   const news = report.news || [];
-  if (!timeline.length && !oem.length && !news.length) return null;
+  const rc = report.rel_check || null;
+  const excl = (rc && rc.excluded) || [];
+  if (!timeline.length && !oem.length && !news.length && !excl.length) return null;
+  // 관련 판정 근거 배지 — 왜 이 업체 자료로 봤는지
+  const relB = (w) => (w ? `<span class="rel-ev" title="관련 판정 근거">✓ ${esc(w)}</span>` : '');
 
   const box = el('div', 'chkbox chk-web');
   const downs = assess ? assess.downs : 0;
   let html = `<h3>최근 활동 · 웹 자료 <b>· 확인사항의 근거</b>` +
     `<span class="chk-sum ${downs ? 'on' : ''}">${downs ? `주의 신호 ${downs}건` : (timeline.length ? `신호 ${timeline.length}건` : `언급 ${oem.length + news.length}건`)}</span>` +
     `<button type="button" class="chk-add" data-chkadd="1">➕ 체크리스트에 추가</button></h3>` +
-    `<div class="chk-note">네이버 뉴스·웹문서에서 업체명이 실제 포함된 자료만 취합했습니다. 사실관계는 원문 확인 권장.</div>`;
+    `<div class="chk-note">네이버 뉴스·웹문서 중 <b>이 업체 자료로 확인된 것만</b> 보입니다 — 상호가 다른 상호의 일부가 아닌 자리에 나오고, `
+    + `소재지${rc && rc.regions && rc.regions.length ? `(${esc(rc.regions.map(regionShort).join('·'))})` : ''}·대표자·사업자번호·홈페이지 중 하나가 함께 나와야 합니다`
+    + `(네 글자 이상 상호는 화장품 문맥도 인정). 사실관계는 원문 확인 권장.</div>`;
+  if (!timeline.length && !oem.length && !news.length) html += `<div class="rel-none">관련 자료로 확인된 뉴스·웹문서가 없습니다 — 검색된 ${excl.length}건은 아래와 같이 다른 업체나 무관한 자료로 판정했습니다.</div>`;
 
   // 종합 판단(재량)
   if (assess) html += `<div class="chk-take ib-${esc(assess.level)}"><b>종합 판단</b> ${esc(assess.note)}</div>`;
@@ -3521,7 +3655,7 @@ function renderCheckWeb(report) {
       html += `<li class="ib-${esc(t.tone)}">` +
         `<span class="ib-date">${esc(g.date)}</span>` +
         `<span class="ib-tag ib-tag-${esc(t.tone)}">${esc(t.tag)}</span>` +
-        `<div class="ib-body"><a href="${esc(t.link || '#')}" target="_blank" rel="noopener">${esc(t.title)}</a>` +
+        `<div class="ib-body"><a href="${esc(t.link || '#')}" target="_blank" rel="noopener">${esc(t.title)}</a>${relB(t.rel)}` +
         (t.desc ? `<div class="ib-desc">${esc(t.desc)}</div>` : '');
       if (rest.length) {
         html += `<details class="ib-more"><summary>외 ${rest.length}건`
@@ -3541,7 +3675,7 @@ function renderCheckWeb(report) {
     oem.forEach((o) => {
       const tagCls = o.tag === '채용' ? 'ot-hire' : o.tag === '기업보고서' ? 'ot-report' : o.tag === '제조원/납품' ? 'ot-oem' : 'ot-etc';
       const t = o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.title || o.link)}</a>` : esc(o.title || '');
-      html += `<li><div class="ot-t"><span class="ot-tag ${tagCls}">${esc(o.tag || '언급')}</span>${t}</div>` +
+      html += `<li><div class="ot-t"><span class="ot-tag ${tagCls}">${esc(o.tag || '언급')}</span>${t}${relB(o.rel)}</div>` +
         (o.desc ? `<div class="ot-d">${esc(o.desc)}</div>` : '') + `</li>`;
     });
     html += '</ul>';
@@ -3564,9 +3698,22 @@ function renderCheckWeb(report) {
       const date = n.pubDate ? new Date(n.pubDate).toLocaleDateString('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
       html += `<li><a href="${esc(n.link || '#')}" target="_blank" rel="noopener" class="ntitle">${esc(title)}</a>` +
         `<div class="ndesc">${esc(desc.slice(0, 120))}${desc.length > 120 ? '…' : ''}</div>` +
-        `<div class="nmeta">${esc(date)}</div></li>`;
+        `<div class="nmeta">${esc(date)}${relB(n._rel)}</div></li>`;
     });
     html += '</ul>';
+  }
+  // ── 관련성 검증에서 제외한 자료 ── 숨기지 않고 사유와 함께 접어 둔다(판정이 틀렸으면 사람이 바로잡을 수 있게)
+  if (excl.length) {
+    const maybe = excl.filter((x) => x.level === 'maybe');
+    const off = excl.filter((x) => x.level !== 'maybe');
+    const row = (x) => `<li><span class="rx-kind">${esc(x.kind)}</span>`
+      + (x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.title || x.link)}</a>` : esc(x.title || ''))
+      + `<span class="rx-why ${x.level === 'maybe' ? 'maybe' : ''}">${esc(x.why)}</span>${x.date ? `<span class="rx-date">${esc(x.date)}</span>` : ''}</li>`;
+    html += `<details class="rel-x"><summary>관련성 검증에서 제외 ${excl.length}건`
+      + (maybe.length ? ` · 확인 필요 ${maybe.length}` : '') + (off.length ? ` · 다른 업체·무관 ${off.length}` : '') + `</summary>`
+      + (maybe.length ? `<div class="rx-sec">확인 필요 — 상호와 화장품 문맥은 맞지만 이 업체임을 가리키는 근거(소재지·대표자 등)가 없음</div><ul>${maybe.map(row).join('')}</ul>` : '')
+      + (off.length ? `<div class="rx-sec">다른 업체·무관</div><ul>${off.map(row).join('')}</ul>` : '')
+      + `</details>`;
   }
   box.innerHTML = html;
   return box;
@@ -5228,7 +5375,8 @@ function render(report, opts = {}) {
       // 늦은 자료로 리포트를 다시 그려도 홈페이지 검색은 한 번만 — 진행 중인 검색을 이어받는다
       if (!report._hpP) {
         Object.defineProperty(report, '_hpP', { configurable: true, value: findHomepage(report.meta.vendor_name,
-          { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호'), factoryHomepage: report.meta.factory_homepage },
+          { rep: getV('대표자'), addr: getV('본점주소'), bzno: getV('사업자등록번호'), factoryHomepage: report.meta.factory_homepage,
+            addrs: reportAddrs(report), tels: ((report.hiring && report.hiring.contacts && report.hiring.contacts.tels) || []).map((t) => t.v) },
           hints) });
       }
       report._hpP
