@@ -105,7 +105,17 @@ function grSpark(vals, cmp) {
     + (vals[L] != null ? `<circle cx="${xs(L).toFixed(1)}" cy="${ys(vals[L]).toFixed(1)}" r="2.6"/>` : '') + '</svg>';
 }
 
+// ── 급성장 신호 표의 「저장」 ── 줄마다 저장에 쓸 값을 등록해 두고 버튼은 번호만 들고 있는다
+const grSv = new Map();
+function grSaveBtn(r) {
+  const id = `g${grSv.size}`;
+  grSv.set(id, r);
+  const on = svKeys.has(svKey(r.n));
+  return `<button type="button" class="nb-btn sm mk-sv${on ? ' on' : ''}" data-gr-save="${id}" title="${on ? '저장 해제' : '저장 — 상단 「저장업체」에서 나중에 조회'}">${on ? '★ 저장됨' : '☆ 저장'}</button>`;
+}
+
 function grHtml(st) {
+  grSv.clear();
   const d = st.data;
   if (st.err) return `<div class="gr-head"><h2>급성장 신호</h2></div><div class="gr-empty">급성장 집계를 불러오지 못했습니다 — ${esc(st.err)}</div>`;
   if (!d) return '<div class="gr-head"><h2>급성장 신호</h2></div><div class="gr-empty">불러오는 중…</div>';
@@ -154,7 +164,8 @@ function grHtml(st) {
     h += `<tr class="gr-row${open ? ' open' : ''}" data-gr-row="${esc(key)}" tabindex="0" aria-expanded="${open}"><td class="n">${i + 1}</td><td><b>${esc(r.nm)}</b>${badges ? `<div class="gr-bs">${badges}</div>` : ''}</td>`
       + `<td>${esc(grRegion(r.addr))}</td><td>${grSpark(r.s, B)}</td><td class="n">${r.base.toLocaleString()} → <b>${r.cur.toLocaleString()}</b></td>`
       + `<td class="n up">+${r.net.toLocaleString()}<small>${grPct(r.rate)}</small></td><td class="n">${pay}</td>`
-      + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.mfdsName || r.nm)}">사전검증</button></td></tr>`;
+      + `<td class="mk-acts"><button type="button" class="nb-btn sm" data-gr-go="${esc(r.mfdsName || r.nm)}">사전검증</button>`
+      + `${grSaveBtn({ n: r.mfdsName || r.nm, a: r.addr, nps: r.cur, note: `국민연금 ${r.base}→${r.cur}명(+${r.net}) · ${per.label}`, from: '급성장 신호 · 국민연금' })}</td></tr>`;
     if (open) {
       const mons = r.s.map((v, k) => (v == null ? null : { m: d.months[k], v }));
       const firstHalf = mons.filter(Boolean);
@@ -208,7 +219,8 @@ function grJobsHtml(st) {
     const posts = (r.posts || []).slice(0, 3).map((p) => `<a href="${esc(p.u || '#')}" target="_blank" rel="noopener">${esc(p.t)}</a><small>${esc([p.d, p.s].filter(Boolean).join(' · '))}</small>`).join('');
     h += `<tr><td class="n">${i + 1}</td><td><b>${esc(r.nm)}</b><div class="gr-bs">${Object.entries(r.src || {}).map(([k, v]) => `<span class="gr-b">${esc(k)} ${v}</span>`).join('')}</div></td>`
       + `<td class="n up">${r.cur}건<small>+${r.cur - (r.prev || 0)}</small></td><td class="n">${r.prev || 0}건</td><td class="n">${r.prod}건</td>`
-      + `<td class="gr-posts">${posts}</td><td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.nm)}">사전검증</button></td></tr>`;
+      + `<td class="gr-posts">${posts}</td><td class="mk-acts"><button type="button" class="nb-btn sm" data-gr-go="${esc(r.nm)}">사전검증</button>`
+      + `${grSaveBtn({ n: r.nm, note: `채용공고 최근 30일 ${r.cur}건(직전 ${r.prev || 0}건)`, from: '급성장 신호 · 채용공고' })}</td></tr>`;
   });
   h += '</tbody></table></div>';
   h += `<p class="gr-foot">공고 수는 같은 공고를 한 번만 셉니다(검색어가 달라 겹친 것 제외). 직전 30일은 사람인 게시일 범위로 세고, 고용24는 최근 1개월만 주므로 지난 집계 때 값과 비교합니다. ${esc(j.note || '')} 공고 급증은 증원·신규 라인·이직 증가 어느 쪽일 수도 있어 방문 때 확인할 질문거리입니다.</p>`;
@@ -315,7 +327,8 @@ function nhHtml(st) {
     }
     h += `<tr><td class="mk-d">${esc(mkDay(r.p))}</td><td><b class="mk-nm">${esc(r.n)}</b><small>${esc(grRegion(r.a) || '')}</small></td>`
       + `<td class="mk-bs">${mkBadges({ ...r, add: false, job: undefined })}</td><td class="nh-jobs">${jobs}</td>`
-      + `<td><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button></td></tr>`;
+      + `<td class="mk-acts"><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button>`
+      + `${grSaveBtn({ ...r, note: res && res.n ? `채용공고 ${res.n}건` : null, from: '급성장 신호 · 신규 허가 업체' })}</td></tr>`;
   });
   h += '</tbody></table>';
   h += '<p class="gr-foot">대상: 식약처 화장품 제조업 허가일이 최근 1·2·3개월(30일 단위) 안인 업체(매주 갱신되는 제조업 명단 기준). '
@@ -366,6 +379,8 @@ function mountGrowth() {
   box.addEventListener('click', (e) => {
     const p = e.target.closest('[data-gr-period]'); if (p) { growthState.period = p.dataset.grPeriod; growthState.open = null; paint(); return; }
     const s = e.target.closest('[data-gr-sort]'); if (s) { growthState.sort = s.dataset.grSort; paint(); return; }
+    const sv = e.target.closest('[data-gr-save]');
+    if (sv) { const r = grSv.get(sv.dataset.grSave); if (r) svToggleFirm(r, r.from).catch((er) => svToast(`저장하지 못했습니다 — ${er.message}`)); return; }
     const nm = e.target.closest('[data-nh-months]'); if (nm) { nhState.months = Number(nm.dataset.nhMonths); paint(); return; }
     if (e.target.closest('[data-nh-refresh]')) { nhRun(true); paint(); return; }
     const g = e.target.closest('[data-gr-go]');

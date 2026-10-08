@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 174;
+const BUILD = 175;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -5847,6 +5847,7 @@ function svChanged() {
   const b = $('#savedBtn'); if (b) b.innerHTML = `★<span class="sv-lbl"> 저장업체</span>${svKeys.size ? ` <b>${svKeys.size}</b>` : ''}`;
   document.querySelectorAll('[data-sv-key]').forEach((x) => svPaintBtn(x));
   if (typeof mkState !== 'undefined' && mkState.repaint) mkState.repaint();
+  if (typeof growthState !== 'undefined' && growthState.repaint) growthState.repaint();
 }
 function svPaintBtn(b) {
   const on = svKeys.has(b.dataset.svKey);
@@ -5877,7 +5878,7 @@ async function svSaveReport(report) {
   svToast(old && old.report ? `「${m.vendor_name}」 저장본을 지금 조회 결과로 바꿨습니다` : `「${m.vendor_name}」을(를) 저장했습니다 — 상단 「저장업체」에서 볼 수 있습니다`);
 }
 // 대시보드(제조업 등록 현황) 업체 저장 — 조회 전이라 허가 정보만. 이미 저장돼 있으면 빼기.
-async function svToggleFirm(r) {
+async function svToggleFirm(r, from = '제조업 등록 현황') {
   const key = svKey(r.n);
   if (svKeys.has(key)) {
     const old = await svGet(key).catch(() => null);
@@ -5886,7 +5887,7 @@ async function svToggleFirm(r) {
   }
   const now = new Date().toISOString();
   await svPut({ key, name: r.n, savedAt: now, updatedAt: now, region: svRegion(r.ad || r.a) || r.a || '', grade: null, report: null,
-    info: { permit: r.p || null, addr: r.ad || r.a || '', gmp: r.gmp ?? null, nps: r.nps ?? null, from: '제조업 등록 현황' } });
+    info: { permit: r.p || null, addr: r.ad || r.a || '', gmp: r.gmp ?? null, nps: r.nps ?? null, from, note: r.note || null } });
   svToast(`「${r.n}」을(를) 저장했습니다 — 상단 「저장업체」에서 조회하세요`);
 }
 // 저장업체 화면 — 리포트 자리에 목록을 그린다(대시보드는 자동으로 숨는다)
@@ -5902,7 +5903,7 @@ async function svOpenList() {
     box.innerHTML = `<div class="svl-head"><h2>저장 업체 <small>${list.length}곳 · 이 브라우저에 저장(다른 기기와 공유되지 않음)</small></h2></div>`
       + (list.length ? '<div class="svl-list">' + list.map((r) => {
         const rep = r.report, info = r.info || {};
-        const meta = [r.region, rep ? `조회 ${fmt(r.queryAt)}` : (info.permit ? `제조업 허가 ${info.permit}` : ''), `저장 ${fmt(r.savedAt).slice(0, 10)}`].filter(Boolean).join(' · ');
+        const meta = [r.region, rep ? `조회 ${fmt(r.queryAt)}` : (info.permit ? `제조업 허가 ${info.permit}` : ''), !rep && info.note ? info.note : '', `저장 ${fmt(r.savedAt).slice(0, 10)}`].filter(Boolean).join(' · ');
         const badges = (rep && r.grade ? `<span class="vd-badge-mini badge-${esc(r.grade)}">${esc(r.grade)}</span>` : '')
           + (rep ? '<span class="mk-b ok">조회 결과 저장됨</span>' : `<span class="mk-b dim">${esc(info.from || '업체만 저장')} · 조회 전</span>`)
           + (info.gmp === true ? '<span class="mk-b ok">CGMP 적합</span>' : '');
