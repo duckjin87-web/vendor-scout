@@ -1938,3 +1938,6 @@ div.mk-t:hover { border-color: var(--border); }
 @media print { .sv-btn, .sv-banner, .sv-toast { display: none !important; } }
 .vd-side { order: 3; }
 @media (max-width: 520px) { #savedBtn .sv-lbl { display: none; } }
+/* 로드뷰 창 1:1 — 칸 너비만큼 키우되 한 화면에 다 보이도록 화면 높이의 85%를 넘지 않게 */
+.rv-stage { height: auto; aspect-ratio: 1 / 1; width: min(100%, 85vh); margin: 0 auto; }
+@media (max-width: 720px) { .rv-stage { height: auto; width: 100%; } }
