@@ -1,0 +1,64 @@
+name: Diagnose a company homepage
+
+# 홈페이지 추적이 왜 특정 짓지 못했는지 — 사이트가 실제로 무엇을 내려주는지(제목·본문 길이·상호·주소·전화,
+# 사이트 빌더) 확인한다. 식약처 공개 API·의약품안전나라에서 그 업체 주소도 함께 본다. 커밋 없음.
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: '업체명'
+        required: true
+        type: string
+      urls:
+        description: '확인할 주소(쉼표로 구분)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          NAME: ${{ inputs.name }}
+          URLS: ${{ inputs.urls }}
+        run: |
+          cat > s.mjs <<'JS'
+          const note = (t) => console.log(`::notice::${String(t).replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 3800)}`);
+          const strip = (h) => h.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+          const name = process.env.NAME;
+          for (const u of process.env.URLS.split(',').map((x) => x.trim()).filter(Boolean)) {
+            try {
+              const r = await fetch(u, { redirect: 'follow', headers: { 'User-Agent': 'Mozilla/5.0 (vendor-scout)' } });
+              const h = await r.text();
+              const t = strip(h);
+              const title = (h.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '';
+              const metas = [...h.matchAll(/<meta[^>]+(?:name|property)=["'](description|og:title|og:description|keywords|og:site_name)["'][^>]*content=["']([^"']*)["']/gi)].map((m) => `${m[1]}=${m[2]}`).join(' | ');
+              const builder = /imweb|IMWEB/.test(h) ? 'imweb' : /cafe24/.test(h) ? 'cafe24' : /wix/.test(h) ? 'wix' : /gnuboard|g5_/.test(h) ? 'gnuboard' : /wordpress|wp-content/.test(h) ? 'wordpress' : '?';
+              const at = t.indexOf(name);
+              note(`${u} → ${r.status} ${r.url} · ${h.length}자/본문 ${t.length}자 · 빌더 ${builder} · 제목 ${title.trim()} · 메타 ${metas.slice(0, 500)} · 상호 '${name}' ${at >= 0 ? `있음: …${t.slice(Math.max(0, at - 80), at + 160)}…` : '없음'}`);
+              const addr = (t.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^\n]{0,60}?(?:로|길)\s?\d+[^\s]*)/) || [])[1];
+              const tel = (t.match(/(0\d{1,2}[-.\s)]\d{3,4}[-.\s]\d{4})/) || [])[1];
+              const bz = (t.match(/(\d{3}-\d{2}-\d{5})/) || [])[1];
+              note(`${u} 본문 단서: 주소 ${addr || '없음'} · 전화 ${tel || '없음'} · 사업자번호 ${bz || '없음'} · 영문상호 ${(t.match(/mi\s?skin[a-z ]{0,20}/i) || [''])[0]} · 본문 앞 ${t.slice(0, 600)}`);
+            } catch (e) { note(`${u} 실패 ${e.message}`); }
+          }
+          // 식약처 공개 API(entp_name)와 의약품안전나라 — 이 업체의 소재지
+          try {
+            const q = new URLSearchParams({ serviceKey: process.env.KEY, type: 'json', pageNo: '1', numOfRows: '20', entp_name: name });
+            const j = await (await fetch(`https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01?${q}`)).json();
+            const b = j.body || j.response.body; let it = b.items; if (it && it.item) it = it.item; it = Array.isArray(it) ? it : (it ? [it] : []);
+            note(`식약처 API '${name}': ${it.map((x) => JSON.stringify(x.item || x)).join(' | ').slice(0, 1500)}`);
+          } catch (e) { note(`식약처 API 실패 ${e.message}`); }
+          try {
+            const h = await (await fetch(`https://nedrug.mfds.go.kr/pbp/CCBBA01/getList?searchYn=true&page=1&limit=20&cobCode=V&entpName=${encodeURIComponent(name)}`)).text();
+            const rows = [...h.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => strip(m[1])).filter((x) => x.includes(name));
+            note(`의약품안전나라 '${name}' 화장품제조: ${rows.join(' || ').slice(0, 1500) || '없음'}`);
+          } catch (e) { note(`의약품안전나라 실패 ${e.message}`); }
+          JS
+          node s.mjs
