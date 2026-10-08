@@ -33,10 +33,19 @@ function grReqHtml(st, meta) {
 }
 
 const grPer = (id) => GR.PERIODS.find((p) => p.id === id) || GR.PERIODS[0];
+// 기본 조건: 식약처 화장품 제조업 허가 업체만(사업자번호 앞 6자리·상호 일치). 국민연금 업종 코드만
+// 「화장품 제조업」이고 허가가 확인되지 않는 사업장(집계 파일의 약 4분의 1)은 보이지 않는다.
+const grLicensed = (d) => (d && d.rows ? d.rows.filter((r) => r.mfds) : []);
+// 업종 전체 추이도 허가 업체만으로 — 13개월이 모두 잡힌 사업장의 합
+function grIndustry(d) {
+  const rows = grLicensed(d).filter((r) => r.s.every((v) => v != null));
+  if (!rows.length) return null;
+  return { firms: rows.length, total: d.months.map((_, k) => rows.reduce((t, r) => t + r.s[k], 0)) };
+}
 function grRows(st, per = grPer(st.period)) {
   const d = st.data; if (!d) return [];
   const L = d.months.length - 1, B = L - per.back;
-  return d.rows
+  return grLicensed(d)
     .filter((r) => !(st.hideTemp && r.temp))
     .filter((r) => !st.onlyCos || r.cos)
     .map((r) => {
@@ -124,7 +133,7 @@ function grHtml(st) {
   const L = d.months.length - 1, B = L - per.back;
   const cmpYm = d.months[B];
   let h = `<div class="gr-head"><div><h2>급성장 신호 <small>화장품 제조업 · 국민연금 가입자 기준</small></h2>`
-    + `<p class="gr-sub">기준월 <b>${esc(grYm(d.ym))}</b> (국민연금 최신 공개분) · 대상 ${d.counts.rows.toLocaleString()}개 사업장</p></div>${grReqHtml(st)}</div>`;
+    + `<p class="gr-sub">기준월 <b>${esc(grYm(d.ym))}</b> (국민연금 최신 공개분) · 대상 식약처 화장품 제조업 허가 업체 ${grLicensed(d).length.toLocaleString()}개 사업장</p></div>${grReqHtml(st)}</div>`;
   // 기간 고르기 = 기간별 급증 사업장 수 타일
   h += '<div class="gr-tiles" role="tablist" aria-label="비교 기간">' + GR.PERIODS.map((p) => {
     const n = grRows(st, p).length;
@@ -135,11 +144,12 @@ function grHtml(st) {
   if (st.period === 'jobs') return h + grJobsHtml(st);
   if (st.period === 'newhire') return h + nhHtml(st);
   // 업종 전체 추이 — 13개월이 모두 잡힌 사업장만 합한 가입자수
-  if (d.industry && d.industry.total) {
-    const T = d.industry.total, net = T[L] - T[B];
-    h += `<div class="gr-ind"><div class="gr-ind-h"><b>업종 전체 가입자 추이</b> <small>13개월이 모두 잡힌 ${d.industry.firms.toLocaleString()}개 사업장 합계 · `
+  const IND = grIndustry(d);
+  if (IND) {
+    const T = IND.total, net = T[L] - T[B];
+    h += `<div class="gr-ind"><div class="gr-ind-h"><b>제조업 허가 업체 전체 가입자 추이</b> <small>13개월이 모두 잡힌 ${IND.firms.toLocaleString()}개 사업장 합계 · `
       + `${esc(grYm(cmpYm))} 대비 ${net >= 0 ? '+' : ''}${net.toLocaleString()}명 (${grPct(T[B] ? net / T[B] : null)})</small></div>`
-      + grLine(T, d.months, { cmp: B, title: '업종 전체 가입자 추이' }) + '</div>';
+      + grLine(T, d.months, { cmp: B, title: '제조업 허가 업체 전체 가입자 추이' }) + '</div>';
   }
   const rows = grRows(st);
   h += `<div class="gr-tools"><span class="gr-crit">급증 기준(${esc(per.label)}): ${esc(grYm(cmpYm))}보다 ${GR.MIN_NET}명 이상 늘고 증가율 ${Math.round(per.rate * 100)}% 이상 — 또는 ${GR.BIG_NET}명 이상 증가</span>`
@@ -154,7 +164,6 @@ function grHtml(st) {
   rows.slice(0, GR.SHOW).forEach((r, i) => {
     const key = `${r.bz6}|${r.nm}`;
     const badges = [
-      r.mfds ? '<span class="gr-b ok" title="식약처 화장품 제조업 허가 업체와 사업자번호 앞 6자리·상호 일치">식약처 제조업</span>' : '',
       !r.cos ? `<span class="gr-b" title="국민연금에 등록된 업종">${esc(r.codeNm || '기타 업종')}</span>` : '',
       r.base < GR.SMALL_BASE ? '<span class="gr-b warn" title="비교 시점 인원이 적어 한두 명으로 비율이 크게 움직입니다">소규모</span>' : '',
       r.temp ? '<span class="gr-b warn">비정규·일용</span>' : '',
@@ -179,7 +188,7 @@ function grHtml(st) {
     }
   });
   h += '</tbody></table></div>';
-  h += `<p class="gr-foot">출처: ${esc(d.source)}. 범위: ${esc(d.scope)}. `
+  h += `<p class="gr-foot">출처: ${esc(d.source)}. 범위: 국민연금 가입자 3인 이상 법인 사업장 중 <b>식약처 화장품 제조업 허가 업체</b>(사업자번호 앞 6자리·상호 일치)만. `
     + '국민연금 자료는 다음 달 하순에 공개돼 기준월이 조회 시점보다 1~2개월 늦습니다. '
     + '사업장 단위라 같은 회사의 공장·본사가 따로 잡히고, 상호·주소가 바뀐 달은 이어지지 않을 수 있습니다. 월 입퇴사에는 계약직·단기 인력이 섞입니다. '
     + '월 인건비는 국민연금 고지금액 ÷ 9%로 낸 하한 추정치이고, 괄호 안은 같은 비교 시점 대비 변화입니다. '
