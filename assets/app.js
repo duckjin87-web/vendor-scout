@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 172;
+const BUILD = 173;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3384,7 +3384,8 @@ function renderCandidates(name, cands, source, similar) {
       + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
     card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
     card.addEventListener('click', async () => {
-      root.innerHTML = `<div class="empty">「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…</div>`;
+      root.innerHTML = loadingHtml(`「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…`);
+      mountTrend(root);
       try { render(await (c.mfds ? finishLiveMfds(name, c) : finishLive(name, c))); }
       catch (e) { root.innerHTML = `<div class="empty">조회 실패: ${esc(e.message)}</div>`; }
     });
@@ -5560,6 +5561,91 @@ async function reloadIfStale(q, bno) {
   return true;
 }
 
+// ── 기다리는 동안 볼 업계 소식 ──
+// 실시간 조회는 수십 초가 걸린다. 빈 '조회 중…' 한 줄 대신 화장품 제조업 최신 기사를 넘겨 보게 한다.
+// 네이버 뉴스(프록시)에서 업계 키워드로 모아 3시간 보관하고, 페이지를 열 때 미리 받아 둔다.
+// 기사는 새 탭에서 열려 조회가 끊기지 않는다.
+const TREND_KEY = 'vs_trend_v1', TREND_TTL = 3 * 3600e3;
+const TREND_QS = ['화장품 ODM', '화장품 제조', 'K뷰티 수출', '화장품 트렌드', '화장품 원료'];
+const TREND_TOPICS = [['수출', /수출|해외|미국|중국|일본|유럽|아마존|글로벌/], ['ODM·OEM', /ODM|OEM|위탁|제조사|코스맥스|한국콜마|코스메카/i],
+  ['규제·인증', /식약처|규제|인증|CGMP|MoCRA|NMPA|법|허가|금지/i], ['원료·기술', /원료|소재|성분|특허|기술|연구/],
+  ['실적·투자', /실적|매출|영업이익|투자|상장|인수|증설|공장/], ['트렌드', /트렌드|유행|인기|소비자|MZ|신제품|출시/]];
+let _trendP = null;
+const trendDecode = (s) => { const t = document.createElement('textarea'); t.innerHTML = String(s || '').replace(/<\/?b>/g, ''); return t.value; };
+function trendNews() {
+  try { const c = JSON.parse(localStorage.getItem(TREND_KEY) || 'null'); if (c && Date.now() - c.at < TREND_TTL && c.items.length) return Promise.resolve(c.items); } catch { /* 없음 */ }
+  if (_trendP) return _trendP;
+  _trendP = (async () => {
+    const got = await mapLimit(TREND_QS, 3, async (q) => { try { return await proxyOnlyGet('naverNews', { query: q, display: '20', sort: 'date' }); } catch { return null; } });
+    const seen = new Set(), items = [];
+    got.forEach((d) => ((d && d.items) || []).forEach((it) => {
+      const title = trendDecode(it.title), desc = trendDecode(it.description);
+      if (!/화장품|뷰티|코스메틱|K-?뷰티/i.test(title + desc)) return;
+      const k = title.replace(/[^가-힣A-Za-z0-9]/g, '').slice(0, 24);
+      if (!k || seen.has(k)) return; seen.add(k);
+      const link = it.originallink || it.link || '';
+      let host = ''; try { host = new URL(link).hostname.replace(/^(www|m|news)\./, ''); } catch { /* 무시 */ }
+      const topic = (TREND_TOPICS.find(([, re]) => re.test(title)) || TREND_TOPICS.find(([, re]) => re.test(desc)) || ['업계'])[0];
+      items.push({ title, desc: desc.slice(0, 150), link, host, at: Date.parse(it.pubDate) || 0, topic });
+    }));
+    items.sort((a, b) => b.at - a.at);
+    const out = items.slice(0, 15);
+    if (out.length) { try { localStorage.setItem(TREND_KEY, JSON.stringify({ at: Date.now(), items: out })); } catch { /* 저장 못 해도 표시 */ } }
+    _trendP = null;
+    return out;
+  })();
+  return _trendP;
+}
+const trendWhen = (t) => {
+  if (!t) return '';
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 60) return `${Math.max(1, m)}분 전`;
+  if (m < 24 * 60) return `${Math.round(m / 60)}시간 전`;
+  const d = new Date(t); return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+};
+// 로딩 화면 — 진행 문구 + 업계 소식 자리
+function loadingHtml(msg) {
+  return `<div class="empty loadmsg"><span class="ld-spin" aria-hidden="true"></span>${msg}</div>`
+    + (getProxy() ? '<div class="trend" data-trend aria-live="off"><div class="tr-h">기다리는 동안 — 화장품 제조업 최신 소식</div><div class="tr-wait">소식을 불러오는 중…</div></div>' : '');
+}
+function mountTrend(root) {
+  const box = root && root.querySelector('[data-trend]');
+  if (!box) return;
+  trendNews().then((items) => {
+    if (!box.isConnected) return;
+    if (!items.length) { box.remove(); return; }
+    let i = 0, paused = false;
+    const feat = items.slice(0, 6), rest = items.slice(6, 12);
+    const paint = () => {
+      const a = feat[i];
+      box.innerHTML = '<div class="tr-h">기다리는 동안 — 화장품 제조업 최신 소식 <small>기사는 새 탭에서 열려요 · 조회는 계속됩니다</small></div>'
+        + `<a class="tr-card" href="${esc(a.link)}" target="_blank" rel="noopener"><span class="tr-topic">${esc(a.topic)}</span>`
+        + `<b class="tr-title">${esc(a.title)}</b><span class="tr-desc">${esc(a.desc)}</span>`
+        + `<span class="tr-meta">${esc([a.host, trendWhen(a.at)].filter(Boolean).join(' · '))} · 원문 읽기 ↗</span></a>`
+        + `<div class="tr-nav"><button type="button" class="tr-btn" data-tr="-1" aria-label="이전 기사">‹</button>`
+        + feat.map((_, k) => `<button type="button" class="tr-dot${k === i ? ' on' : ''}" data-tr-go="${k}" aria-label="${k + 1}번째 기사"></button>`).join('')
+        + `<button type="button" class="tr-btn" data-tr="1" aria-label="다음 기사">›</button></div>`
+        + (rest.length ? '<ul class="tr-list">' + rest.map((r) => `<li><span class="tr-topic sm">${esc(r.topic)}</span>`
+          + `<a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.title)}</a><small>${esc(trendWhen(r.at))}</small></li>`).join('') + '</ul>' : '');
+    };
+    paint();
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-tr]'); if (b) { i = (i + Number(b.dataset.tr) + feat.length) % feat.length; paint(); return; }
+      const g = e.target.closest('[data-tr-go]'); if (g) { i = Number(g.dataset.trGo); paint(); }
+    });
+    box.addEventListener('pointerenter', () => { paused = true; });
+    box.addEventListener('pointerleave', () => { paused = false; });
+    box.addEventListener('focusin', () => { paused = true; });
+    box.addEventListener('focusout', () => { paused = false; });
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const t = setInterval(() => {
+      if (!box.isConnected) { clearInterval(t); return; }
+      if (paused || reduce || document.hidden) return;
+      i = (i + 1) % feat.length; paint();
+    }, 7000);
+  }).catch(() => { if (box.isConnected) box.remove(); });
+}
+
 function lookup(name, bno) {
   const nm = (name || '').trim();
   const bz = (bno || '').replace(/\D/g, '');                 // 사업자번호 10자리(선택)
@@ -5594,7 +5680,8 @@ function lookup(name, bno) {
   if (isConnected() && !report) {
     const root = $('#report');
     root.classList.remove('hidden');
-    root.innerHTML = `<div class="empty">금융위·식약처 실시간 조회 중… 「${esc(key)}${nm && bz ? ` · 사업자 ${bzDisp}` : ''}」</div>`;
+    root.innerHTML = loadingHtml(`금융위·식약처 실시간 조회 중… 「${esc(key)}${nm && bz ? ` · 사업자 ${bzDisp}` : ''}」`);
+    mountTrend(root);
     // 업체명 + 사업자번호 병기 → liveLookup이 사업자번호 일치 법인만 선별(교집합)
     const liveQuery = [nm, bz].filter(Boolean).join(' ');
     // 옛 코드 확인과 조회를 동시에 시작한다 — 옛 코드면 어차피 새로고침되고, 아니면 기다린 만큼 손해다
@@ -5651,6 +5738,8 @@ function goHome() {
 
 document.addEventListener('DOMContentLoaded', () => {
   trackStickyBars();
+  // 로딩 화면용 업계 소식을 미리 받아 둔다(3시간 보관) — 조회를 누른 순간 바로 보이게
+  if (getProxy()) setTimeout(() => { trendNews().catch(() => {}); }, 2500);
   const hb = $('#homeBtn');
   if (hb) hb.addEventListener('click', goHome);
   const logo = document.querySelector('.topbar .logo');

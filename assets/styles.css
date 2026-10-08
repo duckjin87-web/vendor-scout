@@ -1842,3 +1842,34 @@ div.mk-t:hover { border-color: var(--border); }
   .mk-tbl td:last-child { grid-column: 3; grid-row: 1; }
   .mk-nm { white-space: normal; }
 }
+
+/* ── 조회 대기 화면: 진행 표시 + 화장품 제조업 최신 소식 ── */
+.loadmsg { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.ld-spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: ldspin .8s linear infinite; flex: none; }
+@keyframes ldspin { to { transform: rotate(360deg); } }
+.trend { max-width: 720px; margin: 0 auto 24px; padding: 16px 18px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+.tr-h { font-size: 13.5px; font-weight: 800; margin-bottom: 10px; }
+.tr-h small { font-weight: 500; font-size: 11.5px; color: var(--muted); margin-left: 6px; }
+.tr-wait { font-size: 12.5px; color: var(--faint); }
+.tr-card { display: flex; flex-direction: column; gap: 6px; min-height: 150px; padding: 14px 16px; border-radius: 8px; background: var(--panel-2);
+  border: 1px solid var(--border); color: var(--text); text-decoration: none; animation: trIn .35s ease both; }
+.tr-card:hover { border-color: var(--accent); }
+.tr-card:hover .tr-meta { color: var(--accent); }
+@keyframes trIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.tr-topic { align-self: flex-start; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); }
+.tr-topic.sm { font-size: 10.5px; padding: 0 6px; margin-right: 6px; white-space: nowrap; }
+.tr-title { font-size: 16px; line-height: 1.4; font-weight: 800; }
+.tr-desc { font-size: 13px; line-height: 1.55; color: var(--muted); }
+.tr-meta { font-size: 11.5px; color: var(--faint); margin-top: auto; }
+.tr-nav { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 10px 0 4px; }
+.tr-btn { font: inherit; font-size: 18px; line-height: 1; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; }
+.tr-btn:hover { color: var(--text); border-color: var(--text); }
+.tr-dot { width: 8px; height: 8px; padding: 0; border-radius: 50%; border: 0; background: var(--border); cursor: pointer; }
+.tr-dot.on { background: var(--accent); width: 18px; border-radius: 4px; }
+.tr-list { list-style: none; margin: 10px 0 0; padding: 10px 0 0; border-top: 1px dashed var(--border); }
+.tr-list li { display: flex; align-items: baseline; gap: 4px; padding: 4px 0; font-size: 13px; }
+.tr-list a { color: var(--text); text-decoration: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-list a:hover { color: var(--accent); text-decoration: underline; }
+.tr-list small { color: var(--faint); font-size: 11px; white-space: nowrap; }
+@media (max-width: 720px) { .trend { padding: 12px; } .tr-title { font-size: 15px; } .tr-h small { display: block; margin: 2px 0 0; } }
+@media (prefers-reduced-motion: reduce) { .tr-card { animation: none; } .ld-spin { animation-duration: 2s; } }
