@@ -203,7 +203,7 @@ export async function main() {
   fs.writeFileSync(path.join(OUT, 'makers-ledger.json'), JSON.stringify({ v: 1, at: today, runs, firms }));
   fs.writeFileSync(path.join(OUT, 'makers.json'), JSON.stringify(doc));
   notice(`제조업 명단 ${live.length}곳${base ? ' (첫 실행 — 기준 명단 저장)' : ` · 지난 조회(${prev.at}) 대비 추가 ${addedReal.length} · 빠짐 ${removedReal.length} · 상호변경 ${renames.length}`}`
-    + ` · CGMP 목록 ${gmp ? `${gmp.n}건(신규 중 적합 ${recent.filter((r) => r.gmp).length})` : '조회 실패'}`
+    + ` · CGMP 목록 ${gmp ? `${gmp.n}건(전체 명단 중 적합 ${live.filter(([, r]) => gmp.names.has(nk(r.n))).length}곳 · 신규 중 ${recent.filter((r) => r.gmp).length}곳)` : '조회 실패'}`
     + ` · 최근 30일 허가 ${doc.counts.d30} · 번지 보강 ${nedOk}/${need.length}${nedErr ? ` (중단: ${nedErr})` : ''}`);
 }
 
