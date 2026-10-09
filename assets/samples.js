@@ -890,28 +890,26 @@ function assembleLiveReport(name, corp, res) {
   const mkRegDt = (mkKeyDt && y4(mkKeyDt) >= 1980 && y4(mkKeyDt) <= 2026) ? mkKeyDt
     : ((mkEarliest && y4(mkEarliest) >= 1980 && y4(mkEarliest) <= 2026) ? mkEarliest : null);
 
-  // 금융위 법인 미확보 시 보강: 식약처/공장 레코드 → 외부 집계 사이트(비공식) 순
-  const agg = R.bizAgg && R.bizAgg.ok && R.bizAgg.data ? R.bizAgg.data : null;
-  const aggSrc = agg ? `외부 집계(${agg.host})` : '외부 집계';
+  // 금융위 법인 미확보 시 보강: 국세청 → 식약처/공장 레코드 순
   const recBzno = corp?.bzno ? null : (findBzno(mk) || findBzno(fctHit));
   // 우선순위: 금융위 > 국세청 확인번호(활성) > 식약처/공장 추출 > 집계
-  const bznoVal = corp?.bzno || ntsBno || recBzno || (agg && agg.bzno) || null;
-  const bznoSrc = corp?.bzno ? '금융위 기업기본정보' : (ntsBno ? '국세청 확인' : (recBzno ? '식약처/공장등록' : ((agg && agg.bzno) ? aggSrc : '금융위 기업기본정보')));
-  const bznoNote = corp?.bzno ? null : (ntsBno ? '국세청 사업자상태로 확인된 활성 사업자번호' : (recBzno ? '식약처/공장 레코드 추출' : ((agg && agg.bzno) ? '외부 집계 사이트 참고(비공식·국세청 원본 확인 권장)' : '법인 미검색으로 미확보')));
-  const repVal = corp?.rep || mkRep || (agg && agg.rep) || null;
-  const repSrc = corp?.rep ? '금융위 기업기본정보' : (mkRep ? '식약처 화장품제조업 API' : ((agg && agg.rep) ? aggSrc : '식약처 화장품제조업 API'));
-  const repNote = corp?.rep ? null : (mkRep ? '식약처 제조업 허가상 대표자 (금융위 법인 미확보 보강)' : ((agg && agg.rep) ? '외부 집계 사이트 참고(비공식)' : why('maker', '대표자 정보 없음')));
+  const bznoVal = corp?.bzno || ntsBno || recBzno || null;
+  const bznoSrc = corp?.bzno ? '금융위 기업기본정보' : (ntsBno ? '국세청 확인' : (recBzno ? '식약처/공장등록' : '금융위 기업기본정보'));
+  const bznoNote = corp?.bzno ? null : (ntsBno ? '국세청 사업자상태로 확인된 활성 사업자번호' : (recBzno ? '식약처/공장 레코드 추출' : '법인 미검색으로 미확보'));
+  const repVal = corp?.rep || mkRep || null;
+  const repSrc = corp?.rep ? '금융위 기업기본정보' : '식약처 화장품제조업 API';
+  const repNote = corp?.rep ? null : (mkRep ? '식약처 제조업 허가상 대표자 (금융위 법인 미확보 보강)' : why('maker', '대표자 정보 없음'));
   const mkRegDate = mkRegDt ? fmtDate(mkRegDt) : null;
-  const estbVal = fmtDate(corp?.estbDt) || (agg && agg.opneDe) || mkRegDate || null;
-  const estbSrc = corp?.estbDt ? '금융위 기업기본정보' : ((agg && agg.opneDe) ? aggSrc + ' 개업일' : (mkRegDate ? '식약처 화장품제조업 API' : '금융위 기업기본정보'));
-  const estbNote = corp?.estbDt ? null : ((agg && agg.opneDe) ? '외부 집계 사이트상 개업일(비공식)' : (mkRegDate ? '★ 식약처 제조업 등록(허가)일 — 법인 설립일과 다를 수 있음' : null));
-  const bSttVal = bStt || (agg && agg.status) || null;
+  const estbVal = fmtDate(corp?.estbDt) || mkRegDate || null;
+  const estbSrc = corp?.estbDt ? '금융위 기업기본정보' : (mkRegDate ? '식약처 화장품제조업 API' : '금융위 기업기본정보');
+  const estbNote = corp?.estbDt ? null : (mkRegDate ? '★ 식약처 제조업 등록(허가)일 — 법인 설립일과 다를 수 있음' : null);
+  const bSttVal = bStt || null;
 
   const basic = [
     f('법인등록번호', corp?.crno || null, 'A', '금융위 기업기본정보', today),
     f('사업자등록번호', bznoVal, bznoVal ? (corp?.bzno ? 'A' : 'B') : 'D', bznoSrc, bznoVal ? today : null, bznoNote),
-    f('사업자 상태', bSttVal, bSttVal ? (bStt ? 'A' : 'C') : 'D', bStt ? '국세청 사업자상태' : (agg && agg.status ? aggSrc : '국세청 사업자상태'), bSttVal ? today : null,
-      bStt ? (bTax || null) : (agg && agg.status ? '외부 집계 사이트 참고(비공식·국세청 원본 확인 권장)' : why('nts', '국세청 상태 조회 실패 — 사업자번호/승인 확인'))),
+    f('사업자 상태', bSttVal, bSttVal ? (bStt ? 'A' : 'C') : 'D', '국세청 사업자상태', bSttVal ? today : null,
+      bStt ? (bTax || null) : why('nts', '국세청 상태 조회 실패 — 사업자번호/승인 확인')),
     f('대표자', repVal, repVal ? (corp?.rep ? 'A' : 'B') : 'D', repSrc, repVal ? today : null, repNote),
     f('설립일 / 등록일', estbVal, estbVal ? (corp?.estbDt ? 'A' : 'C') : 'D', estbSrc, estbVal || null, estbNote),
     f('본점주소', corp?.addr || null, 'A', '금융위 기업기본정보', today),
@@ -955,7 +953,6 @@ function assembleLiveReport(name, corp, res) {
 
   // 업종은 식약처 등록 사실 기준으로 정확히(집계 페이지 자유텍스트 오추출 방지). 연락처는 집계 참고.
   if (mk) basic.push(f('업종', '화장품 제조업', 'A', '식약처 화장품제조업 API', today, '식약처 화장품제조업 등록 기준'));
-  if (agg && agg.tel) basic.push(f('대표 연락처', agg.tel, 'C', aggSrc, today, '외부 집계 사이트 참고(비공식) — 방문 전 확인'));
 
   // 식약처 기능성 보고품목 (rpt)
   // ★ 상호 일치 필터 필수: rpt API가 업체명 필터를 안 걸고 첫 페이지(기본 30건)를 그대로 주는 경우가 있어
@@ -1530,7 +1527,6 @@ function assembleLiveReport(name, corp, res) {
           ? '사업자번호·대표자·개업일 일치'
           : '대조 불가 — 등록증상 개업일이 필요하나 법인 설립일로 조회(정상 업체도 불일치). 휴·폐업은 사업자상태 참고' };
     })(),
-    agg ? { name: `외부 집계 보강 (${agg.host})`, ok: true, warn: true, detail: `비공식 참고 — ${[agg.bzno ? '사업자번호' : null, agg.rep ? '대표자' : null, agg.opneDe ? '개업일' : null, agg.status ? '상태' : null].filter(Boolean).join('·') || '정보'} 추출` } : null,
   ].filter(Boolean);
 
   const risk_flags = [];
@@ -1603,7 +1599,6 @@ function assembleLiveReport(name, corp, res) {
       mfds_sites: nedSites.length ? nedSites : null,            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
       max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
       no_corp: !hasCorp, // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회 안내용
-      biz_agg: agg ? { host: agg.host, url: agg.url } : null, // 외부 집계 보강 출처(비공식)
       // 길찾기(카카오·티맵) 연동용 — 기준점(한국콜마)→방문지
       ref_point: { name: REF_POINT.name, addr: REF_POINT.addr, lat: REF_POINT.lat, lng: REF_POINT.lng },
       visit_addr: (kkTravel && kkTravel.destAddr) || fctAddr || corp?.addr || npsAddr || null,

@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 177;
+const BUILD = 178;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1125,7 +1125,6 @@ function skeletonForms(s) {
   }
   return forms;
 }
-const consonantSkeleton = (s) => [...skeletonForms(s)][0] || '';
 // 두 골격의 최장 공통 연속부분 길이
 function lcsLen(a, b) {
   let best = 0;
@@ -1459,9 +1458,8 @@ function findBznoIn(rec) {
   return null;
 }
 
-// 비공식 사업자정보 집계 사이트(marketbz·bizno 등) 조회 코드가 여기 있었다.
-// 공식 data.go.kr 자료만 신뢰하기로 하면서 호출을 끊었고(bizAgg는 늘 null),
-// 그 뒤로 아무도 부르지 않는 43줄로 남아 있었다. 되살릴 일이 생기면 git 이력에 있다.
+// 비공식 사업자정보 집계 사이트(marketbz·bizno 등) 보강은 공식 data.go.kr 자료만 쓰기로 하면서
+// 조회 코드와 리포트의 보강 분기를 모두 걷어냈다. 되살릴 일이 생기면 git 이력에 있다.
 
 // 카카오 이동거리 — 한국콜마(기준점)→방문지.
 //  1순위: 카카오모빌리티 길찾기(실측). 이용신청 안 돼 있으면 실패 → 2순위.
@@ -3227,8 +3225,6 @@ async function finishLive(name, corp) {
     naverNews: proxyOnlyGet('naverNews', { query: nm, display: '30', sort: 'date' }),
     // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
     oemTrace: proxyOnlyGet('naverWeb', { query: `${nm} 제조원`, display: '10' }),
-    // 외부 집계(marketbz 등) 비공식 보강 — 사용자 요청으로 비활성화(공식 data.go.kr API 자료만 신뢰).
-    bizAgg: Promise.resolve(null),
     // 채용공고 추적 — 뉴스도 홈페이지도 없는 영세업체의 거의 유일한 활동 흔적
     hiring: hiringTrace(nm),
     // 국세청 진위확인 — 사업자번호·대표자·개업일 3요소 대조(상태조회와 동일 서비스)
@@ -3279,12 +3275,11 @@ async function liveBackfill(res, corp, name, nm) {
   if (!corp.bzno) {
     const mkR = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
     const fcR = res.factory && res.factory.ok ? listOf(factoryProd(res.factory.data), ['response.body.items.item', 'body.items', 'items']) : [];
-    const aggBzno = res.bizAgg && res.bizAgg.ok && res.bizAgg.data ? res.bizAgg.data.bzno : null;
     // ★ 상호 일치 레코드에서만 사업자번호 추출 — maker/factory API가 상호 필터링을 안 하므로
     //    전체를 훑으면 '남의 회사' 사업자번호를 잡아 국세청 재조회가 오염됨(할루시네이션 방지).
     const bzFrom = (list) => { const r = matchByNameApp(name, list); return r ? findBznoIn(r) : null; };
     // 집계(법인) 번호를 앞에 — 국세청 등록 확률이 높음. 식약처 제조업 번호는 그 다음.
-    const cands = [aggBzno, bzFrom(mkR), bzFrom(fcR)]
+    const cands = [bzFrom(mkR), bzFrom(fcR)]
       .map((b) => b ? String(b).replace(/\D/g, '') : null).filter((b) => b && b.length === 10);
     const uniqBz = [...new Set(cands)];
     // 국세청 사업자상태 — 후보 번호들로 재조회, 실제 상태값 나오는 번호 채택. 실패 사유는 표면화.
