@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 178;
+const BUILD = 180;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -31,6 +31,9 @@ function errText(v) {
 }
 
 const GRADE_LABEL = { A: '공식 API', B: '공공DB 간접', C: '추정/프록시', D: '데이터 공백' };
+// 항목 신뢰도는 점으로 그린다 — 종합판정(A~D)과 같은 글자를 쓰면 둘을 헷갈린다(실무 검토 의견)
+const GRADE_DOTS = { A: '●●●', B: '●●○', C: '●○○', D: '○○○' };
+const relDots = (g) => `<span class="gdot rel g${esc(g)}" title="신뢰도 ${esc(GRADE_DOTS[g] || '')} · ${esc(GRADE_LABEL[g] || '')}" aria-label="신뢰도 ${esc(GRADE_LABEL[g] || '')}">${GRADE_DOTS[g] || ''}</span>`;
 
 let currentReport = null;
 let _srcOpen = false;   // 데이터 소스 상태 패널 펼침 여부(재렌더 시 유지)
@@ -3207,6 +3210,28 @@ const LIVE_SOFT_MS = 5000;
 // 방문지 단계가 산단공을 기다리는 한도 — 넘기면 식약처·본점 주소로 먼저 구하고, 공장 주소가 늦게 오면 다시 구한다
 const LIVE_ADDR_MS = 3000;
 const LIVE_LATE_MAX_MS = 45000;
+// ── 조회 진행 상황 ── 로딩 화면에서 '무엇을 기다리는지' 보이게 한다(소스별 완료·실패)
+const liveProg = { stage: 'corp', keys: [], st: {}, t0: 0 };
+function liveProgReset() { liveProg.stage = 'corp'; liveProg.keys = []; liveProg.st = {}; liveProg.t0 = Date.now(); liveProgPaint(); }
+function liveProgStart(keys) { liveProg.stage = 'src'; liveProg.keys = keys; liveProg.st = {}; liveProg.t0 = Date.now(); liveProgPaint(); }
+function liveProgMark(k, ok) { if (!liveProg.st[k]) { liveProg.st[k] = ok ? 'ok' : 'fail'; liveProgPaint(); } }
+function liveProgHtml() {
+  if (liveProg.stage === 'corp' || !liveProg.keys.length) {
+    return '<div class="lp-step"><span class="lp-n">1/2</span> 기업 기본정보 확인 <small>금융위 법인 · 식약처 제조업 명단에서 업체를 찾는 중</small></div>';
+  }
+  const done = liveProg.keys.filter((k) => liveProg.st[k]).length, n = liveProg.keys.length;
+  const sec = Math.round((Date.now() - liveProg.t0) / 1000);
+  return `<div class="lp-step"><span class="lp-n">2/2</span> 자료 모으는 중 <b>${done}/${n}</b> <small>${sec}초 · 5초가 지나면 받은 자료로 먼저 보여 주고 나머지는 도착하는 대로 채웁니다</small></div>`
+    + `<div class="lp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${done}"><i style="width:${Math.round((done / n) * 100)}%"></i></div>`
+    + '<ul class="lp-list">' + liveProg.keys.map((k) => {
+      const st = liveProg.st[k];
+      return `<li class="${st || 'wait'}"><span aria-hidden="true">${st === 'ok' ? '✓' : st === 'fail' ? '–' : '<i class="lp-spin"></i>'}</span>${esc(LIVE_SRC_NAME[k] || k)}${st === 'fail' ? ' <small>자료 없음</small>' : ''}</li>`;
+    }).join('') + '</ul>';
+}
+function liveProgPaint() { document.querySelectorAll('[data-ld-prog]').forEach((b) => { b.innerHTML = liveProgHtml(); }); }
+// 경과 시간 표시를 1초마다 갱신(로딩 화면이 떠 있을 때만)
+setInterval(() => { if (liveProg.stage === 'src' && document.querySelector('[data-ld-prog]')) liveProgPaint(); }, 1000);
+
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
   const calls = {
@@ -3233,11 +3258,12 @@ async function finishLive(name, corp) {
   const keys = Object.keys(calls);
   const res = {};
   const settleOf = {};
+  liveProgStart(keys);
   keys.forEach((k) => {
     settleOf[k] = Promise.resolve(calls[k]).then(
       // 보완 단계가 이미 더 나은 값(사업자번호로 다시 부른 국민연금 등)을 넣어 뒀으면 덮지 않는다
-      (v) => { if (!(k in res)) res[k] = { ok: true, data: v }; },
-      (e) => { if (!(k in res)) res[k] = { ok: false, err: String(e && e.message || e) }; });
+      (v) => { if (!(k in res)) res[k] = { ok: true, data: v }; liveProgMark(k, v != null); },
+      (e) => { if (!(k in res)) res[k] = { ok: false, err: String(e && e.message || e) }; liveProgMark(k, false); });
   });
   const allDone = Promise.all(keys.map((k) => settleOf[k]));
   const soft = new Promise((r) => setTimeout(r, LIVE_SOFT_MS));
@@ -3379,6 +3405,7 @@ function renderCandidates(name, cands, source, similar) {
       + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
     card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
     card.addEventListener('click', async () => {
+      liveProgReset();
       root.innerHTML = loadingHtml(`「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…`);
       mountTrend(root);
       try { render(await (c.mfds ? finishLiveMfds(name, c) : finishLive(name, c))); }
@@ -3435,7 +3462,7 @@ function fieldRow(fld) {
   const row = el('div', 'field' + (isCgmpField(fld) ? ' cgmp' : ''));
 
   const k = el('div', 'k');
-  k.appendChild(el('span', 'gdot g' + fld.grade, esc(fld.grade)));
+  k.insertAdjacentHTML('beforeend', relDots(fld.grade));
   k.appendChild(el('span', 'ktxt', esc(fld.key)));
   row.appendChild(k);
 
@@ -4191,6 +4218,19 @@ function renderVerdict(report) {
       + (downs.length ? `<div class="vw down"><i>확인필요</i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
       + `</div>`;
   }
+  // 방문 때 꼭 확인할 것 — 확인사항 표에서 중요도 순 3개(전체는 아래 '방문 전 확인필요')
+  if (m.live) {
+    const its = buildVisitChecklist(report);
+    const PR = { high: 0, mid: 1, low: 2 };
+    const top = [...its].sort((a, b) => (PR[a.pri] ?? 3) - (PR[b.pri] ?? 3)).slice(0, 3);
+    if (top.length) {
+      html += `<div class="vd-todo"><div class="vd-todo-h"><b>방문 때 꼭 확인할 것</b>`
+        + `<button type="button" class="vd-todo-all" data-act="todo-all">확인사항 전체 ${its.length}건 보기 ↓</button></div>`
+        // 한 줄 요약만 — 긴 항목(미확인 항목 나열 등)은 앞부분만 보이고 전체는 아래 표와 말풍선에서
+        + `<ol>${top.map((t) => { const tx = String(t.text || ''); const cut = tx.length > 90 ? `${tx.slice(0, 88).replace(/[\s·,]+$/, '')}…` : tx;
+          return `<li title="${esc(tx)}"><span class="vd-todo-cat ${esc(t.pri)}">${esc(t.cat || '확인')}</span><span>${esc(cut)}</span></li>`; }).join('')}</ol></div>`;
+    }
+  }
   // ── 기본 현황 ──
   // 값만 늘어놓으면 어느 칸을 봐야 하는지 알 수 없다. 방문 판단이 갈리는 지점만 색으로 세운다.
   //   bad(빨강)  거래 전 반드시 해소해야 하는 것 — 미등록·휴폐업·회수이력·자본잠식
@@ -4256,11 +4296,20 @@ function renderVerdict(report) {
       : `<div class="vch vch-${t}">${inner}</div>`;
   }).join('') + `</div>`;
   html += `<div class="vd-foot">종합판정은 <b>업체를 방문할 만한지</b>에 대한 검토 결과이고, `
-    + `항목마다 붙는 A·B·C·D는 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>를 나타냅니다 — 서로 다른 이야기입니다.`
+    + `항목마다 붙는 점(●●● ~ ○○○)은 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>를 나타냅니다 — 서로 다른 이야기입니다.`
     + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')
     + `</div>`;
   box.innerHTML = html;
   box.querySelector('[data-act="verdict-why"]').addEventListener('click', () => openVerdictWhy(report));
+  const todoAll = box.querySelector('[data-act="todo-all"]');
+  if (todoAll) {
+    todoAll.addEventListener('click', () => {
+      const d = document.querySelector('details.rsec[data-fold="check"]');
+      if (!d) return;
+      d.open = true;
+      d.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+    });
+  }
   const svb = box.querySelector('[data-act="save-firm"]');
   if (svb) {
     svPaintBtn(svb);
@@ -4321,23 +4370,23 @@ function openVerdictWhy(report) {
   const { ups, downs } = verdictReason(report);
   const mid = got.length ? Math.floor(got.length / 2) + 1 : 0;
   const bar = got.length
-    ? ['A', 'B', 'C', 'D'].filter((k) => cnt[k]).map((k) => `<span class="vw-seg badge-${k}" style="flex:${cnt[k]}">${k} ${cnt[k]}</span>`).join('')
+    ? ['A', 'B', 'C', 'D'].filter((k) => cnt[k]).map((k) => `<span class="vw-seg badge-${k}" style="flex:${cnt[k]}" title="${esc(GRADE_LABEL[k])}">${GRADE_DOTS[k]} ${cnt[k]}</span>`).join('')
     : '<span class="vw-seg none">확인된 항목 없음</span>';
   const rows = ['A', 'B', 'C', 'D'].map((k) => `<tr class="${k === g ? 'on' : ''}"><td><b class="vw-g badge-${k}">${k}</b></td><td>${esc(VERDICT[k].label)}</td>`
-    + `<td>${esc(GRADE_LABEL[k])}${k === 'D' ? '' : ' 위주'}</td></tr>`).join('');
+    + `<td>${relDots(k)} ${esc(GRADE_LABEL[k])}${k === 'D' ? '' : ' 위주'}</td></tr>`).join('');
   const dlg = document.createElement('dialog');
   dlg.className = 'vwhy';
   dlg.setAttribute('aria-labelledby', 'vwhyTitle');
   dlg.innerHTML = `<div class="vwhy-in">`
     + `<div class="vwhy-head"><h3 id="vwhyTitle">종합판정 <b class="vw-g badge-${esc(g)}">${esc(g)}</b> ${esc((VERDICT[g] || VERDICT.D).label)}</h3>`
     + `<button type="button" class="vwhy-x" aria-label="닫기">✕</button></div>`
-    + `<section><h4>어떻게 정하나</h4><p>리포트에서 <b>값이 확인된 항목</b>의 신뢰도 등급(A~D)을 좋은 순으로 세웠을 때 `
-    + `<b>가운데 등급</b>이 종합판정입니다. 값이 없는 항목은 셈에서 뺍니다. `
+    + `<section><h4>어떻게 정하나</h4><p>리포트에서 <b>값이 확인된 항목</b>의 신뢰도(●●●~○○○)를 좋은 순으로 세웠을 때 `
+    + `<b>가운데 값</b>이 종합판정(●●● A · ●●○ B · ●○○ C · ○○○ D)입니다. 값이 없는 항목은 셈에서 뺍니다. `
     + (got.length ? `이 업체는 확인된 항목 ${got.length}개 중 ${mid}번째 등급입니다.` : '이 업체는 확인된 항목이 하나도 없어 D입니다.') + `</p>`
     + `<div class="vw-bar">${bar}</div>`
-    + `<p class="vw-note">이 업체: A ${cnt.A} · B ${cnt.B} · C ${cnt.C} · D ${cnt.D}${gaps ? ` · 공백 ${gaps}(제외)` : ''} → 가운데 값 <b>${esc(g)}</b></p></section>`
-    + `<section><h4>등급별 판정</h4><table class="vw-tbl"><thead><tr><th>등급</th><th>판정</th><th>항목 출처</th></tr></thead><tbody>${rows}</tbody></table>`
-    + `<p class="vw-note">항목 등급 — A 공식 API(식약처·금융위·국세청 등 원부 자료) · B 공공DB 간접(국민연금·실측 경로 등) · C 추정·외부 자료 · D 데이터 공백</p></section>`
+    + `<p class="vw-note">이 업체: ●●● ${cnt.A} · ●●○ ${cnt.B} · ●○○ ${cnt.C} · ○○○ ${cnt.D}${gaps ? ` · 공백 ${gaps}(제외)` : ''} → 가운데 값 → 종합판정 <b>${esc(g)}</b></p></section>`
+    + `<section><h4>등급별 판정</h4><table class="vw-tbl"><thead><tr><th>종합판정</th><th>뜻</th><th>항목 신뢰도</th></tr></thead><tbody>${rows}</tbody></table>`
+    + `<p class="vw-note">항목 신뢰도 — ●●● 공식 API(식약처·금융위·국세청 등 원부 자료) · ●●○ 공공DB 간접(국민연금·실측 경로 등) · ●○○ 추정·외부 자료 · ○○○ 데이터 공백</p></section>`
     + `<section><h4>이 업체에서 본 것</h4>`
     + (ups.length ? `<div class="vw up"><i>확인됨</i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
     + (downs.length ? `<div class="vw down"><i>확인필요</i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
@@ -5207,6 +5256,29 @@ function animateAreaCompare(box) {
   io.observe(box);
 }
 
+// ── 접는 구역 ── 첫 화면은 판정·이유·확인할 것 3개만 보이고, 나머지 자료는 제목만 보이게 접어 둔다.
+// 구역마다 펼침 상태를 기억하고(다음 조회에도 유지), 인쇄할 때는 모두 펼친다.
+const FOLD_KEY = 'vs_fold_v1';
+const foldGet = () => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || '{}') || {}; } catch { return {}; } };
+function foldSec(id, title, sub, ...content) {
+  const d = document.createElement('details');
+  d.className = 'rsec'; d.dataset.fold = id;
+  d.open = foldGet()[id] === true;
+  const sm = document.createElement('summary');
+  sm.innerHTML = `<span class="rsec-t">${esc(title)}</span>${sub ? `<span class="rsec-s">${sub}</span>` : ''}<span class="rsec-c" aria-hidden="true"></span>`;
+  d.appendChild(sm);
+  content.filter(Boolean).forEach((c) => d.appendChild(c));
+  d.addEventListener('toggle', () => { const st = foldGet(); st[id] = d.open; try { localStorage.setItem(FOLD_KEY, JSON.stringify(st)); } catch { /* 저장 못 해도 동작 */ } });
+  return d;
+}
+function foldAll(root, open) { root.querySelectorAll('details.rsec').forEach((d) => { d.open = open; }); }
+window.addEventListener('beforeprint', () => {
+  document.querySelectorAll('details.rsec:not([open])').forEach((d) => { d.dataset.printOpened = '1'; d.open = true; });
+});
+window.addEventListener('afterprint', () => {
+  document.querySelectorAll('details.rsec[data-print-opened]').forEach((d) => { delete d.dataset.printOpened; d.open = false; });
+});
+
 function render(report, opts = {}) {
   currentReport = report;
   const root = $('#report');
@@ -5307,13 +5379,23 @@ function render(report, opts = {}) {
   core.appendChild(block('생산역량 · 인원', '',
     visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod'));
   if (!excl.has('finance')) core.appendChild(financeBlock(report));
-  root.appendChild(core);
+  const allF = [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])];
+  const gapN = allF.filter((x) => x.data_gap || x.value == null).length;
+  const fbar = el('div', 'rfold-bar', '<span>상세 자료</span><button type="button" class="nb-btn sm" data-fold-all="1">모두 펼치기</button><button type="button" class="nb-btn sm" data-fold-all="0">모두 접기</button>');
+  fbar.addEventListener('click', (e) => { const b = e.target.closest('[data-fold-all]'); if (b) foldAll(root, b.dataset.foldAll === '1'); });
+  root.appendChild(fbar);
+  root.appendChild(foldSec('core', '기업 정보 · 생산역량 · 재무', `항목 ${allF.length - gapN}개 확인${gapN ? ` · 공백 ${gapN}` : ''}`, core));
 
   // ✅ 방문 전 체크리스트 — 웹 기반(기사·채용·기술/제품) 실사 제안(실데이터일 때)
   //    심층분석 결과가 나중에 도착하면 갱신해야 하므로 id로 찾아 교체 가능하게 둔다.
   if (m.live) {
     const vc = renderVisitChecklist(report);
-    if (vc) { vc.id = 'visitChecklist'; root.appendChild(vc); }
+    if (vc) {
+      vc.id = 'visitChecklist';
+      const its = buildVisitChecklist(report);
+      const hiN = its.filter((i) => i.pri === 'high').length;
+      root.appendChild(foldSec('check', '방문 전 확인필요', `확인사항 ${its.length}건${hiN ? ` · 필수 ${hiN}` : ''}`, vc));
+    }
   }
 
   // 데이터 출처 배너
@@ -5370,7 +5452,13 @@ function render(report, opts = {}) {
 
   // 확인사항은 위 '방문 전 확인필요' 표 하나로 모았다. 여기 남는 것은 그 근거 —
   // 기사 타임라인·웹 언급처럼 '읽어 볼 원문'이지 체크할 항목이 아니다.
-  if (!excl.has('news')) { const chkW = renderCheckWeb(report); if (chkW) root.appendChild(chkW); }
+  if (!excl.has('news')) {
+    const chkW = renderCheckWeb(report);
+    if (chkW) {
+      const nW = ((report.insights && report.insights.timeline) || []).length + (report.oem_trace || []).length + (report.news || []).length;
+      root.appendChild(foldSec('web', '최근 활동 · 웹 자료', nW ? `관련 자료 ${nW}건` : '관련 자료 없음', chkW));
+    }
+  }
 
   const blocks = el('div', 'blocks');
   // 🧑‍🏭 채용공고 추적 — 재무 뒤(재무가 오래된 업체의 '현재 활동'을 보는 자리이므로 나란히)
@@ -5480,13 +5568,13 @@ function render(report, opts = {}) {
 
   const diffBlock = renderDiff(report.diff_from_prev);
   if (diffBlock) blocks.appendChild(diffBlock);
-  root.appendChild(blocks);
+  root.appendChild(foldSec('more', '채용공고 · 홈페이지 · 심층분석', '', blocks));
 
   // Legend
   const lg = el('div', 'legend');
   lg.innerHTML =
-    '<span class="item"><b>신뢰도</b></span>' +
-    ['A', 'B', 'C', 'D'].map((g) => `<span class="item"><span class="dot badge-${g}"></span>${g} · ${GRADE_LABEL[g]}</span>`).join('');
+    '<span class="item"><b>항목 신뢰도</b></span>' +
+    ['A', 'B', 'C', 'D'].map((g) => `<span class="item">${relDots(g)} ${GRADE_LABEL[g]}</span>`).join('');
   root.appendChild(lg);
   // 출처 — 맨 아래 한 줄로 간략히
   if (report.meta && report.meta.live) {
@@ -5682,6 +5770,7 @@ const trendWhen = (t) => {
 // 로딩 화면 — 진행 문구 + 업계 소식 자리
 function loadingHtml(msg) {
   return `<div class="empty loadmsg"><span class="ld-spin" aria-hidden="true"></span>${msg}</div>`
+    + `<div class="ld-prog" data-ld-prog aria-live="polite">${liveProgHtml()}</div>`
     + (getProxy() ? '<div class="trend" data-trend aria-live="off"><div class="tr-h">기다리는 동안 — 화장품 제조업 최신 소식</div><div class="tr-wait">소식을 불러오는 중…</div></div>' : '');
 }
 function mountTrend(root) {
@@ -5756,6 +5845,7 @@ function lookup(name, bno) {
   if (isConnected() && !report) {
     const root = $('#report');
     root.classList.remove('hidden');
+    liveProgReset();
     root.innerHTML = loadingHtml(`금융위·식약처 실시간 조회 중… 「${esc(key)}${nm && bz ? ` · 사업자 ${bzDisp}` : ''}」`);
     mountTrend(root);
     // 업체명 + 사업자번호 병기 → liveLookup이 사업자번호 일치 법인만 선별(교집합)
@@ -5885,6 +5975,34 @@ async function svToggleFirm(r, from = '제조업 등록 현황') {
     info: { permit: r.p || null, addr: r.ad || r.a || '', gmp: r.gmp ?? null, nps: r.nps ?? null, from, note: r.note || null } });
   svToast(`「${r.n}」을(를) 저장했습니다 — 상단 「저장업체」에서 조회하세요`);
 }
+// 내보내기 — 저장 업체 전부(조회 결과 포함)를 JSON 파일 하나로
+function svExport(list) {
+  const d = new Date(), ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const blob = new Blob([JSON.stringify({ app: 'vendor-scout', kind: 'saved-firms', v: 1, exportedAt: d.toISOString(), items: list })], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `vendor-scout-saved-${ymd}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  svToast(`${list.length}곳을 파일로 내보냈습니다`);
+}
+// 가져오기 — 같은 업체는 더 최근에 저장(갱신)한 쪽을 남긴다
+async function svImport(text) {
+  let j; try { j = JSON.parse(text); } catch { throw new Error('JSON 파일이 아닙니다'); }
+  const items = Array.isArray(j) ? j : (j && Array.isArray(j.items) ? j.items : null);
+  if (!items || (j && j.app && j.app !== 'vendor-scout')) throw new Error('vendor-scout 저장업체 파일이 아닙니다');
+  const r = { added: 0, updated: 0, skipped: 0, bad: 0 };
+  for (const it of items) {
+    if (!it || typeof it.name !== 'string' || !it.name.trim()) { r.bad++; continue; }
+    const key = svKey(it.name);
+    const old = await svGet(key).catch(() => null);
+    const t = (x) => Date.parse((x && (x.updatedAt || x.savedAt)) || 0) || 0;
+    if (old && t(old) >= t(it)) { r.skipped++; continue; }
+    await svPut({ ...it, key });
+    if (old) r.updated++; else r.added++;
+  }
+  return r;
+}
+
 // 저장업체 화면 — 리포트 자리에 목록을 그린다(대시보드는 자동으로 숨는다)
 async function svOpenList() {
   const root = $('#report');
@@ -5895,7 +6013,10 @@ async function svOpenList() {
   const fmt = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const box = el('div', 'svl');
   const paint = () => {
-    box.innerHTML = `<div class="svl-head"><h2>저장 업체 <small>${list.length}곳 · 이 브라우저에 저장(다른 기기와 공유되지 않음)</small></h2></div>`
+    box.innerHTML = `<div class="svl-head"><h2>저장 업체 <small>${list.length}곳 · 이 브라우저에 저장</small></h2>`
+      + '<div class="svl-io"><button type="button" class="nb-btn sm" data-sv-export' + (list.length ? '' : ' disabled') + '>내보내기</button>'
+      + '<button type="button" class="nb-btn sm" data-sv-import>가져오기</button><input type="file" accept="application/json,.json" data-sv-file hidden></div>'
+      + '<p class="svl-hint">다른 PC·동료와 나누려면 「내보내기」로 받은 파일을 그쪽에서 「가져오기」하세요. 같은 업체는 더 최근에 저장한 쪽을 남깁니다.</p></div>'
       + (list.length ? '<div class="svl-list">' + list.map((r) => {
         const rep = r.report, info = r.info || {};
         const meta = [r.region, rep ? `조회 ${fmt(r.queryAt)}` : (info.permit ? `제조업 허가 ${info.permit}` : ''), !rep && info.note ? info.note : '', `저장 ${fmt(r.savedAt).slice(0, 10)}`].filter(Boolean).join(' · ');
@@ -5911,7 +6032,19 @@ async function svOpenList() {
         : '<div class="gr-empty">저장한 업체가 없습니다. 사전검증 리포트 위쪽의 「☆ 저장」이나 대시보드 「제조업 등록 현황」의 「저장」으로 추가하세요.</div>');
   };
   paint();
+  box.addEventListener('change', async (e) => {
+    const f = e.target.closest('[data-sv-file]');
+    if (!f || !f.files || !f.files[0]) return;
+    try {
+      const r = await svImport(await f.files[0].text());
+      list = await svAll(); paint();
+      svToast(`가져오기 — 추가 ${r.added} · 갱신 ${r.updated}${r.skipped ? ` · 이미 최신 ${r.skipped}` : ''}${r.bad ? ` · 형식 오류 ${r.bad}` : ''}`);
+    } catch (er) { svToast(`가져오지 못했습니다 — ${er.message}`); }
+    f.value = '';
+  });
   box.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-sv-export]')) { svExport(list); return; }
+    if (e.target.closest('[data-sv-import]')) { const f = box.querySelector('[data-sv-file]'); if (f) f.click(); return; }
     const o = e.target.closest('[data-sv-open]');
     if (o) { const r = list.find((x) => x.key === o.dataset.svOpen); if (r && r.report) render(r.report, { savedAt: r.queryAt || r.updatedAt }); return; }
     const l = e.target.closest('[data-sv-look]');
