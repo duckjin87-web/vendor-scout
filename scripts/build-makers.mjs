@@ -12,7 +12,10 @@ import path from 'node:path';
 const OUT = path.resolve('data/growth');
 const KEY = process.env.DATA_GO_KR_API_KEY;
 const DAY = 864e5;
-const NED_MAX = 40;                    // 한 번 실행에 번지 주소를 보강할 최대 업체 수(신규는 한 달 30곳 안팎)
+const NED_MAX = 40;                    // 대시보드에 띄울 신규 업체 중 번지 주소를 받아 올 수
+// 근처 업체 지도는 명단 전체의 번지 주소가 필요하다(공개 API는 시·군까지만 준다).
+// 한 번에 다 받으면 오래 걸리므로 매 실행 이만큼씩 채워 몇 주에 걸쳐 명단을 메운다.
+const NED_BACKFILL = 400;
 const log = (...a) => console.log('[makers]', ...a);
 const notice = (t) => console.log(`::notice::${String(t).replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 4000)}`);
 const nk = (s) => String(s || '').replace(/\(주\)|㈜|주식회사|유한회사|\(유\)|농업회사법인|\s/g, '').toLowerCase();
@@ -144,10 +147,21 @@ export async function main() {
 
   // 번지 주소 보강(의약품안전나라) — 아직 없는 것만, 최근 허가 순으로 최대 NED_MAX곳
   const need = [...showIds].filter((id) => firms[id] && !firms[id].ad && !firms[id].adTry).sort((a, b) => firms[b].p.localeCompare(firms[a].p)).slice(0, NED_MAX);
-  let nedOk = 0, nedErr = '';
-  for (const id of need) {
-    try { const ad = await nedrugAddr(firms[id].n); firms[id].adTry = today; if (ad) { firms[id].ad = ad; nedOk++; } } catch (e) { nedErr = e.message; break; }
+  // 그 밖의 업체도 조금씩 채운다 — 근처 업체 지도가 번지 주소를 쓰기 때문(허가 최신 순)
+  const backfill = live.map(([id]) => id)
+    .filter((id) => !showIds.has(id) && firms[id] && !firms[id].ad && !firms[id].adTry)
+    .sort((a, b) => firms[b].p.localeCompare(firms[a].p)).slice(0, NED_BACKFILL);
+  let nedOk = 0, nedErr = '', stop = false;
+  const fill = async (id) => {
+    if (stop) return;
+    try { const ad = await nedrugAddr(firms[id].n); firms[id].adTry = today; if (ad) { firms[id].ad = ad; nedOk++; } }
+    catch (e) { nedErr = e.message; stop = true; }      // 사이트가 막히면 더 두드리지 않는다
+  };
+  for (const id of need) await fill(id);
+  for (let i = 0; i < backfill.length && !stop; i += 4) {
+    await Promise.all(backfill.slice(i, i + 4).map(fill));
   }
+  const adN = live.filter(([, r]) => r.ad).length;
 
   // 국민연금(가장 최근 월간 스냅숏) · 채용공고(jobs.json)
   const snaps = fs.readdirSync(OUT).filter((f) => /^snap-\d{4}-\d{2}\.json$/.test(f)).sort();
@@ -204,7 +218,7 @@ export async function main() {
   fs.writeFileSync(path.join(OUT, 'makers.json'), JSON.stringify(doc));
   notice(`제조업 명단 ${live.length}곳${base ? ' (첫 실행 — 기준 명단 저장)' : ` · 지난 조회(${prev.at}) 대비 추가 ${addedReal.length} · 빠짐 ${removedReal.length} · 상호변경 ${renames.length}`}`
     + ` · CGMP 목록 ${gmp ? `${gmp.n}건(전체 명단 중 적합 ${live.filter(([, r]) => gmp.names.has(nk(r.n))).length}곳 · 신규 중 ${recent.filter((r) => r.gmp).length}곳)` : '조회 실패'}`
-    + ` · 최근 30일 허가 ${doc.counts.d30} · 번지 보강 ${nedOk}/${need.length}${nedErr ? ` (중단: ${nedErr})` : ''}`);
+    + ` · 최근 30일 허가 ${doc.counts.d30} · 번지 보강 이번 ${nedOk}곳(신규 ${need.length} + 메우기 ${backfill.length} 시도) · 누적 ${adN}/${live.length}${nedErr ? ` (중단: ${nedErr})` : ''}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main().catch((e) => { console.error(e); notice(`제조업 명단 갱신 실패: ${e.message}`); process.exit(1); });

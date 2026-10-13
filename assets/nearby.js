@@ -29,6 +29,7 @@ const NB = {
   GEO_BATCH: 30,          // 먼 단계(같은 시·도 이상) 업체 좌표 변환 — 한 번에 이만큼
   NEAR_CAP: 150,          // 같은 시·군 이내는 자동으로 전부 확인하되 안전 상한
   NAME_RETRY: 12,         // 번지가 안 맞은 가까운 업체를 이름으로 다시 찾는 수
+  NED_CAP: 14,            // 같은 시·군 업체 중 번지 주소를 의약품안전나라에서 받아 볼 수
   SGG_CAP: 40,            // 한 번에 중심 좌표를 구할 시·군 수(결과는 저장돼 다음부터 요청 없음)
   MFDS_PAGE: 500,
   MFDS_MAX_PAGES: 12,
@@ -204,6 +205,18 @@ function nbMkFields(r) {
     pdate: pickByKey(r, /(PERMIT|PRMISN|허가|등록)_?(DATE|DT|DE|일)/i),
     raw: r };   // 원 레코드 — 사전검증 조회가 상호 필터로 못 찾을 때 이 명단에서 집어 쓴다(app.js makerLookup)
 }
+// 주간 집계가 만든 전체 제조업 명단 — 같은 서버의 정적 파일이라 한 번만 읽으면 된다.
+// 없으면(아직 집계 전이거나 파일로 연 화면) 공개 API로만 간다.
+let _nbLedP = null;
+function nbLedger() {
+  if (_nbLedP) return _nbLedP;
+  _nbLedP = fetch(`data/growth/makers-ledger.json?v=${typeof BUILD === 'number' ? BUILD : 0}`, { cache: 'default' })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => (j && j.firms ? Object.values(j.firms).filter((r) => r && !r.g && r.n) : null))
+    .catch(() => null);
+  return _nbLedP;
+}
+
 function nbMfdsAll() {
   if (_nbMfds) return Promise.resolve(_nbMfds);
   if (_nbMfdsP) return _nbMfdsP;
@@ -222,15 +235,32 @@ function nbMfdsAll() {
       catch { failed++; return []; }
     });
     got.forEach((g) => raw.push(...g));
-    const full = !failed && (total != null ? raw.length >= total * 0.98 : raw.length < NB.MFDS_PAGE);
-    // 같은 업체·같은 주소가 여러 번 실린 경우 한 건으로
+    // 공개 API는 제조·책임판매·맞춤형이 섞여 3.3만 건이라, 앞 12쪽(6,000건)만 받으면 제조업체는
+    // 4,319곳 중 1,263곳(29%)만 들어온다. 실제로 남원 한미화장품(전체 26,160번째)이 빠져 있었다.
+    // 그래서 주간 집계가 만들어 둔 전체 명단(data/growth/makers-ledger.json)을 함께 읽어 합친다.
+    const led = await nbLedger();
     const seen = new Set(); const list = [];
-    raw.map(nbMkFields).forEach((x) => {
+    const push = (x) => {
       if (!x.nm || !x.key) return;
       const k = `${x.key}|${String(x.addr || '').replace(/\s/g, '')}`;
       if (seen.has(k)) return; seen.add(k); list.push(x);
+    };
+    raw.map(nbMkFields).forEach(push);
+    // 명단에 있고 API 응답엔 없던 업체를 채운다(상호 기준). 번지 주소(ad)가 있으면 그걸 쓴다.
+    const byKey = new Set(list.map((x) => x.key));
+    let added = 0;
+    (led || []).forEach((r) => {
+      const key = nbNorm(r.n);
+      if (!key || byKey.has(key)) return;
+      const addr = r.ad || r.a;
+      push({ nm: r.n, key, addr, parts: nbAddrParts(addr), rep: null, lcns: null, pdate: r.p, bz: r.bz, fromLedger: true, raw: null });
+      added++;
     });
-    _nbMfds = { list, total, full, failed };
+    // 명단에만 있던 업체에도 번지 주소가 있으면 API 쪽 레코드에 얹는다
+    const ledAd = new Map((led || []).filter((r) => r.ad).map((r) => [nbNorm(r.n), r.ad]));
+    list.forEach((x) => { if (!isFullAddr(x.addr) && ledAd.has(x.key)) { x.addr = ledAd.get(x.key); x.parts = nbAddrParts(x.addr); } });
+    const full = (!failed && (total != null ? raw.length >= total * 0.98 : raw.length < NB.MFDS_PAGE)) || !!(led && led.length);
+    _nbMfds = { list, total, full, failed, ledger: led ? led.length : 0, added };
     return _nbMfds;
   })().finally(() => { _nbMfdsP = null; });
   return _nbMfdsP;
@@ -369,12 +399,49 @@ async function nbNameRetry(st) {
     v.tier = nbTier(st.loc, v.parts);
   });
 }
+// ── 번지 주소 보강(의약품안전나라) ──
+// 식약처 공개 명단의 주소는 '전북특별자치도 남원시'처럼 시·군까지다. 그 상태로는 지도에 못 찍고
+// 거리도 안 나온다. 사전검증 리포트가 쓰는 의약품안전나라 업체정보에서 번지까지 있는 제조소
+// 주소를 받아 채운다(같은 시·군 업체만, 한 번에 NED_CAP곳). 받은 주소는 브라우저에 보관한다.
+const NB_NED_KEY = 'vs_nb_ned|';
+function nbNedCache(key) {
+  try { const o = JSON.parse(localStorage.getItem(NB_NED_KEY + key) || 'null'); if (o && Date.now() - o.at < 30 * 864e5) return o; } catch { /* 없음 */ }
+  return null;
+}
+async function nbNedAddr(name, key) {
+  const c = nbNedCache(key);
+  if (c) return c.addr || null;
+  let addr = null;
+  try {
+    const r = typeof nedrugMaker === 'function' ? await nedrugMaker(name) : null;
+    if (r && r.found && r.sites && r.sites.length) addr = r.sites[0].addr || null;
+  } catch { /* 실패도 기록해 두 번 묻지 않는다 */ }
+  try { localStorage.setItem(NB_NED_KEY + key, JSON.stringify({ at: Date.now(), addr })); } catch { /* 저장 못 해도 동작 */ }
+  return addr;
+}
+async function nbNedRound(st) {
+  if (!getProxy()) return;
+  const need = st.items.filter((v) => v.tier <= 1 && !nbPlaced(v) && !v.nedTried && !isFullAddr(v.addr)).slice(0, NB.NED_CAP);
+  if (!need.length) return;
+  st.phase = `제조소 번지 주소를 의약품안전나라에서 확인하는 중 (${need.length}곳)`;
+  nbPaint(st);
+  await mapLimit(need, 2, async (v) => {
+    v.nedTried = true;
+    const addr = await nbNedAddr(v.name, v.key);
+    if (!addr || !isFullAddr(addr)) return;
+    v.addr = addr; v.parts = nbAddrParts(addr); v.tier = nbTier(st.loc, v.parts); v.nedAddr = true;
+    const g = await nbGeocode(addr, { sido: v.parts.sido, sgg: v.parts.sgg }).catch(() => null);
+    if (g) nbApplyGeo(st, v, g);
+  });
+}
+
 // 한 차례: 저장된 좌표 먼저 → 같은 시·군 이내 전부 → 먼 단계 가까운 시·군부터 GEO_BATCH곳
 async function nbGeocodeRound(st) {
   const pending = () => st.items.filter((v) => v.geo === 'pending');
   for (const v of pending()) { const c = nbGeoGet(v.addr); if (c) nbApplyGeo(st, v, c); }
   const near = pending().filter((v) => v.tier <= 1).slice(0, NB.NEAR_CAP);
   if (near.length) await nbGeocodeList(st, near);
+  await nbNedRound(st);          // 시·군까지만 있는 주소를 번지까지 채운다
   await nbNameRetry(st);
   st.phase = '먼 지역은 시·군 단위로 거리를 가늠하는 중'; nbPaint(st);
   await nbRankFar(st);
@@ -430,6 +497,7 @@ function nbFiltered(st) {
 }
 const nbCls = (v) => (v.cgmp ? 'gmp' : 'reg');
 function nbGeoText(v) {
+  if (v.nedAddr && nbPlaced(v)) return '의약품안전나라 제조소 주소를 번지까지 확인';
   return v.geo === 'exact' ? '식약처 등록 주소를 번지까지 확인'
     : v.geo === 'name' ? '등록 주소가 번지까지 안 맞아 업체 이름·시군으로 지도에서 찾음'
       : v.geo === 'mismatch' ? `등록 주소를 좌표로 바꾸니 다른 지역(${v.geoNote || '?'})이 나와 지도에 표시하지 않음`
