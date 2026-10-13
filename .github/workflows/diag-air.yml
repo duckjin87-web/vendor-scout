@@ -27,12 +27,19 @@ jobs:
             try { const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); const t = await r.text(); return `${path || '/'}${q ? ` ${decodeURIComponent(q).slice(0, 60)}` : ''} → ${r.status} ${t.replace(/\s+/g, ' ').slice(0, 700)}`; }
             catch (e) { return `${path} 실패 ${e.message}`; }
           };
-          for (const p of ['', '/info', '/getInfo', '/list']) out.push(await call(p));
-          n(`[경로] ${out.splice(0).join(' ‖ ')}`);
-          // 이름·주소로 거르기 — 흔한 인자 이름을 차례로
-          const qs = ['&cond%5BBPLC_NM%3A%3ALIKE%5D=' + encodeURIComponent('코스맥스'), '&bplcNm=' + encodeURIComponent('코스맥스'),
-            '&cond%5BROAD_NM_ADDR%3A%3ALIKE%5D=' + encodeURIComponent('제약공단2길'), '&cond%5BLOTNO_ADDR%3A%3ALIKE%5D=' + encodeURIComponent('향남읍')];
-          for (const q of qs) out.push(await call('/info', q));
-          n(`[검색] ${out.splice(0).join(' ‖ ')}`);
+          const pick = (t) => { try { const j = JSON.parse(t); let it = j.response.body.items.item; it = Array.isArray(it) ? it : [it];
+              return `total ${j.response.body.totalCount} · ` + it.filter(Boolean).slice(0, 4).map((x) => `{${['BPLC_NM', 'BRNO', 'BTP_NM', 'BZSTAT_SE_NM', 'PRMN_PRDT_NM', 'DTL_SALS_STTS_NM', 'LCPMT_YMD', 'CLSBIZ_YMD', 'EMSN_FCLT_ANL_OPRTNG_DAY_CNT', 'EMSN_FCLT_WRK_HR', 'ROAD_NM_ADDR'].map((k) => `${k}=${x[k] || ''}`).join(' ')}}`).join(' '); } catch { return t.replace(/\s+/g, ' ').slice(0, 200); } };
+          for (const [nm, bz] of [['리더스코스메틱', '1348112735'], ['코스맥스', '1438119635'], ['코빅스', '1328170229'], ['미스킨', '1278631118'], ['한국콜마', '3078102816']]) {
+            for (const q of [`&cond%5BBRNO%3A%3AEQ%5D=${bz}`]) {
+              const u = `${B}/info?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=10&returnType=json${q}`;
+              try { const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); out.push(`${nm} → ${r.status} ${pick(await r.text())}`); } catch (e) { out.push(`${nm} 실패 ${e.message}`); }
+            }
+          }
+          n(`[사업자번호] ${out.splice(0).join(' ‖ ')}`);
+          for (const q of ['&cond%5BBZSTAT_SE_NM%3A%3ALIKE%5D=' + encodeURIComponent('화장품'), '&cond%5BBPLC_NM%3A%3ALIKE%5D=' + encodeURIComponent('리더스코스메틱')]) {
+            const u = `${B}/info?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=5&returnType=json${q}`;
+            try { const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); out.push(`${decodeURIComponent(q).slice(6, 50)} → ${r.status} ${pick(await r.text())}`); } catch (e) { out.push(`실패 ${e.message}`); }
+          }
+          n(`[업태·상호] ${out.splice(0).join(' ‖ ')}`);
           JS
           node d.mjs
