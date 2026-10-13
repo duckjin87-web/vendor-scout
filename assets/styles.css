@@ -1880,17 +1880,46 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .svl-io { display: flex; gap: 6px; }
 .svl-hint { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--muted); }
 
-/* ── 관련기사 탭(업계 소식 전체 목록) ── */
+/* ── 관련기사 탭 ── 제목만 보이고, 누르면 펼쳐져 요약·원문 읽기 */
 .trp { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 16px 18px; }
 .trp-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .trp-h b { font-size: 16px; font-weight: 800; }
 .trp-h small { flex: 1; font-size: 12px; color: var(--muted); }
 .trp-list { list-style: none; margin: 4px 0 0; padding: 0; }
 .trp-list li { border-bottom: 1px solid var(--rule); }
-.trp-list a { display: block; padding: 11px 6px; color: var(--text); text-decoration: none; border-radius: 6px; }
-.trp-list a:hover { background: var(--panel-2); }
-.trp-list b { display: block; font-size: 14.5px; font-weight: 700; line-height: 1.45; margin-top: 3px; overflow-wrap: anywhere; }
-.trp-list a:hover b { color: var(--accent); }
-.trp-d { display: block; margin-top: 3px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
-.trp-m { display: block; margin-top: 4px; font-size: 11.5px; color: var(--faint); }
-@media (max-width: 720px) { .trp { padding: 12px; } }
+.trp-t { font: inherit; width: 100%; display: flex; align-items: center; gap: 8px; padding: 11px 6px; background: none; border: 0;
+  color: var(--text); text-align: left; cursor: pointer; }
+.trp-t:hover { background: var(--panel-2); }
+.trp-t b { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
+.trp-t:hover b { color: var(--accent); }
+.trp-list li.on .trp-t b { color: var(--accent); }
+.trp-m { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+.trp-c { width: 7px; height: 7px; flex: none; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .2s; }
+.trp-list li.on .trp-c { transform: rotate(-135deg); }
+.trp-body { padding: 0 6px 14px; animation: rsecIn .22s ease both; }
+.trp-d { margin: 0 0 10px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+.trp-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.trp-err { margin: 8px 0 0; font-size: 12.5px; color: var(--risk); }
+.trp-read { margin-top: 12px; padding: 14px 16px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; max-height: 60vh; overflow-y: auto; }
+.trp-read-h { display: flex; gap: 8px; align-items: baseline; font-size: 11.5px; color: var(--muted); padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.trp-read-h a { margin-left: auto; color: var(--accent); text-decoration: none; font-weight: 600; white-space: nowrap; }
+.trp-read p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.75; overflow-wrap: anywhere; }
+.trp-read-f { color: var(--faint); font-size: 11.5px; border-top: 1px dashed var(--border); padding-top: 8px; }
+@media (max-width: 720px) {
+  .trp { padding: 12px; }
+  .trp-t { flex-wrap: wrap; }
+  .trp-t b { flex-basis: calc(100% - 20px); }
+  .trp-m { margin-left: 0; }
+  .trp-read { max-height: none; padding: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { .trp-body { animation: none; } .trp-c { transition: none; } }
+
+/* 근처 업체 상세 — 리포트 요약과 같은 카테고리 칸, 버튼은 글자 폭에 맞춘 작은 크기 */
+.nb-selmain .nb-selname { align-items: baseline; }
+.nb-selmain .nb-seladdr { flex-basis: 100%; margin-top: 0; font-size: 12.5px; color: var(--muted); }
+.nb-chips { margin-top: 10px; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); }
+.nb-chips .vch b { white-space: normal; overflow: visible; text-overflow: clip; font-size: 13px; line-height: 1.4; }
+.nb-sheet .nb-selacts { width: auto; align-items: stretch; }
+.nb-sheet .nb-selacts .nb-btn { white-space: nowrap; }
+@media (max-width: 980px) { .nb-sheet .nb-selacts { width: auto; } }
+@media (max-width: 720px) { .nb-sheet .nb-selacts > * { flex: 0 1 auto; } }

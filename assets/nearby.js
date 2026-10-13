@@ -198,7 +198,10 @@ function nbMkFields(r) {
   const nm = pickByKey(r, /BSSH_NM|CMPNY_NM|ENTRPS_?NM|ENTP_?NAME|업체|업소|회사|제조사/i) || pickByKey(r, /_NM$/i);
   const addr = joinAddrFields(r) || pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i);
   return { nm, key: nbNorm(nm), addr, parts: nbAddrParts(addr),
-    rep: pickByKey(r, /PRSNL|PRSDNT|RPRSNTV|REPRE|대표/i), lcns: pickByKey(r, /LCNS_?NO|PERMIT|허가번호|PRMISN_?NO/i),
+    rep: pickByKey(r, /PRSNL|PRSDNT|RPRSNTV|REPRE|대표/i),
+    // 허가번호와 허가일을 가른다 — ENTP_PERMIT_DATE가 '허가번호' 자리에 들어가 날짜가 번호처럼 보였다
+    lcns: pickByKey(r, /(LCNS_?NO|허가번호|PRMISN_?NO|PERMIT_?NO)(?!.*(DATE|DT|DE))/i),
+    pdate: pickByKey(r, /(PERMIT|PRMISN|허가|등록)_?(DATE|DT|DE|일)/i),
     raw: r };   // 원 레코드 — 사전검증 조회가 상호 필터로 못 찾을 때 이 명단에서 집어 쓴다(app.js makerLookup)
 }
 function nbMfdsAll() {
@@ -310,7 +313,7 @@ function nbSeed(st) {
     // '코스맥스'로 조회했다고 먼 곳의 '코스맥스엔비티'까지 지우면 안 된다.
     if (st.vendorKey && (r.key === st.vendorKey || (tier <= 1 && nbNameHit(r.key, st.vendorKey)))) return;
     st.items.push({ id: `m${i}`, name: r.nm, key: r.key, addr: r.addr, parts: { ...r.parts }, tier,
-      lat: null, lng: null, km: null, geo: 'pending', phone: '', url: '', lcns: r.lcns, rep: r.rep,
+      lat: null, lng: null, km: null, geo: 'pending', phone: '', url: '', lcns: r.lcns, pdate: r.pdate, rep: r.rep,
       cgmp: st.gmp ? st.gmp.has(r.key) : false });
   });
 }
@@ -503,38 +506,33 @@ function nbSheetHtml(st) {
   const mapUrl = s.url || (pl
     ? `https://map.kakao.com/link/map/${encodeURIComponent(s.name.replace(/[,/]/g, ' '))},${s.lat},${s.lng}`
     : `https://map.kakao.com/link/search/${encodeURIComponent(s.addr || s.name)}`);
-  // 이동: 직선 · 추정 → 실측이 오면 바꿔 적는다
-  let move = '—';
-  if (pl && s.km < NB_SAME_KM) move = '기점과 같은 위치(같은 부지·건물로 보입니다)';
-  else if (pl) {
-    const est = `직선 ${nbFmtKm(s.km)}km · 차량 약 ${nbFmtMin(nbEstMin(s.km))}(추정)`;
-    move = s.drive && s.drive.min != null
-      ? `<b>차량 ${nbFmtMin(s.drive.min)}</b> · 도로 ${nbFmtKm(s.drive.km)}km${s.drive.toll ? ` · 통행료 ${s.drive.toll.toLocaleString()}원` : ''}<small>카카오내비 실측 · ${esc(est)}</small>`
-      : s.driveP ? `${esc(est)}<small>카카오내비 실측 확인 중…</small>`
-        : s.drive && s.drive.err ? `${esc(est)}<small>실측 불가(${esc(s.drive.err)}) — 추정치입니다</small>` : esc(est);
-  }
   const mapAddrRow = s.mapAddr && s.mapAddr.replace(/\s/g, '') !== String(s.addr || '').replace(/\s/g, '')
-    ? `<dt>지도 위치</dt><dd>${esc(s.mapAddr)}</dd>` : '';
-  h += `<div class="nb-selmain"><div class="nb-selhead"><div class="nb-selname"><b>${esc(s.name)}</b><span class="nb-badge reg">제조업 허가</span>${s.cgmp ? '<span class="nb-badge gmp">CGMP</span>' : ''}</div>`
+    ? `지도 위치 ${esc(s.mapAddr)}` : '';
+  const pdate = String(s.pdate || '').replace(/\D/g, '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') || '';
+  const chip = (k, v, t, sub) => `<div class="vch vch-${t || 'num'}"><i>${esc(k)}</i><b>${v}${sub ? `<small>${sub}</small>` : ''}</b></div>`;
+  // 사전검증 리포트 요약처럼 '카테고리 칸'에 값을 넣는다 — 줄줄이 적힌 정의 목록보다 한눈에 읽힌다
+  const moveMain = pl ? (s.km < NB_SAME_KM ? '같은 위치' : (s.drive && s.drive.min != null ? `차량 ${nbFmtMin(s.drive.min)}` : `약 ${nbFmtMin(nbEstMin(s.km))}`)) : '미확인';
+  const moveSub = pl ? (s.km < NB_SAME_KM ? '같은 부지·건물' : (s.drive && s.drive.min != null ? `도로 ${nbFmtKm(s.drive.km)}km · 실측` : (s.driveP ? '실측 확인 중…' : '추정'))) : '';
+  h += `<div class="nb-selmain"><div class="nb-selhead">`
+    + `<div class="nb-selname"><b>${esc(s.name)}</b><span class="nb-badge reg">제조업 허가</span>${s.cgmp ? '<span class="nb-badge gmp">CGMP</span>' : ''}`
+    + `<span class="nb-seladdr">${esc(s.addr || '')}</span></div>`
     + `<div class="nb-seld">${pl ? `${nbFmtKm(s.km)}<small>km</small>` : '<small>거리 미확인</small>'}</div></div>`
-    + `<div class="nb-seladdr">${esc(s.addr || '')}</div>`
-    + `<dl class="nb-selbox">`
-    + `<dt>이동</dt><dd class="nb-move">${move}</dd>`
-    + `<dt>허가</dt><dd>${esc(s.lcns ? `식약처 화장품제조업 ${s.lcns}` : '식약처 화장품제조업 명단 등재')}</dd>`
-    + (s.rep ? `<dt>대표자</dt><dd>${esc(s.rep)}</dd>` : '')
-    + `<dt>CGMP</dt><dd>${s.cgmp ? '적합업소' : (st.gmp ? '명단에 없음' : '확인 불가')}</dd>`
-    + `<dt>전화</dt><dd>${tel}</dd>`
-    + `<dt>지역</dt><dd>${esc(nbTierLabel(st, s.tier))}</dd>`
-    + mapAddrRow
-    + `<dt>위치 근거</dt><dd class="${pl ? '' : 'unk'}">${esc(nbGeoText(s))}</dd>`
-    + `</dl>`
+    + '<div class="vd-chips nb-chips">'
+    + chip('이동', esc(moveMain), pl ? 'num' : 'na', esc(moveSub))
+    + chip('CGMP', s.cgmp ? '적합' : (st.gmp ? '미등재' : '확인 불가'), s.cgmp ? 'good' : 'na')
+    + chip('허가', s.lcns ? esc(s.lcns) : (pdate || '명단 등재'), 'num', s.lcns ? '식약처 화장품제조업' : (pdate ? '허가일 · 식약처' : '식약처 제조업 명단'))
+    + (s.rep ? chip('대표자', esc(s.rep), 'num') : '')
+    + chip('전화', tel, s.phone ? 'num' : 'na')
+    + chip('지역', esc(nbTierLabel(st, s.tier)), 'num')
+    + chip('위치 근거', esc(nbGeoText(s)), pl ? 'num' : 'na', mapAddrRow)
+    + '</div>'
     + `</div><div class="nb-selacts">`
-    + (pl ? `<button type="button" class="nb-btn${st.route.includes(s.id) ? '' : ' blue'}" data-act="route" data-id="${esc(s.id)}">${st.route.includes(s.id) ? '동선에서 빼기' : '동선에 추가'}</button>`
-      : `<button type="button" class="nb-btn" disabled title="위치가 번지까지 확인되지 않아 동선에 넣지 않습니다">동선에 추가 불가</button>`)
-    + (pl ? `<a class="nb-btn" href="${esc(nbKakaoRoute(st, [s]))}" target="_blank" rel="noopener">길찾기</a>`
-      : `<button type="button" class="nb-btn" disabled title="위치가 번지까지 확인되지 않았습니다">길찾기</button>`)
-    + `<a class="nb-btn" href="${esc(mapUrl)}" target="_blank" rel="noopener">카카오맵</a>`
-    + `<button type="button" class="nb-btn dark" data-act="report" data-id="${esc(s.id)}">사전검증 리포트</button>`
+    + (pl ? `<button type="button" class="nb-btn sm${st.route.includes(s.id) ? '' : ' blue'}" data-act="route" data-id="${esc(s.id)}">${st.route.includes(s.id) ? '동선에서 빼기' : '동선에 추가'}</button>`
+      : `<button type="button" class="nb-btn sm" disabled title="위치가 번지까지 확인되지 않아 동선에 넣지 않습니다">동선에 추가 불가</button>`)
+    + (pl ? `<a class="nb-btn sm" href="${esc(nbKakaoRoute(st, [s]))}" target="_blank" rel="noopener">길찾기</a>`
+      : `<button type="button" class="nb-btn sm" disabled title="위치가 번지까지 확인되지 않았습니다">길찾기</button>`)
+    + `<a class="nb-btn sm" href="${esc(mapUrl)}" target="_blank" rel="noopener">카카오맵</a>`
+    + `<button type="button" class="nb-btn sm dark" data-act="report" data-id="${esc(s.id)}">사전검증 리포트</button>`
     + `</div>`;
   return h;
 }
@@ -708,10 +706,9 @@ function nbDrawKakao(st, box) {
     st.kmapBox = box;
     st.kobjs = [];
     st.kmap.addControl(new K.ZoomControl(), K.ControlPosition.RIGHT);
-    // 페이지를 스크롤하다 지도가 확대되는 일을 막는다 — 지도를 한 번 누른 뒤에만 휠 확대
-    st.kmap.setZoomable(false);
-    K.event.addListener(st.kmap, 'click', () => st.kmap.setZoomable(true));
-    box.addEventListener('mouseleave', () => st.kmap && st.kmap.setZoomable(false));
+    // 지도 위에서는 휠로 바로 확대·축소한다(사용자 요청). 지도가 화면을 가득 채우지 않아
+    // 페이지 스크롤이 막히는 일은 적고, 지도 밖으로 커서를 빼면 그대로 페이지가 스크롤된다.
+    st.kmap.setZoomable(true);
     st.drawnRadius = null;
   }
   const map = st.kmap;
@@ -796,13 +793,10 @@ function nbDrawMap(st) {
   if (!st.map || st.map.getContainer() !== box) {
     if (st.map) { try { st.map.remove(); } catch {} }
     // 정수 줌만 쓰면 반경 링이 지도의 절반만 채우고 가운데에 핀이 몰린다 — 1/4 단계로 맞춘다
-    st.map = L.map(box, { zoomControl: true, scrollWheelZoom: false, attributionControl: true, zoomSnap: 0.25, zoomDelta: 0.5 });
+    st.map = L.map(box, { zoomControl: true, scrollWheelZoom: true, attributionControl: true, zoomSnap: 0.25, zoomDelta: 0.5 });
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
     }).addTo(st.map);
-    // 페이지를 스크롤하다 지도가 확대되는 일을 막는다 — 지도를 한 번 누른 뒤에만 휠 확대
-    st.map.on('click', () => st.map.scrollWheelZoom.enable());
-    st.map.on('mouseout', () => st.map.scrollWheelZoom.disable());
     // 레이어보다 시점이 먼저다 — 시점 없는 지도에 원을 올리면 투영을 못 해 예외가 난다
     st.map.setView(c, 11);
     st.layer = L.layerGroup().addTo(st.map);
