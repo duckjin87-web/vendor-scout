@@ -20,25 +20,19 @@ jobs:
           cat > d.mjs <<'JS'
           const K = process.env.KEY;
           const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3500));
-          const UA = { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) Chrome/124 Safari/537.36' };
-          const urls = new Set();
-          const grab = (t) => [...t.matchAll(/https?:\/\/apis\.data\.go\.kr\/[A-Za-z0-9_\/.\-]+/g)].forEach((m) => urls.add(m[0].replace(/[.\/]+$/, '')));
-          const srcs = [];
-          for (const u of ['https://www.data.go.kr/dcat/metadata/15154973', 'https://www.data.go.kr/biz/dcat/metadata/15154973.do', 'https://www.data.go.kr/catalog/15154973/openapi.json', 'https://data.go.kr/catalog/15154973/openapi.json']) {
-            try { const r = await fetch(u, { headers: UA, signal: AbortSignal.timeout(20000) }); const t = await r.text(); grab(t); srcs.push(`${u.replace(/^https?:\/\/(www\.)?data\.go\.kr/, '')} ${r.status} ${t.length}B ${t.replace(/\s+/g, ' ').slice(0, 160)}`); } catch (e) { srcs.push(`${u} 실패 ${e.message}`); }
-          }
-          n(`[메타] ${srcs.join(' ‖ ')} ‖ 찾은 요청주소: ${[...urls].join(' ')}`);
+          const B = 'https://apis.data.go.kr/1741000/air_pollution_facility_installation';
           const out = [];
-          for (const base of [...urls].slice(0, 6)) {
-            const bases = /\/info$|\/get/i.test(base) ? [base] : [base, `${base}/info`];
-            for (const b of bases) {
-              try {
-                const u = `${b}?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=2&returnType=json&type=json`;
-                const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); const t = await r.text();
-                out.push(`${b.replace('https://apis.data.go.kr', '')} → ${r.status} ${t.replace(/\s+/g, ' ').slice(0, 900)}`);
-              } catch (e) { out.push(`${b} 실패 ${e.message}`); }
-            }
-          }
-          n(`[호출] ${out.join(' ‖ ') || '요청주소를 못 찾음'}`);
+          const call = async (path, q) => {
+            const u = `${B}${path}?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=3&returnType=json&type=json${q || ''}`;
+            try { const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); const t = await r.text(); return `${path || '/'}${q ? ` ${decodeURIComponent(q).slice(0, 60)}` : ''} → ${r.status} ${t.replace(/\s+/g, ' ').slice(0, 700)}`; }
+            catch (e) { return `${path} 실패 ${e.message}`; }
+          };
+          for (const p of ['', '/info', '/getInfo', '/list']) out.push(await call(p));
+          n(`[경로] ${out.splice(0).join(' ‖ ')}`);
+          // 이름·주소로 거르기 — 흔한 인자 이름을 차례로
+          const qs = ['&cond%5BBPLC_NM%3A%3ALIKE%5D=' + encodeURIComponent('코스맥스'), '&bplcNm=' + encodeURIComponent('코스맥스'),
+            '&cond%5BROAD_NM_ADDR%3A%3ALIKE%5D=' + encodeURIComponent('제약공단2길'), '&cond%5BLOTNO_ADDR%3A%3ALIKE%5D=' + encodeURIComponent('향남읍')];
+          for (const q of qs) out.push(await call('/info', q));
+          n(`[검색] ${out.splice(0).join(' ‖ ')}`);
           JS
           node d.mjs
