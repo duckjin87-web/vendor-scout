@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 180;
+const BUILD = 181;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -5810,6 +5810,47 @@ function mountTrend(root) {
     }, 7000);
   }).catch(() => { if (box.isConnected) box.remove(); });
 }
+
+// ── 관련기사 탭 ── 로딩 화면에 넘겨 보이던 업계 소식을 전체 목록으로 다시 본다(같은 자료·3시간 보관).
+// 주제로 거를 수 있고, 다시 받기를 누르면 보관분을 버리고 새로 조회한다.
+function mountTrendPane(pane) {
+  if (!pane) return;
+  const st = { topic: null, busy: false };
+  const paint = (items, err) => {
+    if (!pane.isConnected) return;
+    if (err) { pane.innerHTML = `<div class="trp"><div class="gr-empty">최신 소식을 불러오지 못했습니다 — ${esc(err)}</div></div>`; return; }
+    if (!items) { pane.innerHTML = '<div class="trp"><div class="gr-empty">소식을 불러오는 중…</div></div>'; return; }
+    if (!items.length) { pane.innerHTML = '<div class="trp"><div class="gr-empty">최근 화장품 제조업 기사를 찾지 못했습니다.</div></div>'; return; }
+    const cnt = {};
+    items.forEach((x) => { cnt[x.topic] = (cnt[x.topic] || 0) + 1; });
+    if (st.topic && !cnt[st.topic]) st.topic = null;
+    const rows = st.topic ? items.filter((x) => x.topic === st.topic) : items;
+    pane.innerHTML = '<div class="trp">'
+      + `<div class="trp-h"><b>화장품 제조업 최신 소식</b><small>네이버 뉴스 · ODM·제조·K뷰티 수출·트렌드·원료 검색 · 기사 ${items.length}건</small>`
+      + `<button type="button" class="nb-btn sm" data-trp-reload${st.busy ? ' disabled' : ''}>${st.busy ? '불러오는 중…' : '다시 받기'}</button></div>`
+      + `<div class="mk-chips"><button type="button" class="mk-chip${st.topic ? '' : ' on'}" data-trp-topic="">전체 ${items.length}</button>`
+      + Object.entries(cnt).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<button type="button" class="mk-chip${st.topic === k ? ' on' : ''}" data-trp-topic="${esc(k)}">${esc(k)} ${v}</button>`).join('')
+      + '</div><ul class="trp-list">'
+      + rows.map((a) => `<li><a href="${esc(a.link)}" target="_blank" rel="noopener"><span class="tr-topic sm">${esc(a.topic)}</span>`
+        + `<b>${esc(a.title)}</b>${a.desc ? `<span class="trp-d">${esc(a.desc)}</span>` : ''}`
+        + `<span class="trp-m">${esc([a.host, trendWhen(a.at)].filter(Boolean).join(' · '))} · 원문 읽기 ↗</span></a></li>`).join('')
+      + '</ul><p class="gr-foot">업체별 기사가 아니라 <b>업종 전체</b> 소식입니다. 이 업체 관련 기사는 「사전검증 리포트」 탭의 「최근 활동 · 웹 자료」에서 봅니다. '
+      + '받아 둔 소식은 3시간 동안 다시 쓰고, 「다시 받기」를 누르면 새로 조회합니다.</p></div>';
+  };
+  const load = (fresh) => {
+    if (fresh) { try { localStorage.removeItem(TREND_KEY); } catch { /* 지우지 못해도 조회는 된다 */ } }
+    st.busy = !!fresh;
+    trendNews().then((items) => { st.busy = false; paint(items); }).catch((e) => { st.busy = false; paint(null, e.message); });
+  };
+  pane.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-trp-topic]');
+    if (t) { st.topic = t.dataset.trpTopic || null; trendNews().then(paint).catch(() => {}); return; }
+    if (e.target.closest('[data-trp-reload]') && !st.busy) { paint(null); load(true); }
+  });
+  paint(null);
+  load(false);
+}
+window.mountTrendPane = mountTrendPane;
 
 function lookup(name, bno) {
   const nm = (name || '').trim();

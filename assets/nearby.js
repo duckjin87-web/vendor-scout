@@ -495,11 +495,9 @@ function nbHeadHtml(st) {
 
 function nbSheetHtml(st) {
   const vis = nbVisible(st);
-  const placed = vis.filter(nbPlaced).length, gmpN = vis.filter((v) => v.cgmp).length;
-  let h = `<div class="nb-sum">반경 ${st.radius}km · 제조업 허가 업체 <b>${vis.length}</b>곳 (CGMP ${gmpN})`
-    + (vis.length - placed ? ` <span class="nb-sum-warn">· 위치 미확인 ${vis.length - placed}곳은 지도에 없음</span>` : '') + '</div>';
+  let h = '';
   const s = st.items.find((v) => v.id === st.sel);
-  if (!s || !vis.includes(s)) return h + `<div class="nb-empty">${vis.length ? '지도나 왼쪽 목록에서 업체를 고르면 여기에 상세가 보입니다.' : '이 반경 안에서 찾은 업체가 없습니다. 반경을 넓혀 보세요.'}</div>`;
+  if (!s || !vis.includes(s)) return `<div class="nb-empty">${vis.length ? '지도나 오른쪽 목록에서 업체를 고르면 여기에 상세가 보입니다.' : '이 반경 안에서 찾은 업체가 없습니다. 반경을 넓혀 보세요.'}</div>`;
   const tel = s.phone ? `<a href="tel:${esc(s.phone.replace(/[^\d+]/g, ''))}">${esc(s.phone)}</a>` : '—';
   const pl = nbPlaced(s);
   const mapUrl = s.url || (pl
@@ -517,7 +515,7 @@ function nbSheetHtml(st) {
   }
   const mapAddrRow = s.mapAddr && s.mapAddr.replace(/\s/g, '') !== String(s.addr || '').replace(/\s/g, '')
     ? `<dt>지도 위치</dt><dd>${esc(s.mapAddr)}</dd>` : '';
-  h += `<div class="nb-selhead"><div class="nb-selname"><b>${esc(s.name)}</b><span class="nb-badge reg">제조업 허가</span>${s.cgmp ? '<span class="nb-badge gmp">CGMP</span>' : ''}</div>`
+  h += `<div class="nb-selmain"><div class="nb-selhead"><div class="nb-selname"><b>${esc(s.name)}</b><span class="nb-badge reg">제조업 허가</span>${s.cgmp ? '<span class="nb-badge gmp">CGMP</span>' : ''}</div>`
     + `<div class="nb-seld">${pl ? `${nbFmtKm(s.km)}<small>km</small>` : '<small>거리 미확인</small>'}</div></div>`
     + `<div class="nb-seladdr">${esc(s.addr || '')}</div>`
     + `<dl class="nb-selbox">`
@@ -530,7 +528,7 @@ function nbSheetHtml(st) {
     + mapAddrRow
     + `<dt>위치 근거</dt><dd class="${pl ? '' : 'unk'}">${esc(nbGeoText(s))}</dd>`
     + `</dl>`
-    + `<div class="nb-selacts">`
+    + `</div><div class="nb-selacts">`
     + (pl ? `<button type="button" class="nb-btn${st.route.includes(s.id) ? '' : ' blue'}" data-act="route" data-id="${esc(s.id)}">${st.route.includes(s.id) ? '동선에서 빼기' : '동선에 추가'}</button>`
       : `<button type="button" class="nb-btn" disabled title="위치가 번지까지 확인되지 않아 동선에 넣지 않습니다">동선에 추가 불가</button>`)
     + (pl ? `<a class="nb-btn" href="${esc(nbKakaoRoute(st, [s]))}" target="_blank" rel="noopener">길찾기</a>`
@@ -582,13 +580,16 @@ function nbListHtml(st) {
   }
   const r = nbRouteOrder(st);
   const foot = `<div class="nb-route"><div><small>오늘 동선</small><b>기점 포함 ${r.stops.length + 1}곳</b>`
-    + (r.stops.length ? `<small>직선 합계 약 ${Math.round(r.km)}km · 차량 약 ${nbFmtMin(r.min)}(추정) · ${esc(r.stops.map((s) => s.name).join(' → '))}</small>` : '<small>업체를 고른 뒤 오른쪽 상세에서 동선에 추가하세요 (위치가 확인된 곳만)</small>')
+    + (r.stops.length ? `<small>직선 합계 약 ${Math.round(r.km)}km · 차량 약 ${nbFmtMin(r.min)}(추정) · ${esc(r.stops.map((s) => s.name).join(' → '))}</small>` : '<small>업체를 고른 뒤 아래 상세에서 동선에 추가하세요 (위치가 확인된 곳만)</small>')
     + `</div>`
     + (r.stops.length ? `<button type="button" class="nb-btn" data-act="clear">비우기</button>`
       + `<a class="nb-btn dark" href="${esc(nbKakaoRoute(st, r.stops.slice(0, 6)))}" target="_blank" rel="noopener">카카오맵 경로 보기</a>` : '')
     + `</div>`
     + (r.stops.length > 6 ? '<div class="nb-note">카카오맵 경로는 기점 포함 7곳까지만 넘깁니다 — 앞의 6곳까지 열립니다.</div>' : '');
-  return `<div class="nb-tabs" role="group" aria-label="거르기">${tabs}</div><div class="nb-rows">${body}</div>${foot}`;
+  const placed = vis.filter(nbPlaced).length, gmpN = vis.filter((v) => v.cgmp).length;
+  const sum = `<div class="nb-sum">반경 ${st.radius}km · 제조업 허가 업체 <b>${vis.length}</b>곳 (CGMP ${gmpN})`
+    + (vis.length - placed ? ` <span class="nb-sum-warn">· 위치 미확인 ${vis.length - placed}곳은 지도에 없음</span>` : '') + '</div>';
+  return `${sum}<div class="nb-tabs" role="group" aria-label="거르기">${tabs}</div><div class="nb-rows">${body}</div>${foot}`;
 }
 
 function nbStatusLine(st) {
@@ -611,8 +612,9 @@ function nbPaint(st) {
       + `<div class="nb-legend"><span><i class="nb-mark reg"></i>제조업 허가</span><span><i class="nb-mark gmp"></i>CGMP 적합</span></div>`
       + `<div class="nb-seg" role="group" aria-label="반경">${NB.RADII.map((r) => `<button type="button" data-act="radius" data-r="${r}">${r}km</button>`).join('')}</div></div>`
       // 지도를 위에 크게, 그 아래를 이분할 — 왼쪽: 업체 거르기·목록 / 오른쪽: 고른 업체 상세(한 곳에서만)
-      + `<div class="nb-body"><div class="nb-map" role="region" aria-label="근처 업체 지도"></div>`
-      + `<div class="nb-split"><div class="nb-listcol"></div><div class="nb-sheet" aria-live="polite"></div></div></div>`
+      // 위: 지도 | 업체 목록(좌우 이분할), 아래: 고른 업체 상세를 가로 전체로
+      + `<div class="nb-body"><div class="nb-top"><div class="nb-map" role="region" aria-label="근처 업체 지도"></div>`
+      + `<div class="nb-listcol"></div></div><div class="nb-sheet" aria-live="polite"></div></div>`
       + `<div class="nb-status"></div></div>`;
   }
   const title = pane.querySelector('.nb-title');
@@ -627,7 +629,9 @@ function nbPaint(st) {
     nbDrawMapSafe(st);
     return;
   }
-  pane.querySelector('.nb-sheet').innerHTML = st.center ? nbSheetHtml(st) : '<div class="nb-empty">기준 주소의 위치를 확인하는 중…</div>';
+  const sheet = pane.querySelector('.nb-sheet');
+  sheet.innerHTML = st.center ? nbSheetHtml(st) : '<div class="nb-empty">기준 주소의 위치를 확인하는 중…</div>';
+  sheet.classList.toggle('has-sel', !!sheet.querySelector('.nb-selmain'));   // 상세가 있을 때만 좌우로 나눈다
   pane.querySelector('.nb-listcol').innerHTML = nbListHtml(st);
   status.innerHTML = (st.phase ? `<span class="nb-spin" aria-hidden="true"></span>${esc(st.phase)} · ` : '') + nbStatusLine(st)
     + ' · 거리는 직선, 이동시간은 추정(업체를 고르면 카카오내비 실측)입니다';
@@ -919,7 +923,9 @@ function nbBind(st) {
     else if (act === 'pick') {
       nbSelect(st, id);
       // 좁은 화면은 상세 칸이 목록 아래에 있다 — 고르면 상세로 내려 준다
-      if (window.matchMedia && window.matchMedia('(max-width: 720px)').matches) { const sh = st.pane.querySelector('.nb-sheet'); if (sh) sh.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+      // 상세는 지도·목록 아래에 있다 — 화면 밖이면 보이는 자리로 옮겨 준다
+      const sh = st.pane.querySelector('.nb-sheet');
+      if (sh) { const r = sh.getBoundingClientRect(); if (r.top > innerHeight - 90 || r.bottom < 90) sh.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
     }
     else if (act === 'route') { st.route = st.route.includes(id) ? st.route.filter((x) => x !== id) : st.route.concat(id); nbPaint(st); }
     else if (act === 'clear') { st.route = []; nbPaint(st); }
@@ -976,6 +982,9 @@ function mountReportTabs(root, report, actions, areaEl) {
   const tabs = [{ id: 'report', label: '사전검증 리포트' }];
   if (areaEl) tabs.push({ id: 'area', label: `공장 면적${B ? ` <small class="rtab-sub">약 ${Math.round(B.arch / 3.305785).toLocaleString()}평</small>` : ''}` });
   tabs.push({ id: 'nearby', label: '근처 업체' });
+  // 조회 대기 화면에 넘겨 보이던 업계 소식을 여기서 전체 목록으로 다시 본다(프록시가 있어야 조회된다)
+  const hasTrend = typeof mountTrendPane === 'function' && typeof getProxy === 'function' && getProxy();
+  if (hasTrend) tabs.push({ id: 'news', label: '관련기사 <small class="rtab-sub">업계</small>' });
   const bar = el('div', 'rtabs');
   bar.setAttribute('role', 'tablist');
   bar.setAttribute('aria-label', '리포트 보기');
@@ -994,6 +1003,7 @@ function mountReportTabs(root, report, actions, areaEl) {
   const pane = (id, cls) => { const p = el('div', cls); p.id = `rpane-${id}`; p.setAttribute('role', 'tabpanel'); p.setAttribute('aria-labelledby', `rtab-${id}`); return p; };
   const panes = { report: pane('report', 'tabpane'), nearby: pane('nearby', 'tabpane nbpane') };
   if (areaEl) { panes.area = pane('area', 'tabpane atpane'); panes.area.appendChild(areaEl); }
+  if (hasTrend) panes.news = pane('news', 'tabpane trpane');
   let n = actions.nextSibling;
   while (n) { const nx = n.nextSibling; panes.report.appendChild(n); n = nx; }
   root.appendChild(bar);
@@ -1021,6 +1031,7 @@ function mountReportTabs(root, report, actions, areaEl) {
     }
     first = false;
     if (tab === 'nearby') nbOpen(panes.nearby, report);
+    if (tab === 'news' && !panes.news.dataset.on) { panes.news.dataset.on = '1'; mountTrendPane(panes.news); }
   };
   // 탭 이름(공장 면적 평수 등)이나 화면 폭이 바뀌면 밑줄 길이를 다시 맞춘다
   if (window.ResizeObserver) new ResizeObserver(() => placeInk(true)).observe(bar);
