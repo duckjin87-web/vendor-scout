@@ -323,7 +323,7 @@ a:hover { text-decoration: underline; }
 .newslist { list-style: none; margin: 0; padding: 0; }
 .newslist li { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .newslist li:last-child { border-bottom: none; }
-.ntitle { font-size: 13px; font-weight: 600; color: var(--accent); text-decoration: none; display: block; line-height: 1.4; }
+.ntitle { font-size: 12.5px; font-weight: 600; color: var(--accent); text-decoration: none; display: block; line-height: 1.4; }
 .ntitle:hover { text-decoration: underline; }
 .ndesc { font-size: 11.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
 .nmeta { font-size: 11px; color: var(--faint); margin-top: 2px; }
@@ -521,7 +521,7 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .ib-tag-up { background: var(--gA-bg); color: var(--gA); }
 .ib-tag-down { background: var(--risk-bg); color: var(--risk); }
 .ib-body { min-width: 0; }
-.ib-body a { font-size: 13px; font-weight: 600; color: var(--text); }
+.ib-body a { font-size: 12.5px; font-weight: 600; color: var(--text); }
 .ib-body a:hover { color: var(--accent); }
 .ib-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
 .ib-foot { margin-top: 11px; font-size: 11px; color: var(--faint); line-height: 1.5; }
@@ -646,8 +646,8 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 
 /* ═══ 체크 필요사항 통합 패널 (기준정보 / 웹) ═══ */
 .chkbox { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 15px 17px; box-shadow: var(--shadow); margin-bottom: 18px; }
-.chkbox h3 { margin: 0 0 4px; font-size: 14.5px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-.chkbox h3 b { font-weight: 700; color: var(--muted); font-size: 13px; }
+.chkbox h3 { margin: 0 0 4px; font-size: 13px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.chkbox h3 b { font-weight: 700; color: var(--muted); font-size: 11.5px; }
 .chk-sum { margin-left: auto; font-size: 11.5px; font-weight: 700; color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px; padding: 3px 11px; }
 .chk-sum.on { color: var(--risk); background: var(--risk-bg); border-color: transparent; }
 .chk-note { font-size: 11.5px; color: var(--faint); line-height: 1.5; margin-bottom: 10px; }
@@ -662,6 +662,20 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .chk-web .ot-list { list-style: none; margin: 0; padding: 0; }
 .chk-web .ot-list li { padding: 7px 0; border-top: 1px solid var(--border); }
 .chk-web .ot-list li:first-child { border-top: 0; }
+/* 웹 언급 줄 — 예전엔 .oembox 아래에 있었는데 그 상자가 없어지면서 글자 크기가 없는 채로 남아
+   혼자 16px로 커졌다. 다른 칸(13px 안팎)에 맞춰 되살린다. */
+.chk-web .ot-t { font-size: 12.5px; font-weight: 600; line-height: 1.45; }
+.chk-web .ot-t a { color: var(--accent); text-decoration: none; }
+.chk-web .ot-t a:hover { text-decoration: underline; }
+.chk-web .ot-d { font-size: 11.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+.chk-web .ot-tag { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 5px; margin-right: 6px; vertical-align: middle; }
+.chk-web .ot-tag.ot-hire { background: var(--gC-bg); color: var(--gC); }
+.chk-web .ot-tag.ot-report { background: #eef2ff; color: #4f46e5; }
+.chk-web .ot-tag.ot-oem { background: var(--gA-bg); color: var(--gA); }
+.chk-web .ot-tag.ot-etc { background: var(--panel-2); color: var(--muted); }
+.chk-web .ot-hint { font-size: 11.5px; color: var(--muted); margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--border); line-height: 1.4; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .chk-web .ot-tag.ot-report { background: #312e81; color: #c7d2fe; } }
+:root[data-theme="dark"] .chk-web .ot-tag.ot-report { background: #312e81; color: #c7d2fe; }
 .vc-ins { grid-column: 3; font-size: 11px; color: var(--accent); line-height: 1.45; margin-top: 1px; }
 @media (max-width: 640px) { .vc-ins { grid-column: 1 / -1; } }
 
