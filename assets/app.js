@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 184;
+const BUILD = 185;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1707,8 +1707,10 @@ async function refBldArea() {
 // 번지까지 있는 것을, 허가 기록 > 카카오맵 등록 장소 > 본점 > 연금 순으로, 다른 기록과 같은
 // 읍·면·동이면 가산해 고른다. 고른 주소는 건축물대장 열쇠(법정동코드+지번)로 이어진다.
 const SITE_SRC = { factory: '공장등록(산단공)', maker: '제조업 허가(식약처)', place: '카카오맵 등록 장소', hq: '본점(금융위 등기)', nps: '연금 사업장' };
-// 공장등록은 생산 설비가 실제로 있는 곳의 신고라 다른 기록과 읍·면이 달라도 앞세운다
-const SITE_W = { factory: 9, maker: 5, place: 4, hq: 2, nps: 1 };
+// 의약품안전나라 제조소(ned)는 '화장품을 만드는 곳'으로 받은 허가 주소라 가장 앞세운다.
+// 산단공 공장등록은 그 법인이 가진 아무 공장이어도 올라온다 — 리더스코스메틱은 공장등록이
+// 골판지상자 공장(안산 505호)이었고 화장품 제조소는 안성이었다. 그래서 공장등록보다 위에 둔다.
+const SITE_W = { ned: 12, factory: 9, maker: 5, place: 4, hq: 2, nps: 1 };
 const siteRegion = (p) => (p && p.sido ? [p.sido, p.sgg, p.emd].filter(Boolean).join(' ') : '');
 const sameArea = (a, p) => !!(a && a.sido && p && p.sido === a.sido && (!a.sgg || !p.sgg || a.sgg === p.sgg));
 // 카카오맵에서 상호로 등록 장소 찾기 — 공장 지역을 알면 그 시·군 안의 것만 받는다
@@ -1734,8 +1736,10 @@ async function pickFactorySite({ name, fAddr, mAddr, mAddrs, nedAddrs, hqAddr, n
     .filter(([, a]) => a && String(a).trim())
     .map(([src, addr]) => ({ src, addr: String(addr).trim() }));
   cands.forEach((c) => { c.p = nbAddrParts(c.addr); c.full = isFullAddr(c.addr); if (c.src === 'maker' && ned.has(c.addr)) c.ned = true; });
-  // 제조소가 여러 시·군에 있으면(코스맥스: 화성·평택) 그 지역들이 모두 공장 지역이다
-  const anchors = cands.filter((c) => (c.src === 'factory' || c.src === 'maker') && c.p.sido);
+  // 제조소가 여러 시·군에 있으면(코스맥스: 화성·평택) 그 지역들이 모두 공장 지역이다.
+  // 화장품 제조소(ned)가 있으면 그 지역을 기준으로 삼는다 — 공장등록이 다른 업종 공장일 수 있다.
+  const anchorsAll = cands.filter((c) => (c.src === 'factory' || c.src === 'maker') && c.p.sido);
+  const anchors = anchorsAll.some((c) => c.ned) ? anchorsAll.filter((c) => c.ned) : anchorsAll;
   const anchorC = anchors[0] || null;
   const area = anchorC ? anchorC.p : null;
   const inAnyArea = (p) => anchors.some((a) => sameArea(a.p, p));
@@ -1747,7 +1751,7 @@ async function pickFactorySite({ name, fAddr, mAddr, mAddrs, nedAddrs, hqAddr, n
   cands.forEach((c) => {
     c.inArea = area ? inAnyArea(c.p) : null;
     c.agree = cands.filter((o) => o !== c && o.p.sido && o.p.sido === c.p.sido && o.p.sgg === c.p.sgg && (!c.p.emd || !o.p.emd || o.p.emd === c.p.emd)).map((o) => o.src);
-    c.score = (c.full ? 20 : 0) + (c.inArea === false ? -100 : 0) + SITE_W[c.src] + c.agree.length * 2;
+    c.score = (c.full ? 20 : 0) + (c.inArea === false ? -100 : 0) + (c.ned ? SITE_W.ned : SITE_W[c.src]) + c.agree.length * 2;
   });
   const ranked = cands.slice().sort((a, b) => b.score - a.score);
   // 공장 지역 밖 주소는 번지가 있어도 고르지 않는다 — 지역 안 주소가 시·군까지만 있으면 그것을 쓴다
@@ -1756,14 +1760,16 @@ async function pickFactorySite({ name, fAddr, mAddr, mAddrs, nedAddrs, hqAddr, n
   const why = [];
   if (area) {
     const regs = [...new Set(anchors.map((a) => siteRegion({ sido: a.p.sido, sgg: a.p.sgg })))];
-    why.push(`허가 기록상 공장 지역 ${regs.join('·')} (${SITE_SRC[anchorC.src]})`);
+    why.push(`허가 기록상 공장 지역 ${regs.join('·')} (${anchorC.ned ? '제조업 허가(의약품안전나라)' : SITE_SRC[anchorC.src]})`);
   }
+  if (pick.ned) why.push('화장품 제조업 허가에 적힌 제조소 주소');
+  else if (pick.src === 'factory' && cands.some((c) => c.ned && c.full)) why.push('공장등록 주소 — 화장품 제조소와 다를 수 있습니다');
   const nMk = cands.filter((c) => c.src === 'maker' && c.full).length;
   if (nMk > 1) why.push(`식약처 등록 제조소 ${nMk}곳 중 하나 — 나머지는 '공장 면적' 탭에서 합산할 수 있습니다`);
   if (pick.agree.length) why.push(`${[...new Set(pick.agree.map((s) => SITE_SRC[s]))].join('·')}와 같은 지역`);
   if (!pick.full) why.push('번지까지 있는 주소가 없어 시·군 단위로만 확인');
   return {
-    addr: pick.addr, src: pick.src, label: SITE_SRC[pick.src], why: why.join(' · '),
+    addr: pick.addr, src: pick.src, label: pick.ned ? '제조업 허가(의약품안전나라)' : SITE_SRC[pick.src], why: why.join(' · '),
     area: area ? siteRegion({ sido: area.sido, sgg: area.sgg }) : null,
     place: place || null,
     cands: ranked.map((c) => ({ src: c.src, label: c.ned ? '제조업 허가(의약품안전나라)' : SITE_SRC[c.src], addr: c.addr, full: c.full,
@@ -2097,35 +2103,60 @@ async function liveLookup(name) {
     return { report: await finishLive(nameOnly || bno, { corpNm: nameOnly || bno, bzno: bno }) };
   }
 
-  let cands = await tryCorp(name);
-  // 금융위가 순수 상호로 0건이면 법인 형태 변형으로 재시도(개인→법인 전환·표기차 대응)
-  // 세 표기를 차례로 부르면 0건일 때마다 왕복이 쌓인다 — 한꺼번에 부르고 앞 순서부터 채택
-  if (!cands.length) {
-    const vs = await Promise.all([`주식회사 ${name}`, `${name} 주식회사`, `(주)${name}`].map((v) => tryCorp(v)));
-    cands = vs.find((x) => x.length) || [];
-  }
+  // ── 상호 조회 ── '(주)'를 빼고 치면 금융위가 0건을 주거나 엉뚱한 법인 하나만 주는 일이 잦다.
+  // 그래서 법인 형태를 붙인 표기까지 처음부터 함께 불러 후보를 합친다.
+  const typedCore = stripCorp(name).replace(/\s/g, '');
+  const corpQs = [name];
+  if (!/\(주\)|㈜|주식회사|유한회사|\(유\)/.test(name)) corpQs.push(`(주)${name}`, `주식회사 ${name}`, `${name} 주식회사`);
+  const corpGot = await mapLimit(corpQs, 4, (q) => tryCorp(q));
+  const pool = new Map();
+  corpGot.forEach((list) => (list || []).forEach((c) => {
+    const k = String(c.crno || c.bzno || c.corpNm);
+    if (!pool.has(k)) pool.set(k, c);
+  }));
+  // 친 이름과 얼마나 닮았는지 — 법인격(주식회사·(주))은 떼고 본다
+  const simOf = (c) => {
+    const core = stripCorp(c.corpNm || '').replace(/\s/g, '');
+    if (!core || !typedCore) return 0;
+    if (core === typedCore) return 1;
+    // 친 이름을 그대로 품고 있으면(리더스코스메틱 → 리더스코스메틱홀딩스) 길이 차만큼 낮춘다
+    if (core.includes(typedCore)) return Math.max(0.8, typedCore.length / core.length);
+    return nameSimilarity(typedCore, core);
+  };
+  let cands = [...pool.values()].map((c) => ({ ...c, _sim: simOf(c) })).sort((a2, b2) => b2._sim - a2._sim);
+  const exact = cands.filter((c) => c._sim >= 0.995);
 
-  if (cands.length === 1) return { report: await finishLive(name, cands[0]) };
-  if (cands.length >= 2) return { candidates: cands, name, source: 'fsc' };
+  // 이름이 그대로 맞는 법인이 하나면 바로 조회 — 여럿이면 고르게 한다
+  if (exact.length === 1) return { report: await finishLive(name, exact[0]) };
+  if (exact.length >= 2) return { candidates: exact, name, source: 'fsc' };
 
-  // 금융위 법인 0건(애매·개인사업자·명칭불일치) → 식약처 등록업체 기준 추천
+  // 이름이 딱 맞는 법인이 없다 — 식약처 등록업체와 묶어 '고르게' 한다.
+  // 예전에는 후보가 하나뿐이면 이름이 달라도 그대로 조회해 엉뚱한 회사 리포트가 나왔다.
   const mfdsC = await mfdsCandidates(name);
-  if (mfdsC.length >= 2) return { candidates: mfdsC, name, source: 'mfds' };
-  if (mfdsC.length === 1) return { report: await finishLiveMfds(name, mfdsC[0]) };
+  const mfdsExact = mfdsC.filter((c) => stripCorp(c.corpNm || '').replace(/\s/g, '') === typedCore);
+  if (mfdsExact.length === 1 && !cands.length) return { report: await finishLiveMfds(name, mfdsExact[0]) };
+  // 금융위 쪽은 '닮은 이름'만 남긴다(전혀 다른 회사 배제)
+  const near = cands.filter((c) => c._sim >= 0.62);
+  const merged = [...near, ...mfdsC.filter((m) => !near.some((c) => stripCorp(c.corpNm || '').replace(/\s/g, '') === stripCorp(m.corpNm || '').replace(/\s/g, '')))];
+  if (merged.length === 1 && (merged[0]._sim >= 0.95 || mfdsExact.length === 1)) {
+    const one = merged[0];
+    return one.mfds ? { report: await finishLiveMfds(name, one) } : { report: await finishLive(one.corpNm, one), similarUsed: { typed: name, picked: one.corpNm } };
+  }
+  if (merged.length) return { candidates: merged, name, source: near.length ? 'fsc' : 'mfds', similar: true };
 
   // ── 유사 상호 추천 ──
   // 정확히 같은 이름이 없다고 바로 포기하지 않는다. 표기를 조금 다르게 쳤을 뿐인 경우가 많다.
   // 앞 두세 글자로 후보를 넓게 받아, 표기 흔들림을 접은 유사도로 골라 제시한다.
-  const core = stripCorp(name).replace(/\s/g, '');
+  const core = typedCore;
   if (core.length >= 3) {
-    const pool = new Map();
+    const seedPool = new Map();
     const seeds = [...new Set([core.slice(0, 2), core.slice(0, 3), core.slice(0, 4)])].filter((x) => x.length >= 2);
     const got = await mapLimit(seeds, 3, (q) => tryCorp(q));
     got.forEach((list) => (list || []).forEach((c) => {
       const k = String(c.crno || c.bzno || c.corpNm);
-      if (!pool.has(k)) pool.set(k, c);
+      if (!seedPool.has(k)) seedPool.set(k, c);
     }));
-    const near = [...pool.values()]
+    const near = [...seedPool.values()]
       .map((c) => ({ ...c, _sim: nameSimilarity(core, c.corpNm || '') }))
       .filter((c) => c._sim >= 0.8)                       // 표기 흔들림 수준까지만 — 다른 회사는 배제
       .sort((a, b) => b._sim - a._sim)
