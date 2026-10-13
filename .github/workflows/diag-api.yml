@@ -1,0 +1,52 @@
+name: Diagnose data.go.kr APIs
+
+# 금융위·식약처 조회가 안 될 때 원인을 가린다 — 키 만료·트래픽 초과·엔드포인트 변경 중 무엇인지.
+# 상위 API를 직접 불러 상태코드와 응답 머리부분을 그대로 남긴다. 아무것도 커밋하지 않는다.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: |
+          cat > d.mjs <<'JS'
+          const KEY = process.env.KEY;
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 900));
+          if (!KEY) { n('DATA_GO_KR_API_KEY 시크릿이 비어 있습니다'); process.exit(0); }
+          n(`키 길이 ${KEY.length} · 끝 4자리 ${KEY.slice(-4)} · %2 포함 ${/%2[0-9A-F]/i.test(KEY)}`);
+          const T = [
+            ['금융위 기업기본(corp)', 'https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2', { corpNm: '코스맥스', numOfRows: '3', pageNo: '1', resultType: 'json' }],
+            ['금융위 재무(finance)', 'https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getSummFinaStat_V2', { crno: '1101110032332', numOfRows: '3', pageNo: '1', resultType: 'json' }],
+            ['식약처 제조업(maker)', 'https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01', { entp_name: '코스맥스', numOfRows: '3', pageNo: '1', type: 'json' }],
+            ['식약처 보고품목(rpt)', 'https://apis.data.go.kr/1471000/FtnltCosmRptPrdlstInfoService/getRptPrdlstInq', { numOfRows: '3', pageNo: '1', type: 'json' }],
+            ['식약처 CGMP(gmp)', 'https://apis.data.go.kr/1471000/CsmtcsGmpStbltCompInfo/getCsmtcsGmpStbltCompInfo', { numOfRows: '3', pageNo: '1', type: 'json' }],
+          ];
+          for (const [nm, base, params] of T) {
+            for (const enc of ['raw', 'decoded']) {
+              const k = enc === 'raw' ? KEY : decodeURIComponent(KEY);
+              if (enc === 'decoded' && k === KEY) continue;      // 같은 값이면 한 번만
+              const url = `${base}?serviceKey=${encodeURIComponent(k)}&${new URLSearchParams(params)}`;
+              let out;
+              try {
+                const r = await fetch(url, { signal: AbortSignal.timeout(25000) });
+                const t = await r.text();
+                const code = (t.match(/<returnReasonCode>([^<]*)</) || t.match(/"resultCode"\s*:\s*"?([^",}]*)/) || [])[1] || '';
+                const msg = (t.match(/<returnAuthMsg>([^<]*)</) || t.match(/<errMsg>([^<]*)</) || t.match(/"resultMsg"\s*:\s*"([^"]*)/) || [])[1] || '';
+                const total = (t.match(/"totalCount"\s*:\s*"?(\d+)/) || t.match(/<totalCount>(\d+)</) || [])[1] || '';
+                out = `HTTP ${r.status}${code ? ` · code ${code}` : ''}${msg ? ` · ${msg}` : ''}${total ? ` · totalCount ${total}` : ''} · 본문 ${t.replace(/\s+/g, ' ').slice(0, 150)}`;
+              } catch (e) { out = `실패 ${e.message}`; }
+              n(`${nm} [${enc}] ${out}`);
+            }
+          }
+          JS
+          node d.mjs
