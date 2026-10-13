@@ -1,0 +1,76 @@
+name: Diagnose employment insurance and air emission APIs
+
+# 고용·산재보험 현황(근로복지공단)과 대기배출시설(행정안전부) 실제 응답을 받아 항목을 확인한다. 커밋 없음.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  emp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Employment insurance
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: |
+          cat > d.mjs <<'JS'
+          const K = process.env.KEY;
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3000));
+          const tag = (s, t) => (s.match(new RegExp(`<${t}>([^<]*)</${t}>`)) || [])[1] || '';
+          const cos = [['리더스코스메틱', '1348112735'], ['코빅스', '1328170229'], ['한미화장품', '3228803394'], ['코스맥스', '1438119635'], ['한국콜마', '3078102816'], ['미스킨', '1278631118']];
+          for (const [nm, bz] of cos) {
+            const out = [];
+            for (const fg of ['1', '2']) {
+              try {
+                const u = `https://apis.data.go.kr/B490001/gySjbPstateInfoService/getGySjBoheomBsshItem?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=20&v_saeopjaDrno=${bz}&opaBoheomFg=${fg}`;
+                const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); const t = await r.text();
+                const items = [...t.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => m[1]);
+                const keys = items.length ? [...new Set([...items[0].matchAll(/<([A-Za-z]+)>/g)].map((x) => x[1]))].join(',') : '';
+                out.push(`fg${fg} HTTP ${r.status} ${tag(t, 'resultCode')}${tag(t, 'returnReasonCode')} ${tag(t, 'resultMsg')}${tag(t, 'returnAuthMsg')} total ${tag(t, 'totalCount')} · 항목[${keys}] · `
+                  + items.slice(0, 4).map((it) => `{${['saeopjangNm', 'addr', 'sangsiInwonCnt', 'seongripDt', 'gyEopjongNm', 'sjEopjongNm', 'saeopFg'].map((k) => `${k}=${tag(it, k)}`).join(' ')}}`).join(' '));
+              } catch (e) { out.push(`fg${fg} 실패 ${e.message}`); }
+            }
+            n(`[고용산재 ${nm}] ${out.join(' ‖ ')}`);
+          }
+          JS
+          node d.mjs
+  air:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Air emission — find endpoint and call
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: |
+          cat > d.mjs <<'JS'
+          const K = process.env.KEY;
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3000));
+          const UA = { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) Chrome/124 Safari/537.36' };
+          // 상세 페이지에서 요청주소 후보를 모두 뽑는다(다른 서식도 대비)
+          const h = await (await fetch('https://www.data.go.kr/data/15154973/openapi.do', { headers: UA })).text();
+          const urls = [...new Set([...h.matchAll(/https?:\/\/[A-Za-z0-9.\-]+(?:\/[A-Za-z0-9_.\-]+)+/g)].map((m) => m[0]))]
+            .filter((u) => /apis\.data\.go\.kr|1741000|swagger|openapi/i.test(u) && !/\.(css|js|png|jpg|gif|svg)$/i.test(u));
+          const swag = [...new Set([...h.matchAll(/(?:swaggerUrl|swagger_url|swaggerJson|oasUrl)["'\s:=]+["']?([^"'\s<>]+)/gi)].map((m) => m[1]))];
+          n(`[대기 상세] 후보 URL: ${urls.slice(0, 12).join(' ')} · swagger: ${swag.join(' ')} · publicDataPk ${(h.match(/publicDataPk[=:"' ]+(\d+)/) || [])[1] || ''} · detailPk ${(h.match(/publicDataDetailPk[=:"' ]+([\w-]+)/) || [])[1] || ''}`);
+          // 행안부 지방행정 인허가 오픈API 통상 형태로도 시도
+          const tries = [...urls.filter((u) => /apis\.data\.go\.kr/.test(u)),
+            'https://apis.data.go.kr/1741000/AirPollutantEmissionFacilities/info',
+            'https://apis.data.go.kr/1741000/AtmosphericPollutantEmissionFacilitiesInstallationWorkplace/info'];
+          const out = [];
+          for (const base of [...new Set(tries)].slice(0, 6)) {
+            for (const q of ['', '&cond%5BBPLC_NM%3A%3ALIKE%5D=%EC%BD%94%EC%8A%A4%EB%A7%A5%EC%8A%A4']) {
+              try {
+                const u = `${base}${base.includes('?') ? '&' : '?'}serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=3&returnType=json&type=json${q}`;
+                const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); const t = await r.text();
+                out.push(`${base.replace('https://apis.data.go.kr', '')}${q ? '(이름검색)' : ''} → HTTP ${r.status} · ${t.replace(/\s+/g, ' ').slice(0, 600)}`);
+              } catch (e) { out.push(`${base} 실패 ${e.message}`); }
+            }
+          }
+          n(`[대기 호출] ${out.join(' ‖ ')}`);
+          JS
+          node d.mjs
