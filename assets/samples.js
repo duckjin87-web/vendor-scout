@@ -929,12 +929,18 @@ function assembleLiveReport(name, corp, res) {
     // 제조소가 여러 곳이면 모두 적는다(코스맥스: 화성 향남 2곳 · 평택 청북 2곳). 공개 API는 시·군까지만 주므로
     // 번지까지 있는 의약품안전나라 주소를 앞세우고, 없을 때만 API의 시·군을 적는다.
     (() => {
-      const nedTxt = nedSites.map((x) => x.addr + (x.detail ? ` (${x.detail})` : '')).join(' / ');
+      // 제조소가 여럿이면(1공장·2공장…) 한 줄에 하나씩 번호를 붙여 모두 적는다.
+      // 상세(동·층·(가좌동))에 괄호가 이미 있으면 다시 싸지 않는다 — '((가좌동))'처럼 겹쳐 보였다.
+      const detailTxt = (d) => { const t = String(d || '').trim(); return t ? (/^\(.*\)$/.test(t) ? ` ${t}` : ` (${t})`) : ''; };
+      const nedTxt = nedSites.length > 1
+        ? nedSites.map((x, i) => `제조소 ${i + 1} · ${x.addr}${detailTxt(x.detail)}`).join('\n')
+        : nedSites.map((x) => `${x.addr}${detailTxt(x.detail)}`).join('');
       const nedNote = nedSites.length ? `의약품안전나라 업체정보 등록 제조소 ${nedSites.length}곳${mkNo ? ` · 업허가 ${mkNo}` : ''}` : '';
-      if (fctAddr) return f('공장/제조소 소재지', fctAddr, 'A', '산업단지공단 공장등록', today,
-        fctNote + (nedSites.length ? ` · ${nedNote}: ${nedTxt}` : ''));
+      // 화장품 제조업 허가에 적힌 제조소를 앞세운다(공장 소재지 선정과 같은 원칙). 공장등록은 다른 업종 공장일 수 있다.
       if (nedSites.length) return f('공장/제조소 소재지', nedTxt, 'A', '의약품안전나라 업체정보', today,
-        `${nedNote} — 식약처 제조업 허가상 제조소(공개 API는 시·군까지만 제공). 산단공 공장등록 없음`);
+        `${nedNote} — 식약처 화장품 제조업 허가상 제조소`
+        + (fctAddr ? ` · 산단공 공장등록 주소: ${fctAddr}${fctNote ? ` (${fctNote.replace(/^★\s*/, '')})` : ''}` : ' · 산단공 공장등록 없음'));
+      if (fctAddr) return f('공장/제조소 소재지', fctAddr, 'A', '산업단지공단 공장등록', today, fctNote);
       return f('공장/제조소 소재지', mkAddr || null, mkAddr ? 'A' : 'D',
         mkAddr ? '식약처 화장품제조업 API' : '산업단지공단 공장등록', mkAddr ? today : null,
         mkAddr ? '식약처 제조업 허가상 제조소 소재지 — 공개 API는 시·군까지만 줍니다(의약품안전나라 조회 실패 시)' : fctNote);

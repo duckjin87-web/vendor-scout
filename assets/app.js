@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 187;
+const BUILD = 188;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1266,12 +1266,15 @@ function relCtxOf(name, o) {
   return { name, regions: addrRegions(o.addrs), rep: o.rep || '', bzno: o.bzno || '', hosts, tels };
 }
 
+// '공장/제조소 소재지' 값 → 주소 목록. 제조소가 여럿이면 '제조소 1 · 주소' 줄이 이어진다.
+const siteLines = (v) => String(v || '').split(/\n|\s+\/\s+/).map((x) => x.replace(/^제조소\s*\d+\s*·\s*/, '').trim()).filter(Boolean);
+const firstSite = (v) => siteLines(v)[0] || '';
 // 리포트가 아는 업체 주소 전부 — 본점·공장/제조소·연금 사업장·선정 공장·의약품안전나라 제조소·채용 근무지
 function reportAddrs(report) {
   const b = (report && report.basic) || [];
   const m = (report && report.meta) || {};
   const v = (k) => { const f = b.find((x) => x.key === k); return f && f.value ? String(f.value) : ''; };
-  return [...new Set([v('본점주소'), ...v('공장/제조소 소재지').split(/\n|\s+\/\s+/), v('사업장 주소 (연금기준)'),
+  return [...new Set([v('본점주소'), ...siteLines(v('공장/제조소 소재지')), v('사업장 주소 (연금기준)'),
     m.visit_addr, m.site && m.site.addr, ...((m.mfds_sites || []).map((x) => x && x.addr)),
     ...(((report && report.hiring && report.hiring.workAddrs) || []))]
     .map((a) => String(a || '').trim()).filter(Boolean))];
@@ -4178,7 +4181,7 @@ function renderSiteDeepInto(box, state) {
 function visitAddress(report) {
   const fields = [...(report.basic || []), ...(report.capacity || [])];
   const val = (k) => { const f = fields.find((x) => x.key === k); return f && f.value ? f.value : null; };
-  return val('공장/제조소 소재지') || val('본점주소') || val('사업장 주소 (연금기준)') || null;
+  return firstSite(val('공장/제조소 소재지')) || val('본점주소') || val('사업장 주소 (연금기준)') || null;
 }
 
 // ★ 핵심 요약 밴드 — 방문 판단에 가장 중요한 사실을 큰 타일로 최상단 노출
@@ -4212,7 +4215,7 @@ function qualityGrade(report) {
   const rc = (report.recalls || []).filter((r) => recentYears(r.date, 3));
   const rcSevere = rc.filter((r) => r.severe);
   const fh = report.finance_health || null;
-  const site = v(C, '실제 공장 소재지 (선정)') || v(B, '공장/제조소 소재지');
+  const site = v(C, '실제 공장 소재지 (선정)') || firstSite(v(B, '공장/제조소 소재지'));
   const checks = [];   // { k: 기준, ok: true/false/null, t: 내용 }
   const add = (k, ok, t, kind) => checks.push({ k, ok, t, kind });
   // ① 검토 전제
@@ -4255,7 +4258,7 @@ function verdictReason(report) {
   const ups = [], downs = [];
   if (has(B, '제조업 등록')) ups.push('식약처 화장품 제조업 등록');
   if (has(C, 'CGMP 적합업소')) ups.push('CGMP 적합업소');
-  if (has(B, '공장/제조소 소재지')) ups.push('공장등록 확인');
+  if (has(B, '공장/제조소 소재지')) ups.push('제조소 주소 확인');
   const hire = report.hiring;
   if (hire && hire.ok && hire.posts && hire.posts.length) ups.push('최근 채용활동 확인');
   const ins = report.insights && report.insights.assessment;
@@ -4292,7 +4295,7 @@ function renderVerdict(report) {
   // 지역은 본점(등기) 기준으로 적는다. 공장 주소를 먼저 쓰면 R&D센터가 잡혀 실제 소재지와
   // 다르게 보인다(다산씨엔텍: 본점 경기 김포인데 공장란은 서울 강서 R&D센터였다).
   // 두 주소가 다르다는 사실 자체는 아래 '방문 전 확인 필요'에서 따로 알린다.
-  const addr = String(bv('본점주소') || bv('공장/제조소 소재지') || '');
+  const addr = String(bv('본점주소') || firstSite(bv('공장/제조소 소재지')) || '');
   const region = (addr.match(/^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[가-힣]*\s*[가-힣]*시?군?/) || [])[0] || '';
 
   const box = el('div', 'verdict v-' + v.tone);
@@ -4354,8 +4357,12 @@ function renderVerdict(report) {
     return h || m ? h * 60 + m : null;
   })();
 
+  // 화장품 제조업 허가 제조소 — 의약품안전나라 등록 순서(대개 1공장·2공장 순)
+  const mkSites = ((m.mfds_sites || []).length ? m.mfds_sites.map((x) => ({ addr: x.addr, detail: x.detail || '' }))
+    : siteLines(fct).map((addr) => ({ addr, detail: '' }))).filter((x) => x.addr);
   const chips = [
-    ['제조업 등록', maker ? '확인' : '미확인', maker ? 'ok' : 'bad'],
+    // 제조소가 여럿이면(1공장·2공장…) 칸을 눌러 모든 제조소 주소를 펼쳐 본다
+    ['제조업 등록', maker ? '확인' : '미확인', maker ? 'ok' : 'bad', mkSites.length > 1 ? `제조소 ${mkSites.length}곳 ▾` : '', null, mkSites.length > 1 ? 'mk-sites' : null],
     ['사업자 상태', /계속/.test(bstt) ? '정상' : (bstt || '미확인'), /계속/.test(bstt) ? 'ok' : 'bad'],
     ['공장등록', fct ? '확인' : '미확인', fct ? 'ok' : 'warn'],
     // CGMP는 없다고 결격은 아니지만 있으면 확실한 강점이라, 보유했을 때만 색을 준다.
@@ -4381,13 +4388,22 @@ function renderVerdict(report) {
       durMin == null ? 'na' : (durMin > 120 ? 'bad' : durMin > 60 ? 'warn' : 'num'),
       dist ? distSub(dist) : ''],
   ];
-  html += `<div class="vd-chips">` + chips.map(([k, val, t, sub, href]) => {
+  html += `<div class="vd-chips">` + chips.map(([k, val, t, sub, href, act]) => {
     const inner = `<i>${esc(k)}</i><b>${esc(val)}${sub ? `<small>${esc(sub)}</small>` : ''}</b>`;
     // 회수 이력은 건수만 보여주고 끝내면 안 된다 — 무슨 일이 있었는지로 바로 갈 수 있어야 한다.
+    if (act) return `<button type="button" class="vch vch-${t} vch-link vch-btn" data-act="${esc(act)}" aria-expanded="false" aria-controls="vdSites">${inner}</button>`;
     return href
       ? `<a class="vch vch-${t} vch-link" href="${esc(href)}">${inner}</a>`
       : `<div class="vch vch-${t}">${inner}</div>`;
   }).join('') + `</div>`;
+  // 제조소 목록(접힘) — 칸을 누르면 펼친다. 지도·공장 면적(로드뷰)으로 바로 간다.
+  if (mkSites.length > 1) {
+    html += `<div class="vd-sites" id="vdSites" hidden><div class="vd-sites-h">화장품 제조업 허가 제조소 <b>${mkSites.length}곳</b> <small>의약품안전나라 등록 순서</small></div><ol>`
+      + mkSites.map((x, i) => `<li><span class="vd-sn">제조소 ${i + 1}</span><span class="vd-sa">${esc(x.addr)}${x.detail ? ` <small>${esc(/^\(.*\)$/.test(x.detail) ? x.detail : `(${x.detail})`)}</small>` : ''}</span>`
+        + `<span class="vd-sx"><a class="nb-btn sm" href="https://map.kakao.com/link/search/${encodeURIComponent(x.addr)}" target="_blank" rel="noopener">지도</a>`
+        + `<button type="button" class="nb-btn sm" data-act="site-area" data-addr="${esc(x.addr)}">면적·로드뷰</button></span></li>`).join('')
+      + '</ol></div>';
+  }
   html += `<div class="vd-foot">종합판정은 <b>공식 자료로 확인된 사실</b>(제조업 허가·영업 상태·CGMP·회수·재무)로 정합니다 — `
     + `A는 CGMP 적합에 위험 신호가 없는 곳, C는 최근 회수·자본잠식 같은 중대 위험이 있는 곳입니다. `
     + `항목마다 붙는 점(●●● ~ ○○○)은 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>이고, 판정에는 쓰지 않습니다.`
@@ -4395,6 +4411,20 @@ function renderVerdict(report) {
     + `</div>`;
   box.innerHTML = html;
   box.querySelector('[data-act="verdict-why"]').addEventListener('click', () => openVerdictWhy(report));
+  const sitesBtn = box.querySelector('[data-act="mk-sites"]');
+  if (sitesBtn) {
+    sitesBtn.addEventListener('click', () => {
+      const p = box.querySelector('#vdSites'); if (!p) return;
+      p.hidden = !p.hidden; sitesBtn.setAttribute('aria-expanded', String(!p.hidden));
+      const sm = sitesBtn.querySelector('small'); if (sm) sm.textContent = sm.textContent.replace(/[▾▴]$/, p.hidden ? '▾' : '▴');
+    });
+  }
+  // '면적·로드뷰' — 공장 면적 탭으로 옮겨 그 제조소를 고른다(탭이 듣는 사건으로 전달)
+  box.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act="site-area"]'); if (!b) return;
+    const tab = document.getElementById('rtab-area'); if (tab) tab.click();
+    window.dispatchEvent(new CustomEvent('vs-site', { detail: b.dataset.addr }));
+  });
   const todoAll = box.querySelector('[data-act="todo-all"]');
   if (todoAll) {
     todoAll.addEventListener('click', () => {
@@ -5129,7 +5159,7 @@ function renderAreaTab(report) {
   const today = () => new Date().toISOString().slice(0, 10);
   const py = (m2) => toPy(m2 || 0).toLocaleString();
   const m2 = (v) => (v ? `${Math.round(v).toLocaleString()}㎡` : '—');
-  const ui = { editing: false, busy: '', err: '' };
+  const ui = { editing: false, busy: '', err: '', siteArea: {}, rvSite: null };
 
   const headHtml = () => {
     if (ui.editing) {
@@ -5205,6 +5235,41 @@ function renderAreaTab(report) {
       + (rest.length ? ` <button type="button" class="nb-btn sm" data-act="at-allsites"${ui.busy ? ' disabled' : ''}>${ui.busy === 'all' ? '조회 중…' : `나머지 ${rest.length}곳도 합산`}</button>` : ' <small>— 모두 합산됨</small>')
       + '</div>';
   };
+  if (!window.__vsSiteHooked) { window.__vsSiteHooked = true; window.addEventListener('vs-site', (e) => { if (window.__vsSitePick) window.__vsSitePick(e.detail); }); }
+  // ── 제조소별(1공장·2공장…) ── 화장품 제조업 허가 제조소가 여럿이면 곳마다 면적과 로드뷰를 따로 본다.
+  // 면적은 탭을 열 때 곳마다 건축물대장을 차례로 불러 채운다(이미 본 곳은 다시 부르지 않음).
+  const sitesAll = (M.mfds_sites || []).filter((x) => x && isFullAddr(x.addr));
+  const sitesHtml = () => {
+    if (sitesAll.length < 2) return '';
+    const rvNow = ui.rvSite || curAddr;
+    const rows = sitesAll.map((x, i) => {
+      const a = ui.siteArea[x.addr];
+      const isBase = siteKey(x.addr) === siteKey(curAddr), isRv = siteKey(x.addr) === siteKey(rvNow);
+      const area = !a ? '<small>확인 중…</small>' : a.err ? `<small class="at-err">${esc(a.err)}</small>`
+        : `<b>약 ${py(a.arch)}평</b><small>${m2(a.arch)} · 연면적 약 ${py(a.tot)}평 · ${a.bldgCount || 0}동</small>`;
+      return `<li class="${isBase ? 'on' : ''}"><span class="at-sn">제조소 ${i + 1}</span>`
+        + `<span class="at-sa">${esc(x.addr)}${x.detail ? ` <small>${esc(/^\(.*\)$/.test(x.detail) ? x.detail : `(${x.detail})`)}</small>` : ''}`
+        + `${isBase ? '<span class="at-tag">면적 기준</span>' : ''}${isRv ? '<span class="at-tag rv">로드뷰</span>' : ''}</span>`
+        + `<span class="at-sv">${area}</span><span class="at-sx">`
+        + `<button type="button" class="nb-btn sm" data-act="at-rv" data-addr="${esc(x.addr)}"${isRv ? ' disabled' : ''}>로드뷰</button>`
+        + (isBase ? '' : `<button type="button" class="nb-btn sm" data-act="at-use" data-addr="${esc(x.addr)}"${ui.busy ? ' disabled' : ''}>이 제조소 면적으로</button>`)
+        + '</span></li>';
+    }).join('');
+    const tot = sitesAll.reduce((t, x) => t + ((ui.siteArea[x.addr] && ui.siteArea[x.addr].arch) || 0), 0);
+    const done = sitesAll.every((x) => ui.siteArea[x.addr]);
+    return `<div class="at-sec at-sites" id="atSites"><h4>제조소별 <small>화장품 제조업 허가 제조소 ${sitesAll.length}곳 · 의약품안전나라 등록 순서</small></h4><ul>${rows}</ul>`
+      + (done && tot ? `<div class="at-sites-f">제조소 ${sitesAll.length}곳 건축면적 합계 <b>약 ${py(tot)}평</b> (${m2(tot)}) — 아래 「합계」는 지금 고른 주소 기준입니다</div>` : '')
+      + '</div>';
+  };
+  const loadSites = async () => {
+    for (const x of sitesAll) {
+      if (ui.siteArea[x.addr] || !wrap.isConnected && ui.painted) continue;
+      ui.siteArea[x.addr] = null;
+      try { const d = await bldAreaLookup(x.addr, { name: M.vendor_name }); ui.siteArea[x.addr] = { arch: d.arch, tot: d.tot, bldgCount: d.bldgCount }; }
+      catch (e) { ui.siteArea[x.addr] = { err: e && e.message ? e.message.slice(0, 60) : '조회 실패' }; }
+      if (wrap.isConnected) paint();
+    }
+  };
   const bldgHtml = () => {
     if (!B) return '';
     const rows = (B.bldgs || []);
@@ -5232,11 +5297,13 @@ function renderAreaTab(report) {
   };
 
   const paint = () => {
-    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${candHtml()}${sumHtml()}${lotsHtml()}${bldgHtml()}${noteHtml()}`;
+    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${candHtml()}${sumHtml()}${lotsHtml()}${bldgHtml()}${noteHtml()}`;
+    ui.painted = true;
     const cmp = renderAreaCompare(report);
     if (cmp) wrap.appendChild(cmp);
     // 공장 규모 아래 로드뷰 — 주소가 같으면 이미 띄운 것을 그대로 옮겨 붙인다(다시 불러오지 않게)
-    if (!ui.rv || ui.rvAddr !== curAddr) { ui.rv = renderRoadview(curAddr, nm); ui.rvAddr = curAddr; }
+    const rvA = ui.rvSite || curAddr;
+    if (!ui.rv || ui.rvAddr !== rvA) { ui.rv = renderRoadview(rvA, nm); ui.rvAddr = rvA; }
     wrap.appendChild(ui.rv);
     if (ui.editing) { const i = wrap.querySelector('#atAddrIn'); if (i) { i.focus(); i.select(); } }
   };
@@ -5274,6 +5341,7 @@ function renderAreaTab(report) {
     const act = b.dataset.act;
     if (act === 'at-edit') { ui.editing = true; ui.err = ''; paint(); }
     else if (act === 'at-cancel') { ui.editing = false; ui.err = ''; paint(); }
+    else if (act === 'at-rv') { ui.rvSite = b.dataset.addr; paint(); const r = wrap.querySelector('.rv'); if (r) r.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     else if (act === 'at-use') run('main', () => lookupMain(b.dataset.addr));
     else if (act === 'at-reset') {
       run('reset', async () => {
@@ -5325,6 +5393,19 @@ function renderAreaTab(report) {
     }
   });
   paint();
+  // 제조소가 여럿이면 탭이 처음 보일 때 곳마다 면적을 불러온다(숨은 탭에서는 부르지 않는다)
+  if (sitesAll.length > 1) {
+    const io = window.IntersectionObserver ? new IntersectionObserver((es) => {
+      if (es.some((x) => x.isIntersecting)) { io.disconnect(); loadSites(); }
+    }, { rootMargin: '4000px 0px' }) : null;
+    if (io) io.observe(wrap); else loadSites();
+  }
+  // 리포트 요약의 '면적·로드뷰'에서 고른 제조소로 로드뷰를 옮긴다(가장 최근에 그린 면적 탭이 받는다)
+  window.__vsSitePick = (addr) => {
+    if (!wrap.isConnected || !addr) return;
+    ui.rvSite = addr; paint();
+    setTimeout(() => { const t = wrap.querySelector('#atSites') || wrap; t.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 60);
+  };
   return wrap;
 }
 
@@ -6106,7 +6187,7 @@ async function svSaveReport(report) {
   const old = await svGet(key).catch(() => null);
   const now = new Date().toISOString();
   await svPut({ ...(old || {}), key, name: m.vendor_name, savedAt: (old && old.savedAt) || now, updatedAt: now,
-    region: svRegion(bv('공장/제조소 소재지') || bv('본점주소')), grade: m.overall_grade || null, queryAt: m.query_at || now,
+    region: svRegion(firstSite(bv('공장/제조소 소재지')) || bv('본점주소')), grade: m.overall_grade || null, queryAt: m.query_at || now,
     report: JSON.parse(JSON.stringify(report)) });
   svToast(old && old.report ? `「${m.vendor_name}」 저장본을 지금 조회 결과로 바꿨습니다` : `「${m.vendor_name}」을(를) 저장했습니다 — 상단 「저장업체」에서 볼 수 있습니다`);
 }
