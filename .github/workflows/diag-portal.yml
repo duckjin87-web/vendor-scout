@@ -26,12 +26,14 @@ jobs:
         env:
           KW: ${{ inputs.keywords }}
           IDS: ${{ inputs.ids }}
+          FOLLOW: '0'
         run: |
           cat > d.mjs <<'JS'
           const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 1800));
           const UA = { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36' };
           const txt = (h) => String(h || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
           const ids = new Set((process.env.IDS || '').split(',').map((s) => s.trim()).filter(Boolean));
+          const found = [];
           for (const kw of process.env.KW.split(',').map((s) => s.trim()).filter(Boolean)) {
             try {
               const u = `https://www.data.go.kr/tcs/dss/selectDataSetList.do?dType=API&keyword=${encodeURIComponent(kw)}&perPage=10&currentPage=1`;
@@ -39,10 +41,11 @@ jobs:
               // 결과 항목: /data/{id}/openapi.do 링크와 제목
               const items = [...h.matchAll(/href="\/data\/(\d+)\/openapi\.do"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => [m[1], txt(m[2])]).filter(([, t]) => t);
               const uniq = [...new Map(items.map((x) => [x[0], x])).values()].slice(0, 8);
-              uniq.slice(0, 4).forEach(([id]) => ids.add(id));
-              n(`[검색] ${kw} → ${uniq.map(([id, t]) => `${id}:${t.slice(0, 50)}`).join(' | ') || '결과 없음'}`);
-            } catch (e) { n(`[검색] ${kw} 실패 ${e.message}`); }
+              if (process.env.FOLLOW === '1') uniq.slice(0, 2).forEach(([id]) => ids.add(id));
+              found.push(`${kw} → ${uniq.map(([id, t]) => `${id}:${t.slice(0, 40)}`).join(' | ') || '없음'}`);
+            } catch (e) { found.push(`${kw} 실패 ${e.message}`); }
           }
+          if (found.length) n(`[검색] ${found.join(' ‖ ')}`);
           for (const id of ids) {
             try {
               const h = await (await fetch(`https://www.data.go.kr/data/${id}/openapi.do`, { headers: UA })).text();
@@ -50,10 +53,8 @@ jobs:
               const title = (h.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
               const pick = (re) => (T.match(re) || [])[1] || '';
               const ep = [...new Set([...h.matchAll(/https?:\/\/apis\.data\.go\.kr\/[A-Za-z0-9_\/.\-]+/g)].map((m) => m[0]))].slice(0, 4).join(' ');
-              n(`[상세 ${id}] ${title.trim().slice(0, 70)} · 기관 ${pick(/제공기관\s*([^\s]+(?:\s[^\s]+)?)/).slice(0, 30)} · 심의 ${pick(/심의여부\s*(\S+)/)} · 갱신 ${pick(/업데이트 주기\s*(\S+)/)} · EP ${ep || '(없음)'} · 키워드 ${pick(/키워드\s*([^\n]{0,60})/).slice(0, 60)}`);
-              // 응답 항목명 일부
-              const fields = [...new Set([...h.matchAll(/<td[^>]*>\s*([A-Za-z][A-Za-z0-9_]{2,30})\s*<\/td>\s*<td[^>]*>\s*([^<]{1,30})<\/td>/g)].map((m) => `${m[1]}(${m[2].trim()})`))].slice(0, 30);
-              if (fields.length) n(`[항목 ${id}] ${fields.join(', ')}`);
+              const fieldsL = [...new Set([...h.matchAll(/<td[^>]*>\s*([A-Za-z][A-Za-z0-9_]{2,30})\s*<\/td>\s*<td[^>]*>\s*([^<]{1,30})<\/td>/g)].map((m) => `${m[1]}(${m[2].trim()})`))].slice(0, 40);
+              n(`[상세 ${id}] ${title.trim().slice(0, 70)} · 기관 ${pick(/제공기관\s*([^\s]+(?:\s[^\s]+)?)/).slice(0, 30)} · 심의 ${pick(/심의여부\s*(\S+)/)} · 갱신 ${pick(/업데이트 주기\s*(\S+)/)} · EP ${ep || '(없음)'} · 항목 ${fieldsL.join(', ') || '(못 읽음)'} · 본문 ${T.slice(T.indexOf('요청주소') > 0 ? T.indexOf('요청주소') : 0).slice(0, 300)}`);
             } catch (e) { n(`[상세 ${id}] 실패 ${e.message}`); }
           }
           JS
