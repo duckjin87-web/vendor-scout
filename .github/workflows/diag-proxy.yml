@@ -1,0 +1,47 @@
+name: Diagnose Vercel proxy
+
+# 브라우저가 쓰는 프록시(/api/proxy)가 실제로 JSON을 주는지 확인한다.
+# 키 문제인지, 배포 보호(로그인 페이지)인지, 엔드포인트 문제인지 가린다. 아무것도 커밋하지 않는다.
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: '확인할 사이트 주소(공백 구분)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Probe
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 900));
+          for (const base of process.env.URLS.split(/\s+/).filter(Boolean)) {
+            for (const [nm, q] of [['corp', 'service=corp&name=%EC%BD%94%EC%8A%A4%EB%A7%A5%EC%8A%A4&numOfRows=3'], ['maker', 'service=maker&entp_name=%EC%BD%94%EC%8A%A4%EB%A7%A5%EC%8A%A4&numOfRows=3']]) {
+              let out;
+              try {
+                const r = await fetch(`${base}/api/proxy?${q}`, { redirect: 'manual', signal: AbortSignal.timeout(25000) });
+                const ct = r.headers.get('content-type') || '';
+                const t = await r.text();
+                const auth = /_vercel_sso|vercel.com\/sso|Authentication Required|vercel-sso-nonce/i.test(t) || !!r.headers.get('set-cookie')?.includes('_vercel_sso');
+                const isHtml = /^\s*<!doctype html|^\s*<html/i.test(t);
+                out = `HTTP ${r.status} · ${ct.split(';')[0] || '?'}`
+                  + (r.headers.get('location') ? ` · →${r.headers.get('location').slice(0, 60)}` : '')
+                  + (auth ? ' · ★Vercel 배포보호(로그인) 페이지' : isHtml ? ' · ★JSON이 아닌 HTML' : '')
+                  + ` · ${t.replace(/\s+/g, ' ').slice(0, 170)}`;
+              } catch (e) { out = `실패 ${e.message}`; }
+              n(`${base} [${nm}] ${out}`);
+            }
+          }
+          JS
+          node d.mjs
