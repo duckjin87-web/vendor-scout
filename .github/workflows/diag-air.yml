@@ -1,0 +1,44 @@
+name: Diagnose air emission endpoint
+
+# 대기오염물질배출시설 조회서비스의 요청주소를 메타데이터에서 찾고 호출해 본다. 커밋 없음.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  air:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Find and call
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: |
+          cat > d.mjs <<'JS'
+          const K = process.env.KEY;
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3500));
+          const UA = { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) Chrome/124 Safari/537.36' };
+          const urls = new Set();
+          const grab = (t) => [...t.matchAll(/https?:\/\/apis\.data\.go\.kr\/[A-Za-z0-9_\/.\-]+/g)].forEach((m) => urls.add(m[0].replace(/[.\/]+$/, '')));
+          const srcs = [];
+          for (const u of ['https://www.data.go.kr/dcat/metadata/15154973', 'https://www.data.go.kr/biz/dcat/metadata/15154973.do', 'https://www.data.go.kr/catalog/15154973/openapi.json', 'https://data.go.kr/catalog/15154973/openapi.json']) {
+            try { const r = await fetch(u, { headers: UA, signal: AbortSignal.timeout(20000) }); const t = await r.text(); grab(t); srcs.push(`${u.replace(/^https?:\/\/(www\.)?data\.go\.kr/, '')} ${r.status} ${t.length}B ${t.replace(/\s+/g, ' ').slice(0, 160)}`); } catch (e) { srcs.push(`${u} 실패 ${e.message}`); }
+          }
+          n(`[메타] ${srcs.join(' ‖ ')} ‖ 찾은 요청주소: ${[...urls].join(' ')}`);
+          const out = [];
+          for (const base of [...urls].slice(0, 6)) {
+            const bases = /\/info$|\/get/i.test(base) ? [base] : [base, `${base}/info`];
+            for (const b of bases) {
+              try {
+                const u = `${b}?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=2&returnType=json&type=json`;
+                const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); const t = await r.text();
+                out.push(`${b.replace('https://apis.data.go.kr', '')} → ${r.status} ${t.replace(/\s+/g, ' ').slice(0, 900)}`);
+              } catch (e) { out.push(`${b} 실패 ${e.message}`); }
+            }
+          }
+          n(`[호출] ${out.join(' ‖ ') || '요청주소를 못 찾음'}`);
+          JS
+          node d.mjs
