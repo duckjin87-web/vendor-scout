@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 186;
+const BUILD = 187;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1988,10 +1988,13 @@ async function makerLookupRaw(nm) {
   );
   const merged = [];
   const seen = new Set();
+  const sale = [];                   // 같은 응답의 책임판매업 기록 — 이 회사가 브랜드(책임판매) 허가도 가졌는지
   let anyOk = false, lastErr = '';
   for (const s of settled) {
     if (s.status !== 'fulfilled') { lastErr = String(s.reason && s.reason.message || s.reason); continue; }
     anyOk = true;
+    listOf(s.value, ['response.body.items.item', 'body.items', 'items']).map((r) => (r && r.item && typeof r.item === 'object' ? r.item : r))
+      .filter((r) => r && /책임판매/.test(String(r.INDUTY || ''))).forEach((r) => { if (sale.length < 50) sale.push(r); });
     // 항목이 { item: {...} }로 한 겹 싸여 오는 응답도 있다 — 벗겨서 쓴다
     // 이 API에는 제조업 말고 책임판매업(2.8만 건)·맞춤형판매업도 섞여 온다(진단 2026-10: 화장품제조 4,318 ·
     // 화장품책임판매 28,374 · 맞춤형화장품판매 234). 업종이 '제조'가 아니면 제조업 등록으로 보지 않는다.
@@ -2020,7 +2023,7 @@ async function makerLookupRaw(nm) {
       register = { searched: true, total: all.total, size: all.list.length, full: all.full, hits: hits.length };
     } catch (e) { register = { searched: false, err: e && e.message ? e.message : String(e) }; }
   }
-  return { items: merged, register };
+  return { items: merged, register, sale };
 }
 
 // 식약처 화장품제조업 등록업체 기준 후보 — 상호명으로 조회해 등록 업체명(중복제거) 목록화
@@ -4186,9 +4189,66 @@ function visitAddress(report) {
 const VERDICT = {
   A: { label: '방문 우선 검토', tone: 'good' },
   B: { label: '방문 검토 가능', tone: 'good' },
-  C: { label: '추가 확인 후 판단', tone: 'warn' },
-  D: { label: '자료 부족 — 보완 후 판단', tone: 'muted' },
+  C: { label: '위험 신호 — 확인 후 판단', tone: 'warn' },
+  D: { label: '검토불가', tone: 'muted' },
 };
+// ── 종합판정(질적 기준) ──
+// 예전 판정은 '값이 확인된 항목들의 신뢰도 가운데 값'이었다. 자료가 많으면 회수 이력이 있어도 A가
+// 나왔고, A가 '좋은 업체'로 읽혀 오해를 샀다. 이제 자료의 양이 아니라 공식 원부 자료로 확인된
+// 사실만으로 정한다. 각 기준은 공식 기관 자료(식약처·의약품안전나라·국세청·금융위)에서만 읽는다.
+//   검토불가  제조업 허가 미확인 · 휴업/폐업 · 사업자번호 미확보(업체를 특정할 수 없음)
+//   C        허가·영업 중이나 중대 위험 — 최근 3년 중대 회수(1·2등급/미생물·이물 등) 또는 회수 2건↑ · 자본잠식
+//   A        중대 위험 없음 + CGMP 적합 + 주의 신호 없음
+//   B        중대 위험 없음 — CGMP 미등재이거나, CGMP가 있어도 주의 신호가 있음
+//   주의 신호  최근 3년 경미 회수 1건 · 부채비율 400% 초과 · 사업자 상태 조회 불가 · 공장 소재지 번지 미확인
+const recentYears = (d, y) => { const t = Date.parse(String(d || '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')); return isFinite(t) && Date.now() - t <= y * 365.25 * 864e5; };
+function qualityGrade(report) {
+  const B = report.basic || [], C = report.capacity || [];
+  const v = (arr, k) => { const x = arr.find((y) => y.key === k); return x && x.value ? String(x.value) : ''; };
+  const licensed = !!v(B, '제조업 등록');
+  const stt = v(B, '사업자 상태');
+  const bz = v(B, '사업자등록번호').replace(/\D/g, '');
+  const cgmp = !!v(C, 'CGMP 적합업소');
+  const rc = (report.recalls || []).filter((r) => recentYears(r.date, 3));
+  const rcSevere = rc.filter((r) => r.severe);
+  const fh = report.finance_health || null;
+  const site = v(C, '실제 공장 소재지 (선정)') || v(B, '공장/제조소 소재지');
+  const checks = [];   // { k: 기준, ok: true/false/null, t: 내용 }
+  const add = (k, ok, t, kind) => checks.push({ k, ok, t, kind });
+  // ① 검토 전제
+  add('제조업 허가', licensed, licensed ? '식약처·의약품안전나라 화장품 제조업 허가 확인' : '화장품 제조업 허가를 확인하지 못함', 'gate');
+  const closed = /휴업|폐업/.test(stt);
+  add('사업자 상태', closed ? false : (stt ? true : null), closed ? `국세청 기준 ${stt}` : (stt ? `국세청 ${stt}` : '국세청 상태 조회 불가'), 'gate');
+  add('업체 특정', bz.length === 10, bz.length === 10 ? '사업자번호 확보' : '사업자번호를 확보하지 못해 업체를 특정할 수 없음', 'gate');
+  // ② 중대 위험
+  const rcBad = rcSevere.length > 0 || rc.length >= 2;
+  add('최근 3년 회수', rcBad ? false : (rc.length === 1 ? null : true),
+    rcBad ? `회수·판매중지 ${rc.length}건${rcSevere.length ? ` (중대 ${rcSevere.length}건)` : ''}` : rc.length === 1 ? '경미 회수 1건(표시기재 등)' : '없음', 'risk');
+  const capImpair = !!(fh && fh.equity != null && fh.equity <= 0);
+  const debtHigh = !!(fh && fh.debtRatio != null && fh.debtRatio > 400);
+  add('재무 건전성', capImpair ? false : (debtHigh ? null : true),
+    capImpair ? '자본잠식(자본총계 ≤ 0)' : debtHigh ? `부채비율 ${fh.debtRatio}%` : fh ? `부채비율 ${fh.debtRatio != null ? fh.debtRatio + '%' : '—'}` : '공시 재무 없음(판정에 쓰지 않음)', 'risk');
+  // ③ 우수 기준
+  add('CGMP', cgmp, cgmp ? '식약처 CGMP 적합업소' : '미등재', 'plus');
+  add('공장 소재지', isFullAddr(site) ? true : null, isFullAddr(site) ? '번지까지 확인' : '번지까지 확인 못 함', 'plus');
+
+  let grade, why;
+  if (!licensed) { grade = 'D'; why = '제조업 허가 미확인'; }
+  else if (closed) { grade = 'D'; why = `${stt}`; }
+  else if (bz.length !== 10) { grade = 'D'; why = '업체를 특정할 수 없음'; }
+  else if (rcBad || capImpair) { grade = 'C'; why = [rcBad ? '최근 3년 중대 회수' : '', capImpair ? '자본잠식' : ''].filter(Boolean).join(' · '); }
+  else {
+    const cautions = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회 불가' : '', !isFullAddr(site) ? '공장 번지 미확인' : ''].filter(Boolean);
+    if (cgmp && !cautions.length) { grade = 'A'; why = 'CGMP 적합 · 중대 위험 없음'; }
+    else { grade = 'B'; why = cgmp ? `CGMP 적합이나 주의: ${cautions.join(' · ')}` : `중대 위험 없음 · CGMP 미등재${cautions.length ? ` · 주의: ${cautions.join(' · ')}` : ''}`; }
+  }
+  // 자료 신뢰도(참고) — 예전 판정 방식. 확인된 항목들의 출처 등급 가운데 값
+  const ord = { A: 0, B: 1, C: 2, D: 3 };
+  const gs = [...B, ...C, ...(report.finance || [])].filter((x) => !x.data_gap).map((x) => ord[x.grade]).filter((x) => x != null).sort((a, b) => a - b);
+  const dataGrade = gs.length ? ['A', 'B', 'C', 'D'][gs[Math.floor(gs.length / 2)]] : 'D';
+  return { grade, why, checks, dataGrade };
+}
+window.qualityGrade = qualityGrade;
 function verdictReason(report) {
   const B = report.basic || [], C = report.capacity || [];
   const has = (arr, k) => { const x = arr.find((v) => v.key === k); return x && x.value ? x.value : null; };
@@ -4219,7 +4279,9 @@ function distSub(v) {
 }
 function renderVerdict(report) {
   const m = report.meta || {};
-  const g = m.overall_grade || 'D';
+  const Q = qualityGrade(report);
+  const g = Q.grade;
+  m.overall_grade = g;              // 저장 목록 등 다른 화면도 같은 판정을 쓰게
   const v = VERDICT[g] || VERDICT.D;
   const B = report.basic || [], C = report.capacity || [];
   const bv = (k) => { const x = B.find((y) => y.key === k); return x && x.value ? x.value : null; };
@@ -4235,11 +4297,11 @@ function renderVerdict(report) {
 
   const box = el('div', 'verdict v-' + v.tone);
   let html = `<div class="vd-head">`
-    + `<button type="button" class="vd-badge badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기"><b>${esc(g)}</b><span>종합판정 ⓘ</span></button>`
+    + `<button type="button" class="vd-badge badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기"><b>${g === 'D' ? '불가' : esc(g)}</b><span>종합판정 ⓘ</span></button>`
     + `<div class="vd-title"><h2>${esc(m.vendor_name || '')}</h2>`
     + `<div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div>`
     + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
-    + `<div class="vd-side"><div class="vd-verd">${esc(v.label)}</div>`
+    + `<div class="vd-side"><div class="vd-verd">${esc(v.label)}<small class="vd-qwhy">${esc(Q.why)}</small></div>`
     + (m.live ? `<button type="button" class="sv-btn" data-act="save-firm" data-sv-key="${esc(svKey(m.vendor_name || ''))}" data-sv-kind="report">☆ 저장</button>` : '')
     + '</div></div>';
   // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
@@ -4326,8 +4388,9 @@ function renderVerdict(report) {
       ? `<a class="vch vch-${t} vch-link" href="${esc(href)}">${inner}</a>`
       : `<div class="vch vch-${t}">${inner}</div>`;
   }).join('') + `</div>`;
-  html += `<div class="vd-foot">종합판정은 <b>업체를 방문할 만한지</b>에 대한 검토 결과이고, `
-    + `항목마다 붙는 점(●●● ~ ○○○)은 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>를 나타냅니다 — 서로 다른 이야기입니다.`
+  html += `<div class="vd-foot">종합판정은 <b>공식 자료로 확인된 사실</b>(제조업 허가·영업 상태·CGMP·회수·재무)로 정합니다 — `
+    + `A는 CGMP 적합에 위험 신호가 없는 곳, C는 최근 회수·자본잠식 같은 중대 위험이 있는 곳입니다. `
+    + `항목마다 붙는 점(●●● ~ ○○○)은 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>이고, 판정에는 쓰지 않습니다.`
     + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')
     + `</div>`;
   box.innerHTML = html;
@@ -4391,40 +4454,40 @@ function refreshContact(report) {
 // 계산은 samples.js assembleLiveReport와 같다: 값이 확인된 항목들의 신뢰도 등급(A~D)을
 // 좋은 순으로 세웠을 때 가운데 값. 값이 없는 항목(공백)은 셈에서 빠진다.
 function openVerdictWhy(report) {
-  const m = report.meta || {};
-  const g = m.overall_grade || 'D';
-  const all = [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])];
-  const got = all.filter((x) => !x.data_gap);
-  const gaps = all.length - got.length;
-  const cnt = { A: 0, B: 0, C: 0, D: 0 };
-  got.forEach((x) => { if (cnt[x.grade] != null) cnt[x.grade]++; });
+  const Q = qualityGrade(report);
+  const g = Q.grade;
   const { ups, downs } = verdictReason(report);
-  const mid = got.length ? Math.floor(got.length / 2) + 1 : 0;
-  const bar = got.length
-    ? ['A', 'B', 'C', 'D'].filter((k) => cnt[k]).map((k) => `<span class="vw-seg badge-${k}" style="flex:${cnt[k]}" title="${esc(GRADE_LABEL[k])}">${GRADE_DOTS[k]} ${cnt[k]}</span>`).join('')
-    : '<span class="vw-seg none">확인된 항목 없음</span>';
-  const rows = ['A', 'B', 'C', 'D'].map((k) => `<tr class="${k === g ? 'on' : ''}"><td><b class="vw-g badge-${k}">${k}</b></td><td>${esc(VERDICT[k].label)}</td>`
-    + `<td>${relDots(k)} ${esc(GRADE_LABEL[k])}${k === 'D' ? '' : ' 위주'}</td></tr>`).join('');
+  const mark = (ok) => (ok === true ? '<b class="vq ok">✓</b>' : ok === false ? '<b class="vq bad">✕</b>' : '<b class="vq warn">!</b>');
+  const sec = (kind, title, note) => {
+    const rows = Q.checks.filter((c) => c.kind === kind);
+    return `<section><h4>${title}${note ? ` <small>${note}</small>` : ''}</h4><ul class="vq-list">`
+      + rows.map((c) => `<li>${mark(c.ok)}<span class="vq-k">${esc(c.k)}</span><span class="vq-t">${esc(c.t)}</span></li>`).join('') + '</ul></section>';
+  };
+  const rules = [
+    ['A', 'CGMP 적합 + 중대 위험 없음 + 주의 신호 없음'],
+    ['B', '중대 위험 없음 — CGMP 미등재이거나, CGMP가 있어도 주의 신호가 있음'],
+    ['C', '허가·영업 중이나 중대 위험(최근 3년 중대 회수 또는 회수 2건 이상, 자본잠식)'],
+    ['D', '검토불가 — 제조업 허가 미확인 · 휴업/폐업 · 업체를 특정할 수 없음(사업자번호 없음)'],
+  ].map(([k, t]) => `<tr class="${k === g ? 'on' : ''}"><td><b class="vw-g badge-${k}">${k === 'D' ? '불가' : k}</b></td><td>${esc(VERDICT[k].label)}</td><td>${esc(t)}</td></tr>`).join('');
   const dlg = document.createElement('dialog');
   dlg.className = 'vwhy';
   dlg.setAttribute('aria-labelledby', 'vwhyTitle');
   dlg.innerHTML = `<div class="vwhy-in">`
-    + `<div class="vwhy-head"><h3 id="vwhyTitle">종합판정 <b class="vw-g badge-${esc(g)}">${esc(g)}</b> ${esc((VERDICT[g] || VERDICT.D).label)}</h3>`
+    + `<div class="vwhy-head"><h3 id="vwhyTitle">종합판정 <b class="vw-g badge-${esc(g)}">${g === 'D' ? '검토불가' : esc(g)}</b> ${g === 'D' ? '' : esc(VERDICT[g].label)}</h3>`
     + `<button type="button" class="vwhy-x" aria-label="닫기">✕</button></div>`
-    + `<section><h4>어떻게 정하나</h4><p>리포트에서 <b>값이 확인된 항목</b>의 신뢰도(●●●~○○○)를 좋은 순으로 세웠을 때 `
-    + `<b>가운데 값</b>이 종합판정(●●● A · ●●○ B · ●○○ C · ○○○ D)입니다. 값이 없는 항목은 셈에서 뺍니다. `
-    + (got.length ? `이 업체는 확인된 항목 ${got.length}개 중 ${mid}번째 등급입니다.` : '이 업체는 확인된 항목이 하나도 없어 D입니다.') + `</p>`
-    + `<div class="vw-bar">${bar}</div>`
-    + `<p class="vw-note">이 업체: ●●● ${cnt.A} · ●●○ ${cnt.B} · ●○○ ${cnt.C} · ○○○ ${cnt.D}${gaps ? ` · 공백 ${gaps}(제외)` : ''} → 가운데 값 → 종합판정 <b>${esc(g)}</b></p></section>`
-    + `<section><h4>등급별 판정</h4><table class="vw-tbl"><thead><tr><th>종합판정</th><th>뜻</th><th>항목 신뢰도</th></tr></thead><tbody>${rows}</tbody></table>`
-    + `<p class="vw-note">항목 신뢰도 — ●●● 공식 API(식약처·금융위·국세청 등 원부 자료) · ●●○ 공공DB 간접(국민연금·실측 경로 등) · ●○○ 추정·외부 자료 · ○○○ 데이터 공백</p></section>`
-    + `<section><h4>이 업체에서 본 것</h4>`
+    + `<p class="vq-why">${esc(Q.why)}</p>`
+    + `<section><h4>어떻게 정하나 <small>자료의 양이 아니라, 공식 기관 자료로 확인된 사실만 봅니다</small></h4>`
+    + `<table class="vw-tbl"><thead><tr><th>판정</th><th>뜻</th><th>기준</th></tr></thead><tbody>${rules}</tbody></table>`
+    + `<p class="vw-note">주의 신호 — 최근 3년 경미 회수 1건(표시기재 등) · 부채비율 400% 초과 · 국세청 상태 조회 불가 · 공장 소재지 번지 미확인. 하나라도 있으면 A가 아니라 B입니다.</p></section>`
+    + sec('gate', '① 검토 전제', '하나라도 ✕면 검토불가')
+    + sec('risk', '② 중대 위험', '✕면 C')
+    + sec('plus', '③ 우수 기준', 'CGMP ✓ + 주의 없음이면 A')
+    + `<section><h4>참고 — 자료 신뢰도 <small>판정에는 쓰지 않습니다</small></h4>`
+    + `<p class="vw-note">확인된 항목들의 출처 등급 가운데 값: ${relDots(Q.dataGrade)} ${esc(GRADE_LABEL[Q.dataGrade])}. 자료가 적거나 추정값이 많으면 낮아집니다.</p>`
     + (ups.length ? `<div class="vw up"><i>확인됨</i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
     + (downs.length ? `<div class="vw down"><i>확인필요</i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
-    + (!ups.length && !downs.length ? '<p class="vw-note">표시할 근거가 없습니다.</p>' : '')
     + `</section>`
-    + `<p class="vw-caution">⚠ 종합판정은 <b>자료를 얼마나 믿을 수 있는지</b>로 정해집니다. 회수 이력·자본잠식 같은 위험 신호는 등급을 직접 낮추지 않으니, `
-    + `<b>확인필요</b>와 아래 <b>방문 전 확인필요</b> 표를 함께 보세요.</p>`
+    + `<p class="vw-caution">⚠ 판정은 공개 자료로 확인된 사실 기준입니다. 행정처분·하도급 위반 등 아직 연결하지 않은 자료와 현장 상태는 반영되지 않으니, 아래 <b>방문 전 확인필요</b>와 함께 보세요.</p>`
     + `</div>`;
   document.body.appendChild(dlg);
   const close = () => { dlg.close(); };

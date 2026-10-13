@@ -1918,3 +1918,21 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
   .nb-sheet .nb-selacts { margin-left: 0; }
   .nb-sheet .nb-selacts > * { flex: 1 1 auto; }
 }
+
+/* ── 종합판정(질적 기준) ── */
+.vd-qwhy { display: block; margin-top: 2px; font-size: 11.5px; font-weight: 500; color: var(--muted); white-space: normal; text-align: right; }
+.vq-why { margin: 0 0 12px; padding: 9px 12px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+.vwhy h4 small { font-weight: 500; font-size: 11px; color: var(--muted); margin-left: 4px; }
+.vq-list { list-style: none; margin: 4px 0 0; padding: 0; }
+.vq-list li { display: grid; grid-template-columns: 22px 92px 1fr; gap: 8px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--rule); font-size: 12.5px; }
+.vq { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; }
+.vq.ok { background: var(--gA-bg); color: var(--gA); }
+.vq.bad { background: var(--risk-bg); color: var(--risk); }
+.vq.warn { background: var(--gC-bg); color: var(--gC); }
+.vq-k { font-weight: 700; }
+.vq-t { color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 720px) { .vd-qwhy { text-align: left; } .vq-list li { grid-template-columns: 22px 1fr; } .vq-t { grid-column: 2; } }
+/* '불가'처럼 두 글자 판정도 들어가게 폭을 내용에 맞춘다 */
+.vw-g { width: auto !important; min-width: 22px; padding: 0 5px; white-space: nowrap; }
+.vd-badge b { min-width: 1.4em; white-space: nowrap; }
+.vwhy .gdot.rel { display: inline-block; vertical-align: 1px; }

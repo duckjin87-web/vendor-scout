@@ -951,6 +951,25 @@ function assembleLiveReport(name, corp, res) {
       '★ 사업자번호·대표자명·개업일 3요소가 국세청 등록 원부와 일치 — 실체 확인의 가장 강한 근거'));
   }
 
+  // 책임판매업 허가 — 같은 식약처 명단에 '화장품책임판매'로 따로 올라온다. 제조사가 자체 브랜드(책임판매)도
+  // 가졌는지는 거래 판단에 쓸모 있다(고객사와 경쟁할 수 있고, 반대로 자체 유통 경험이 있다는 뜻이기도 하다).
+  // 상호가 같거나, 사업자번호가 같은 기록만 인정한다.
+  const saleRaw = R.maker && R.maker.ok && R.maker.data && Array.isArray(R.maker.data.sale) ? R.maker.data.sale : [];
+  const bzKey = String(bznoVal || '').replace(/\D/g, '');
+  const nmKey = stripCorp(name).replace(/\s/g, '');
+  const saleHit = saleRaw.filter((r) => {
+    const rb = String(r.BIZRNO || '').replace(/\D/g, '');
+    const rn = stripCorp(String(r.ENTP_NAME || '')).replace(/\s/g, '');
+    return (bzKey.length === 10 && rb === bzKey) || (nmKey.length >= 2 && rn === nmKey);
+  });
+  if (R.maker && R.maker.ok) {
+    const sd = saleHit.map((r) => String(r.ENTP_PERMIT_DATE || '').replace(/\D/g, '').slice(0, 8)).filter((d) => d.length === 8).sort()[0];
+    basic.push(f('책임판매업 등록', saleHit.length ? `등록${sd ? ` · ${fmtDate(sd)} 허가` : ''}${saleHit.length > 1 ? ` (${saleHit.length}건)` : ''}` : '미등록',
+      saleHit.length ? 'A' : 'B', '식약처 화장품제조업·책임판매업 API', today,
+      saleHit.length ? '자체 브랜드(책임판매) 허가도 보유 — 고객사 제품과 경쟁 품목이 있는지, 자체 유통 경험은 어떤지 확인'
+        : '식약처 명단에서 같은 상호·사업자번호의 책임판매업 기록을 찾지 못함(제조 전문)'));
+  }
+
   // 업종은 식약처 등록 사실 기준으로 정확히(집계 페이지 자유텍스트 오추출 방지). 연락처는 집계 참고.
   if (mk) basic.push(f('업종', '화장품 제조업', 'A', '식약처 화장품제조업 API', today, '식약처 화장품제조업 등록 기준'));
 
@@ -1590,10 +1609,10 @@ function assembleLiveReport(name, corp, res) {
     }
   }
 
-  return {
+  const reportOut = {
     meta: {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
-      version: 1, overall_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
+      version: 1, overall_grade: overall, data_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
       bld: R.bld ? (R.bld.ok ? R.bld.data : { err: R.bld.err, queried: R.bld.queried }) : null,
       site: R.site && R.site.ok ? R.site.data : null,          // 실제 공장 소재지 선정 결과(후보·근거)
       mfds_sites: nedSites.length ? nedSites : null,            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
@@ -1612,6 +1631,9 @@ function assembleLiveReport(name, corp, res) {
     // 채용공고 추적 — 수집은 조회 단계에서, 판정은 재직자수가 확정된 여기서
     hiring,
   };
+  // 종합판정 — 공식 자료로 확인된 사실 기준(app.js qualityGrade). 예전 방식(신뢰도 가운데 값)은 data_grade로 남긴다
+  if (typeof qualityGrade === 'function') reportOut.meta.overall_grade = qualityGrade(reportOut).grade;
+  return reportOut;
 }
 
 window.VENDOR_SAMPLES = { '리니어코스메틱': linear, '샘플뷰티랩': beautylab };
