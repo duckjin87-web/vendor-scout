@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 182;
+const BUILD = 183;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -5811,44 +5811,11 @@ function mountTrend(root) {
   }).catch(() => { if (box.isConnected) box.remove(); });
 }
 
-// ── 기사 원문 읽기 ──
-// 언론사 사이트는 대부분 iframe 삽입을 막아(X-Frame-Options) 화면 안에 끼워 넣을 수 없다.
-// 프록시로 페이지를 받아 본문만 골라 읽기 쉬운 글로 보여 준다. 실패하면 새 탭 링크로 안내한다.
-function articleBody(html) {
-  // <head>(제목·스크립트)와 머리말·꼬리말은 본문이 아니다 — 먼저 걷어낸다
-  const H = String(html || '')
-    .replace(/<head\b[\s\S]*?<\/head>/i, ' ')
-    .replace(/<(nav|aside|header|footer|form|figure|iframe|noscript)\b[\s\S]*?<\/\1>/gi, ' ');
-  // 본문 후보 — <article>이나 기사 본문 컨테이너를 먼저, 없으면 가장 글이 많은 <div>
-  // <article>이 있으면 그게 본문일 확률이 높다 — 점수에 가산점을 준다
-  const cands = [...H.matchAll(/<article\b[^>]*>([\s\S]*?)<\/article>/gi)].map((m) => ({ h: m[1], bonus: 600 }));
-  [...H.matchAll(/<(?:div|section)\b[^>]*(?:id|class)=["'][^"']*(?:article|news|content|body|view|read)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|section)>/gi)]
-    .forEach((m) => cands.push({ h: m[1], bonus: 200 }));
-  cands.push({ h: H, bonus: 0 });
-  let best = '', bestLen = 0;
-  cands.forEach((c) => {
-    const t = htmlToText(c.h);
-    // 메뉴 덩어리가 아니라 '문장'이 있는 쪽을 고른다
-    const score = t.length + (t.match(/[.。!?다]\s/g) || []).length * 40 + (t.length > 200 ? c.bonus : 0);
-    if (score > bestLen) { bestLen = score; best = t; }
-  });
-  return best
-    .split(/\n+/).map((x) => x.trim())
-    .filter((x) => x.length >= 2 && !/^(홈|메뉴|로그인|회원가입|구독|검색|전체보기|이전|다음|닫기|공유|댓글|기사제보|무단전재)/.test(x))
-    .slice(0, 120);
-}
-async function readArticle(url) {
-  const r = await proxyOnlyGet('fetchPage', { url });
-  const lines = articleBody(r && r.text);
-  if (!lines.length || lines.join('').length < 120) throw new Error('본문을 읽지 못했습니다');
-  return lines;
-}
-
 // ── 관련기사 탭 ── 로딩 화면에 넘겨 보이던 업계 소식을 전체 목록으로 다시 본다(같은 자료·3시간 보관).
 // 주제로 거를 수 있고, 다시 받기를 누르면 보관분을 버리고 새로 조회한다.
 function mountTrendPane(pane) {
   if (!pane) return;
-  const st = { topic: null, busy: false, open: null, read: {} };
+  const st = { topic: null, busy: false, open: null };
   const paint = (items, err) => {
     if (!pane.isConnected) return;
     if (err) { pane.innerHTML = `<div class="trp"><div class="gr-empty">최신 소식을 불러오지 못했습니다 — ${esc(err)}</div></div>`; return; }
@@ -5867,20 +5834,13 @@ function mountTrendPane(pane) {
       // 제목만 보이고, 누르면 그 자리에서 펼쳐진다(요약 + 원문 읽기). 원문을 읽으면 아래 기사들이 밀려난다.
       + rows.map((a) => {
         const open = st.open === a.link;
-        const rd = st.read[a.link];
         return `<li class="${open ? 'on' : ''}">`
           + `<button type="button" class="trp-t" data-trp-open="${esc(a.link)}" aria-expanded="${open}">`
           + `<span class="tr-topic sm">${esc(a.topic)}</span><b>${esc(a.title)}</b>`
           + `<span class="trp-m">${esc([a.host, trendWhen(a.at)].filter(Boolean).join(' · '))}</span><span class="trp-c" aria-hidden="true"></span></button>`
           + (open ? '<div class="trp-body">'
             + (a.desc ? `<p class="trp-d">${esc(a.desc)}</p>` : '')
-            + `<div class="trp-acts"><button type="button" class="nb-btn sm${rd && rd.lines ? '' : ' dark'}" data-trp-read="${esc(a.link)}"${rd && rd.busy ? ' disabled' : ''}>`
-            + `${rd && rd.busy ? '불러오는 중…' : rd && rd.lines ? '원문 닫기' : '원문 읽기'}</button>`
-            + `<a class="nb-btn sm" href="${esc(a.link)}" target="_blank" rel="noopener">새 탭에서 열기 ↗</a></div>`
-            + (rd && rd.err ? `<p class="trp-err">${esc(rd.err)} — 「새 탭에서 열기」로 원문을 보세요.</p>` : '')
-            + (rd && rd.lines ? `<div class="trp-read"><div class="trp-read-h">원문 · ${esc(a.host || '')}<a href="${esc(a.link)}" target="_blank" rel="noopener">원문 페이지 ↗</a></div>`
-              + rd.lines.map((x) => `<p>${esc(x)}</p>`).join('')
-              + '<p class="trp-read-f">본문만 추려 보여 줍니다 — 사진·표·영상은 원문 페이지에서 보세요.</p></div>' : '')
+            + `<div class="trp-acts"><a class="nb-btn sm dark" href="${esc(a.link)}" target="_blank" rel="noopener">원문 보기 ↗</a></div>`
             + '</div>' : '')
           + '</li>';
       }).join('')
@@ -5899,14 +5859,6 @@ function mountTrendPane(pane) {
     if (e.target.closest('[data-trp-reload]') && !st.busy) { st.open = null; paint(null); load(true); return; }
     const o = e.target.closest('[data-trp-open]');
     if (o) { const u = o.dataset.trpOpen; st.open = st.open === u ? null : u; repaint(); return; }
-    const r = e.target.closest('[data-trp-read]');
-    if (r) {
-      const u = r.dataset.trpRead;
-      if (st.read[u] && st.read[u].lines) { delete st.read[u]; repaint(); return; }   // 원문 닫기
-      if (st.read[u] && st.read[u].busy) return;
-      st.read[u] = { busy: true }; repaint();
-      readArticle(u).then((lines) => { st.read[u] = { lines }; }).catch((er) => { st.read[u] = { err: er.message || '원문을 불러오지 못했습니다' }; }).then(repaint);
-    }
   });
   paint(null);
   load(false);

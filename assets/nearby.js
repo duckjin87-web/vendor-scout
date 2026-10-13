@@ -510,13 +510,21 @@ function nbSheetHtml(st) {
     ? `지도 위치 ${esc(s.mapAddr)}` : '';
   const pdate = String(s.pdate || '').replace(/\D/g, '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') || '';
   const chip = (k, v, t, sub) => `<div class="vch vch-${t || 'num'}"><i>${esc(k)}</i><b>${v}${sub ? `<small>${sub}</small>` : ''}</b></div>`;
-  // 사전검증 리포트 요약처럼 '카테고리 칸'에 값을 넣는다 — 줄줄이 적힌 정의 목록보다 한눈에 읽힌다
-  const moveMain = pl ? (s.km < NB_SAME_KM ? '같은 위치' : (s.drive && s.drive.min != null ? `차량 ${nbFmtMin(s.drive.min)}` : `약 ${nbFmtMin(nbEstMin(s.km))}`)) : '미확인';
-  const moveSub = pl ? (s.km < NB_SAME_KM ? '같은 부지·건물' : (s.drive && s.drive.min != null ? `도로 ${nbFmtKm(s.drive.km)}km · 실측` : (s.driveP ? '실측 확인 중…' : '추정'))) : '';
+  // 사전검증 리포트 요약처럼 '카테고리 칸'에 값을 넣는다 — 거리는 이동 칸에 함께 적고,
+  // 위치 근거는 글이 길어 칸을 넘치므로 칸 줄 아래 한 줄로 뺀다.
+  const km = pl ? `${nbFmtKm(s.km)}km` : '';
+  const moveMain = pl ? (s.km < NB_SAME_KM ? '같은 위치' : `${km} · ${s.drive && s.drive.min != null ? `차량 ${nbFmtMin(s.drive.min)}` : `약 ${nbFmtMin(nbEstMin(s.km))}`}`) : '거리 미확인';
+  const moveSub = pl ? (s.km < NB_SAME_KM ? '기점과 같은 부지·건물' : (s.drive && s.drive.min != null ? `도로 ${nbFmtKm(s.drive.km)}km · 카카오내비 실측` : (s.driveP ? '직선거리 · 실측 확인 중…' : '직선거리 · 차량시간 추정'))) : '';
+  const acts = `<div class="nb-selacts">`
+    + (pl ? `<button type="button" class="nb-btn sm${st.route.includes(s.id) ? '' : ' blue'}" data-act="route" data-id="${esc(s.id)}">${st.route.includes(s.id) ? '동선에서 빼기' : '동선에 추가'}</button>`
+      : `<button type="button" class="nb-btn sm" disabled title="위치가 번지까지 확인되지 않아 동선에 넣지 않습니다">동선에 추가 불가</button>`)
+    + (pl ? `<a class="nb-btn sm" href="${esc(nbKakaoRoute(st, [s]))}" target="_blank" rel="noopener">길찾기</a>`
+      : `<button type="button" class="nb-btn sm" disabled title="위치가 번지까지 확인되지 않았습니다">길찾기</button>`)
+    + `<a class="nb-btn sm" href="${esc(mapUrl)}" target="_blank" rel="noopener">카카오맵</a>`
+    + `<button type="button" class="nb-btn sm dark" data-act="report" data-id="${esc(s.id)}">사전검증 리포트</button></div>`;
   h += `<div class="nb-selmain"><div class="nb-selhead">`
     + `<div class="nb-selname"><b>${esc(s.name)}</b><span class="nb-badge reg">제조업 허가</span>${s.cgmp ? '<span class="nb-badge gmp">CGMP</span>' : ''}`
-    + `<span class="nb-seladdr">${esc(s.addr || '')}</span></div>`
-    + `<div class="nb-seld">${pl ? `${nbFmtKm(s.km)}<small>km</small>` : '<small>거리 미확인</small>'}</div></div>`
+    + `<span class="nb-seladdr">${esc(s.addr || '')}</span></div>${acts}</div>`
     + '<div class="vd-chips nb-chips">'
     + chip('이동', esc(moveMain), pl ? 'num' : 'na', esc(moveSub))
     + chip('CGMP', s.cgmp ? '적합' : (st.gmp ? '미등재' : '확인 불가'), s.cgmp ? 'good' : 'na')
@@ -524,15 +532,8 @@ function nbSheetHtml(st) {
     + (s.rep ? chip('대표자', esc(s.rep), 'num') : '')
     + chip('전화', tel, s.phone ? 'num' : 'na')
     + chip('지역', esc(nbTierLabel(st, s.tier)), 'num')
-    + chip('위치 근거', esc(nbGeoText(s)), pl ? 'num' : 'na', mapAddrRow)
     + '</div>'
-    + `</div><div class="nb-selacts">`
-    + (pl ? `<button type="button" class="nb-btn sm${st.route.includes(s.id) ? '' : ' blue'}" data-act="route" data-id="${esc(s.id)}">${st.route.includes(s.id) ? '동선에서 빼기' : '동선에 추가'}</button>`
-      : `<button type="button" class="nb-btn sm" disabled title="위치가 번지까지 확인되지 않아 동선에 넣지 않습니다">동선에 추가 불가</button>`)
-    + (pl ? `<a class="nb-btn sm" href="${esc(nbKakaoRoute(st, [s]))}" target="_blank" rel="noopener">길찾기</a>`
-      : `<button type="button" class="nb-btn sm" disabled title="위치가 번지까지 확인되지 않았습니다">길찾기</button>`)
-    + `<a class="nb-btn sm" href="${esc(mapUrl)}" target="_blank" rel="noopener">카카오맵</a>`
-    + `<button type="button" class="nb-btn sm dark" data-act="report" data-id="${esc(s.id)}">사전검증 리포트</button>`
+    + `<div class="nb-selgeo${pl ? '' : ' unk'}"><i>위치 근거</i>${esc(nbGeoText(s))}${mapAddrRow ? ` · ${mapAddrRow}` : ''}</div>`
     + `</div>`;
   return h;
 }
@@ -627,9 +628,7 @@ function nbPaint(st) {
     nbDrawMapSafe(st);
     return;
   }
-  const sheet = pane.querySelector('.nb-sheet');
-  sheet.innerHTML = st.center ? nbSheetHtml(st) : '<div class="nb-empty">기준 주소의 위치를 확인하는 중…</div>';
-  sheet.classList.toggle('has-sel', !!sheet.querySelector('.nb-selmain'));   // 상세가 있을 때만 좌우로 나눈다
+  pane.querySelector('.nb-sheet').innerHTML = st.center ? nbSheetHtml(st) : '<div class="nb-empty">기준 주소의 위치를 확인하는 중…</div>';
   pane.querySelector('.nb-listcol').innerHTML = nbListHtml(st);
   status.innerHTML = (st.phase ? `<span class="nb-spin" aria-hidden="true"></span>${esc(st.phase)} · ` : '') + nbStatusLine(st)
     + ' · 거리는 직선, 이동시간은 추정(업체를 고르면 카카오내비 실측)입니다';

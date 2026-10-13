@@ -1167,20 +1167,12 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 .nb-selhead { display: flex; align-items: flex-start; gap: 12px; }
 .nb-selname { flex: 1; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .nb-selname b { font-size: 19px; font-weight: 800; margin-right: 2px; }
-.nb-seld { font-size: 20px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.nb-seld small { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 1px; }
 
 .nb-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
 .nb-badge.reg { background: var(--pin-reg); color: #fff; }
 .nb-badge.new { background: var(--pin-new-bg); color: var(--pin-new-ink); box-shadow: inset 0 0 0 1px var(--pin-new); }
 .nb-badge.unk { background: var(--gD-bg); color: var(--muted); }
 .nb-badge.gmp { background: var(--gA-bg); color: var(--gA); }
-.nb-selbox { margin: 0; padding: 12px; background: var(--bg); border-radius: 10px; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 12.5px; }
-.nb-selbox dt { color: var(--muted); }
-.nb-selbox dd { margin: 0; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
-.nb-selbox dd small { display: block; font-weight: 500; color: var(--muted); font-size: 11px; }
-.nb-selbox dd.new { color: var(--pin-new-ink); }
-.nb-selbox dd.unk { color: var(--muted); }
 .nb-selacts { display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: 8px; }
 
 /* 버튼 — 링크와 버튼 모양을 맞춘다 */
@@ -1248,8 +1240,6 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 .nb-ohint { font-size: 12px; color: var(--muted); }
 /* 선택 카드 — 등록 주소 전체와 이동시간 */
 .nb-seladdr { font-size: 13px; color: var(--text); margin-top: -6px; overflow-wrap: anywhere; }
-.nb-move b { font-weight: 800; }
-.nb-move small, .nb-selbox dd small { display: block; font-weight: 500; color: var(--muted); font-size: 11px; }
 /* 목록 행 — 주소 한 줄 + 이동시간 */
 .nb-time { font-size: 11.5px; color: var(--accent); font-weight: 600; }
 /* CGMP 적합 업체 핀·표식 */
@@ -1747,29 +1737,21 @@ div.mk-t:hover { border-color: var(--border); }
 .nb-sheet { padding: 14px 16px 16px; }
 .nb-sheet > .nb-empty { margin: 0; }
 /* 상세 — 왼쪽 업체 정보, 오른쪽 버튼 묶음 */
-.nb-sheet.has-sel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; }
-.nb-selmain { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.nb-sheet .nb-selacts { display: flex; flex-direction: column; gap: 8px; width: 190px; }
-.nb-sheet .nb-selbox { grid-template-columns: auto 1fr auto 1fr; }
+.nb-selmain { min-width: 0; }
 .nb-row.open .nb-rowbtn { background: var(--accent-soft); }
 .nb-listcol > .nb-sum { padding: 10px 16px 0; }
 @media (max-width: 980px) {
-  .nb-sheet .nb-selbox { grid-template-columns: auto 1fr; }
-  .nb-sheet .nb-selacts { width: 150px; }
 }
 @media (max-width: 720px) {
   .nb-top { grid-template-columns: 1fr; }
   .nb-top > .nb-map { min-height: 0; height: 360px; border-right: 0; border-bottom: 1px solid var(--border); }
   .nb-top > .nb-listcol { min-height: 0; }
-  .nb-sheet, .nb-sheet.has-sel { display: block; scroll-margin-top: calc(var(--topbar-h, 61px) + 56px); }
-  .nb-sheet .nb-selacts { flex-direction: row; flex-wrap: wrap; width: auto; margin-top: 10px; }
-  .nb-sheet .nb-selacts > * { flex: 1 1 45%; }
+  .nb-sheet { scroll-margin-top: calc(var(--topbar-h, 61px) + 56px); }
   .nb-rows { max-height: 360px; overflow-y: auto; }
 }
 @media print {
   .nb-top { grid-template-columns: 1fr; }
   .nb-top > .nb-map { min-height: 0; height: 320px; }
-  .nb-sheet, .nb-sheet.has-sel { display: block; }
 }
 
 /* ── 공장 면적 탭: 건물 로드뷰 ── */
@@ -1899,27 +1881,26 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .trp-body { padding: 0 6px 14px; animation: rsecIn .22s ease both; }
 .trp-d { margin: 0 0 10px; font-size: 13px; color: var(--muted); line-height: 1.6; }
 .trp-acts { display: flex; flex-wrap: wrap; gap: 6px; }
-.trp-err { margin: 8px 0 0; font-size: 12.5px; color: var(--risk); }
-.trp-read { margin-top: 12px; padding: 14px 16px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; max-height: 60vh; overflow-y: auto; }
-.trp-read-h { display: flex; gap: 8px; align-items: baseline; font-size: 11.5px; color: var(--muted); padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
-.trp-read-h a { margin-left: auto; color: var(--accent); text-decoration: none; font-weight: 600; white-space: nowrap; }
-.trp-read p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.75; overflow-wrap: anywhere; }
-.trp-read-f { color: var(--faint); font-size: 11.5px; border-top: 1px dashed var(--border); padding-top: 8px; }
 @media (max-width: 720px) {
   .trp { padding: 12px; }
   .trp-t { flex-wrap: wrap; }
   .trp-t b { flex-basis: calc(100% - 20px); }
   .trp-m { margin-left: 0; }
-  .trp-read { max-height: none; padding: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { .trp-body { animation: none; } .trp-c { transition: none; } }
 
-/* 근처 업체 상세 — 리포트 요약과 같은 카테고리 칸, 버튼은 글자 폭에 맞춘 작은 크기 */
-.nb-selmain .nb-selname { align-items: baseline; }
+/* 근처 업체 상세 — 업체명 오른쪽에 버튼 4개, 아래 카테고리 칸, 맨 아래 위치 근거 한 줄 */
+.nb-selhead { align-items: center; gap: 12px 16px; flex-wrap: wrap; }
+.nb-selmain .nb-selname { flex: 1; min-width: 220px; align-items: baseline; }
 .nb-selmain .nb-seladdr { flex-basis: 100%; margin-top: 0; font-size: 12.5px; color: var(--muted); }
+.nb-sheet .nb-selacts { display: flex; flex-wrap: wrap; width: auto; gap: 6px; margin-left: auto; }
+.nb-sheet .nb-selacts .nb-btn { white-space: nowrap; }
 .nb-chips { margin-top: 10px; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); }
 .nb-chips .vch b { white-space: normal; overflow: visible; text-overflow: clip; font-size: 13px; line-height: 1.4; }
-.nb-sheet .nb-selacts { width: auto; align-items: stretch; }
-.nb-sheet .nb-selacts .nb-btn { white-space: nowrap; }
-@media (max-width: 980px) { .nb-sheet .nb-selacts { width: auto; } }
-@media (max-width: 720px) { .nb-sheet .nb-selacts > * { flex: 0 1 auto; } }
+.nb-selgeo { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
+.nb-selgeo i { font-style: normal; font-size: 10.5px; color: var(--faint); margin-right: 6px; }
+.nb-selgeo.unk { color: var(--gC); }
+@media (max-width: 720px) {
+  .nb-sheet .nb-selacts { margin-left: 0; }
+  .nb-sheet .nb-selacts > * { flex: 1 1 auto; }
+}
