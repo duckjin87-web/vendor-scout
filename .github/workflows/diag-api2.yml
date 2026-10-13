@@ -1,0 +1,77 @@
+name: Diagnose new data sources
+
+# 새로 붙일 공공데이터(고용·산재보험, 대기·수질 배출시설, 공정위 결정문, 화장품 행정처분)를
+# 우리 키로 불러 보고, 카탈로그 명세에서 요청주소를 뽑는다. 커밋 없음.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: |
+          cat > d.mjs <<'JS'
+          const K = process.env.KEY;
+          const out = [];
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 1500));
+          const UA = { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) Chrome/124 Safari/537.36' };
+          const brief = (t) => {
+            const code = (t.match(/<returnReasonCode>([^<]*)</) || t.match(/<resultCode>([^<]*)</) || t.match(/"resultCode"\s*:\s*"?([^",}]*)/) || [])[1] || '';
+            const msg = (t.match(/<returnAuthMsg>([^<]*)</) || t.match(/<resultMsg>([^<]*)</) || t.match(/"resultMsg"\s*:\s*"([^"]*)/) || [])[1] || '';
+            return `${code} ${msg}`.trim();
+          };
+          // ① 근로복지공단 고용·산재보험 — 사업자번호로
+          for (const [nm, bz] of [['리더스코스메틱', '1348112735'], ['코빅스', '4028149178']]) {
+            for (const fg of ['1', '2']) {
+              try {
+                const u = `https://apis.data.go.kr/B490001/gySjbPstateInfoService/getGySjBoheomBsshItem?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=10&v_saeopjaDrno=${bz}&opaBoheomFg=${fg}`;
+                const r = await fetch(u, { signal: AbortSignal.timeout(20000) }); const t = await r.text();
+                const items = [...t.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => ['saeopjangNm', 'sangsiInwonCnt', 'gyEopjongNm', 'seongripDt', 'addr'].map((k) => (m[1].match(new RegExp(`<${k}>([^<]*)<`)) || [])[1] || '').join('/'));
+                out.push(`고용산재[${nm} fg${fg}] HTTP ${r.status} ${brief(t)} · ${items.slice(0, 2).join(' ; ') || t.replace(/\s+/g, ' ').slice(0, 120)}`);
+              } catch (e) { out.push(`고용산재[${nm}] 실패 ${e.message}`); }
+            }
+          }
+          n(out.splice(0).join(' ‖ '));
+          // ② 카탈로그 명세(swagger)에서 요청주소 뽑기
+          for (const id of ['15154973', '15154989', '15103246', '15103247']) {
+            try {
+              const r = await fetch(`https://www.data.go.kr/catalog/${id}/openapi.json`, { headers: UA, signal: AbortSignal.timeout(20000) });
+              const t = await r.text();
+              let j = null; try { j = JSON.parse(t); } catch {}
+              if (j) {
+                const host = j.host || (j.servers && j.servers[0] && j.servers[0].url) || '';
+                const base = j.basePath || '';
+                const paths = Object.entries(j.paths || {}).map(([p, v]) => {
+                  const op = v.get || v.post || {};
+                  const ps = (op.parameters || []).map((x) => x.name).join(',');
+                  return `${p}(${ps})`;
+                });
+                out.push(`[${id}] ${j.info && j.info.title} · ${host}${base} · ${paths.slice(0, 4).join(' ')}`);
+              } else out.push(`[${id}] HTTP ${r.status} JSON 아님 ${t.replace(/\s+/g, ' ').slice(0, 80)}`);
+            } catch (e) { out.push(`[${id}] 실패 ${e.message}`); }
+          }
+          n(out.splice(0).join(' ‖ '));
+          // ③ 화장품 행정처분 — 의약품안전나라 화면 후보
+          for (const [nm, u] of [
+            ['nedrug 행정처분 검색', 'https://nedrug.mfds.go.kr/pbp/CCBAC01/getList?searchYn=true&page=1&limit=10&searchKeyword=%ED%99%94%EC%9E%A5%ED%92%88'],
+            ['nedrug 화장품 행정처분', 'https://nedrug.mfds.go.kr/pbp/CCBCH01'],
+            ['mfds 행정처분 정보', 'https://www.mfds.go.kr/wpge/m_506/de010209l001.do'],
+          ]) {
+            try {
+              const r = await fetch(u, { headers: UA, signal: AbortSignal.timeout(20000) }); const t = await r.text();
+              const title = (t.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
+              const hasCos = /화장품/.test(t), hasDisp = /행정처분|처분일|처분내용/.test(t);
+              out.push(`${nm} HTTP ${r.status} · ${title.trim().slice(0, 50)} · 화장품언급 ${hasCos} · 처분표 ${hasDisp}`);
+            } catch (e) { out.push(`${nm} 실패 ${e.message}`); }
+          }
+          n(out.splice(0).join(' ‖ '));
+          JS
+          node d.mjs
