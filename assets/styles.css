@@ -1815,6 +1815,9 @@ div.mk-t:hover { border-color: var(--border); }
 /* 항목 신뢰도 점(●●●) — 종합판정 글자(A~D)와 모양을 달리한다 */
 .gdot.rel { width: auto; height: auto; padding: 1px 5px; font-size: 10px; letter-spacing: .5px; line-height: 1.5; border-radius: 4px; font-weight: 400; }
 .legend .gdot.rel { display: inline-block; vertical-align: 1px; margin-right: 3px; }
+.legend .rel-none { font-style: normal; font-size: 10px; color: var(--faint); border: 1px dashed var(--border); border-radius: 4px; padding: 1px 5px; }
+/* 신뢰도 표는 항목명 뒤에 — 안 믿기는 항목만 눈에 걸리게 */
+.field .k .gdot.rel { margin-left: 2px; }
 .vw-tbl .gdot.rel { display: inline-block; margin-right: 4px; }
 
 /* ── 조회 진행 상황(로딩 화면) ── */

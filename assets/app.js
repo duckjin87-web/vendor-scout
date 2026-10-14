@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 195;
+const BUILD = 196;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -33,7 +33,10 @@ function errText(v) {
 const GRADE_LABEL = { A: '공식 API', B: '공공DB 간접', C: '추정/프록시', D: '데이터 공백' };
 // 항목 신뢰도는 점으로 그린다 — 종합판정(A~D)과 같은 글자를 쓰면 둘을 헷갈린다(실무 검토 의견)
 const GRADE_DOTS = { A: '●●●', B: '●●○', C: '●○○', D: '○○○' };
-const relDots = (g) => `<span class="gdot rel g${esc(g)}" title="신뢰도 ${esc(GRADE_DOTS[g] || '')} · ${esc(GRADE_LABEL[g] || '')}" aria-label="신뢰도 ${esc(GRADE_LABEL[g] || '')}">${GRADE_DOTS[g] || ''}</span>`;
+// 공식 API로 확인된 항목(A)은 표시하지 않는다 — 모든 줄에 ●●●이 붙어 있으면 정작 눈여겨봐야 할
+// 추정·공백 항목이 묻힌다. 믿을 수 없는 것만 표를 단다(always=true면 범례·판정 설명용으로 A도 그린다).
+const relDots = (g, always) => ((!always && g === 'A') ? ''
+  : `<span class="gdot rel g${esc(g)}" title="신뢰도 ${esc(GRADE_DOTS[g] || '')} · ${esc(GRADE_LABEL[g] || '')}" aria-label="신뢰도 ${esc(GRADE_LABEL[g] || '')}">${GRADE_DOTS[g] || ''}</span>`);
 
 let currentReport = null;
 let _srcOpen = false;   // 데이터 소스 상태 패널 펼침 여부(재렌더 시 유지)
@@ -3599,8 +3602,8 @@ function fieldRow(fld) {
   const row = el('div', 'field' + (isCgmpField(fld) ? ' cgmp' : ''));
 
   const k = el('div', 'k');
-  k.insertAdjacentHTML('beforeend', relDots(fld.grade));
   k.appendChild(el('span', 'ktxt', esc(fld.key)));
+  k.insertAdjacentHTML('beforeend', relDots(fld.grade));
   row.appendChild(k);
 
   const stale = fld.fresh === false ? ' <span class="stale">⚠기간초과</span>' : '';
@@ -3654,8 +3657,17 @@ function block(title, icon, fields, cat) {
 const WF_ROLE = { mfg: ['t-fac', '화장품 제조'], 'mfg-odd': ['t-oth', '제조소 주소 · 업종 상이'], logi: ['t-log', '물류'], office: ['t-hq', '본사·사무'], other: ['t-oth', '다른 업종'], cosm: ['t-fac', '화장품 업종'] };
 function workforceBlock(report) {
   const M = report.meta || {};
-  const W = M.workforce, MP = M.manpower || {};
+  const W = M.workforce;
+  const MP = M.manpower || (W ? { nps: W.nps, npsBasis: W.npsBasis, npsAddr: W.npsAddr } : {});
   const hasSites = !!(W && W.sites && W.sites.length);
+  // 예전 판(v194 이하)으로 저장·내보낸 리포트에는 추정 폭이 없다 — 가진 값으로 다시 만든다.
+  // 저장본을 다시 열었을 때 화면이 통째로 비면 안 된다.
+  if (hasSites && (!W.mfgR || !W.allR)) {
+    const mk = (a, b) => (b == null || !isFinite(b) ? { lo: a, hi: a, one: true } : { lo: Math.min(a, b), hi: Math.max(a, b), one: Math.min(a, b) === Math.max(a, b) });
+    if (!W.mfgR) W.mfgR = mk(Number(W.mfg) || 0, W.mfgNps);
+    if (!W.allR) W.allR = mk(Number(W.total) || 0, W.npsBasis === 'confirmed' ? W.nps : null);
+    if (W.npsSplit == null) W.npsSplit = W.sites.some((x) => x.npsCnt != null && !x.npsUnsplit);
+  }
   if (!hasSites && !(MP.nps != null || MP.fctEmpl != null || (MP.trend && MP.trend.length))) return null;
   const b = el('div', 'block full cat-prod wf');
   const n = (v) => (v == null ? '—' : Number(v).toLocaleString());
@@ -4825,7 +4837,7 @@ function openVerdictWhy(report) {
     + sec('risk', '② 중대 위험', '✕면 C')
     + sec('plus', '③ 우수 기준', 'CGMP ✓ + 주의 없음이면 A')
     + `<section><h4>참고 — 자료 신뢰도 <small>판정에는 쓰지 않습니다</small></h4>`
-    + `<p class="vw-note">확인된 항목들의 출처 등급 가운데 값: ${relDots(Q.dataGrade)} ${esc(GRADE_LABEL[Q.dataGrade])}. 자료가 적거나 추정값이 많으면 낮아집니다.</p>`
+    + `<p class="vw-note">확인된 항목들의 출처 등급 가운데 값: ${relDots(Q.dataGrade, true)} ${esc(GRADE_LABEL[Q.dataGrade])}. 자료가 적거나 추정값이 많으면 낮아집니다.</p>`
     + (ups.length ? `<div class="vw up"><i>확인됨</i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
     + (downs.length ? `<div class="vw down"><i>확인필요</i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
     + `</section>`
@@ -6153,9 +6165,11 @@ function render(report, opts = {}) {
 
   // Legend
   const lg = el('div', 'legend');
+  // 범례도 '표기 없음 = 믿을 수 있는 자료'부터 밝힌다 — 안 붙은 이유를 모르면 빠진 것처럼 보인다
   lg.innerHTML =
     '<span class="item"><b>항목 신뢰도</b></span>' +
-    ['A', 'B', 'C', 'D'].map((g) => `<span class="item">${relDots(g)} ${GRADE_LABEL[g]}</span>`).join('');
+    `<span class="item"><em class="rel-none">표기 없음</em> ${GRADE_LABEL.A}로 확인</span>` +
+    ['B', 'C', 'D'].map((g) => `<span class="item">${relDots(g)} ${GRADE_LABEL[g]}</span>`).join('');
   root.appendChild(lg);
   // 출처 — 맨 아래 한 줄로 간략히
   if (report.meta && report.meta.live) {
