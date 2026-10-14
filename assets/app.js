@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 188;
+const BUILD = 189;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -184,7 +184,7 @@ const PARAM_MAP = {
   financeBs: { crno: 'crno', rows: 'numOfRows', page: 'pageNo', year: 'bizYear' },
   financeIs: { crno: 'crno', rows: 'numOfRows', page: 'pageNo', year: 'bizYear' },
   rpt:       { name: 'entp_name', rows: 'numOfRows' },
-  npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo' }, // 국민연금 V2 — camelCase
+  npsSearch: { name: 'wkplNm', bz: 'bzowrRgstNo', page: 'pageNo', rows: 'numOfRows' }, // 국민연금 V2 — camelCase
   npsDetail: { seq: 'seq', ym: 'dataCrtYm' },
   maker:     { name: 'bssh_nm', rows: 'numOfRows' },
   gmp:       { rows: 'numOfRows' }, // 적합업체 현황(목록형) — 전체 받아 프론트에서 업체명 필터
@@ -196,6 +196,9 @@ const PARAM_MAP = {
   factoryLand:  { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
   factoryFclty: { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
   recall:    { rows: 'numOfRows', page: 'pageNo' }, // 화장품 회수·판매중지 — 목록형, 프론트에서 업체명 필터
+  insure:    { bz: 'v_saeopjaDrno', fg: 'opaBoheomFg', rows: 'numOfRows' }, // 고용·산재보험 가입 사업장(1=산재, 2=고용)
+  // 대기배출시설 — cond[필드::연산자] 필터. 공장은 사업자번호가 비었거나 지점 번호라 상호·주소로도 찾는다
+  air:       { bzEq: 'cond[BRNO::EQ]', nameLike: 'cond[BPLC_NM::LIKE]', roadLike: 'cond[ROAD_NM_ADDR::LIKE]', lotLike: 'cond[LOTNO_ADDR::LIKE]', rows: 'numOfRows' },
 };
 
 // data.go 공통 에러 메시지 → 사용자 조치 안내
@@ -2250,10 +2253,37 @@ async function npsLookup(nm, bzno) {
   const digits = bzno ? String(bzno).replace(/\D/g, '') : '';
   let items = [], byBzno = false;
   if (digits.length >= 10) {
-    try { items = itemsOf(await proxyGet('npsSearch', { bz: digits })); byBzno = items.length > 0; } catch { /* 상호명으로 폴백 */ }
+    try {
+      items = itemsOf(await proxyGet('npsSearch', { bz: digits }));
+      // 공개 번호가 앞 6자리뿐이라 다른 회사가 섞일 수 있다 → 상호가 겹치는 사업장만(없으면 원본 유지)
+      const key = stripCorp(nm).replace(/\s/g, '');
+      const named = items.filter((it) => { const w = stripCorp(it.wkplNm).replace(/\s/g, ''); return w && (w.includes(key) || key.includes(w)); });
+      if (named.length) items = named;
+      byBzno = items.length > 0;
+    } catch { /* 상호명으로 폴백 */ }
   }
-  if (!items.length) items = itemsOf(await proxyGet('npsSearch', { name: nm }));
+  let byBz6 = false;
+  if (!items.length) {
+    items = itemsOf(await proxyGet('npsSearch', { name: nm, rows: '100' }));
+    // 동명 사업장이 100곳을 넘으면 우리 회사가 뒤 페이지에 있을 수 있다(인코스: 207곳) → 최대 3페이지
+    for (let pg = 2; pg <= 3 && items.length === (pg - 1) * 100; pg++) {
+      try { items = items.concat(itemsOf(await proxyGet('npsSearch', { name: nm, rows: '100', page: String(pg) }))); } catch { break; }
+    }
+    // 상호 검색은 '포함' 검색이라 '인코스'에 (주)인코스모·주식회사 인코스(관악)·자인코스텍 등 수백 곳이 걸린다.
+    // 그중 가입자 최다 사업장을 고르면 남의 회사 인원(인코스 248명 사례)이 찍힌다.
+    // 국민연금은 사업자번호 앞 6자리만 공개 → 사업자번호를 알면 앞 6자리 일치 사업장만 남긴다.
+    if (digits.length >= 10) {
+      const bz6 = digits.slice(0, 6);
+      const same = items.filter((it) => String(it.bzowrRgstNo || '').replace(/\D/g, '').slice(0, 6) === bz6);
+      items = same; byBz6 = same.length > 0;
+    } else {
+      // 사업자번호를 모르면 법인격을 뗀 상호가 정확히 같은 사업장만
+      const key = stripCorp(nm).replace(/\s/g, '');
+      items = items.filter((it) => stripCorp(it.wkplNm).replace(/\s/g, '') === key);
+    }
+  }
   if (!items.length) return { search: null, detail: null, count: 0, total: null, sites: 0, byBzno };
+  if (byBz6) byBzno = true;   // 앞 6자리 + 상호 포함 일치 → 같은 사업자의 사업장으로 보고 합산
 
   // 대기업은 본사·공장별로 국민연금 사업장이 분리 등록됨 → 가입자수를 사업장별로 조회해 합산.
   // 가입자수(jnngpCnt)는 상세조회에만 있어 seq별 호출(상위 18개, 동시 6개로 제한 — 연결 포화 방지).
@@ -2303,6 +2333,86 @@ async function npsLookup(nm, bzno) {
     newCnt, lostCnt, noticeAmt, payrollEst,          // 월 갱신 지표
     churnKnown, numKeys,                             // 취득·상실 필드 확보 여부 / 미확보 시 후보 키 목록
   };
+}
+
+// 주소 대조 키 — 도로명+건물번호('가정로37번길 29' → '가정로37번길29').
+// 시·구 표기가 기관마다 다르다(인천 서구 ↔ 서해구, '인천' ↔ '인천광역시') — 도로명과 번호만 맞으면 같은 곳으로 본다.
+function roadKeyOf(addr) {
+  const m = String(addr || '').match(/([가-힣A-Za-z0-9]+(?:로|길))\s*(\d+(?:-\d+)?)(?![\d가-힣])/);
+  return m ? `${m[1]}${m[2]}` : '';
+}
+// 같은 주소의 사람이 읽는 표기 — 조회용 LIKE 값('가정로37번길 29')
+function roadTextOf(addr) {
+  const m = String(addr || '').match(/([가-힣A-Za-z0-9]+(?:로|길))\s*(\d+(?:-\d+)?)(?![\d가-힣])/);
+  return m ? `${m[1]} ${m[2]}` : '';
+}
+window.roadKeyOf = roadKeyOf;
+
+// ── 근로복지공단 고용·산재보험 가입 사업장 ──
+// 사업자번호 10자리로 정확히 그 회사의 보험 사업장만 온다(국민연금처럼 앞 6자리 혼입이 없다).
+// 큰 회사는 고용보험을 본사 한 곳에 몰아 신고하고 산재보험은 공장별로 나누는 경우가 많아(코스맥스)
+// 두 보험을 사업장 단위로 합쳐 둘 다 보여 준다.
+async function insureLookup(bzno) {
+  const b = String(bzno || '').replace(/\D/g, '');
+  if (b.length !== 10) throw new Error('사업자번호 없음');
+  const [sj, gy] = await Promise.allSettled(['1', '2'].map((fg) =>
+    proxyGet('insure', { bz: b, fg, rows: '50' }).then(itemsOf)));
+  if (sj.status === 'rejected' && gy.status === 'rejected') throw sj.reason;
+  const t = (v) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+  const dt = (v) => { const d = String(v || '').replace(/\D/g, ''); return d.length >= 6 ? `${d.slice(0, 4)}-${d.slice(4, 6)}${d.length >= 8 ? '-' + d.slice(6, 8) : ''}` : null; };
+  const map = new Map();
+  const put = (it, kind) => {
+    const nm = t(it.saeopjangNm), addr = t(it.addr);
+    const key = `${nm.replace(/\s/g, '')}|${roadKeyOf(addr) || addr.replace(/\s/g, '')}`;
+    const s = map.get(key) || { name: nm, addr, gy: null, sj: null };
+    s[kind] = { cnt: Number(it.sangsiInwonCnt) || 0, ind: t(it.gyEopjongNm || it.sjEopjongNm) || null, est: dt(it.seongripDt) };
+    map.set(key, s);
+  };
+  if (sj.status === 'fulfilled') sj.value.forEach((it) => put(it, 'sj'));
+  if (gy.status === 'fulfilled') gy.value.forEach((it) => put(it, 'gy'));
+  const sites = [...map.values()];
+  const sum = (k) => sites.reduce((a, s) => a + (s[k] ? s[k].cnt : 0), 0);
+  return { bzno: b, sites, gyTotal: gy.status === 'fulfilled' ? sum('gy') : null, sjTotal: sj.status === 'fulfilled' ? sum('sj') : null };
+}
+
+// ── 대기오염물질 배출시설 설치 신고(지자체 인허가) ──
+// 공장 신고 건은 사업자번호가 비었거나 지점 번호인 경우가 많다(리더스코스메틱 안성공장: 빈칸).
+// 사업자번호 · 상호 · 제조소 주소마다 따로 찾아 합치고, 그중 이 회사 것만 남긴다.
+async function airLookup(bzno, nm, siteAddrs) {
+  const b = String(bzno || '').replace(/\D/g, '');
+  const key = stripCorp(nm).replace(/\s/g, '');
+  const roads = [...new Set((siteAddrs || []).map(roadTextOf).filter(Boolean))].slice(0, 3);
+  const qs = [];
+  if (b.length === 10) qs.push({ bzEq: b });
+  if (key.length >= 2) qs.push({ nameLike: stripCorp(nm).trim() });
+  roads.forEach((r) => qs.push({ roadLike: r }));
+  if (!qs.length) throw new Error('조회 키 없음');
+  const got = await Promise.allSettled(qs.map((q) => proxyGet('air', { ...q, rows: '50' }).then(itemsOf)));
+  if (got.every((g) => g.status === 'rejected')) throw got[0].reason;
+  const seen = new Map();
+  got.forEach((g) => { if (g.status === 'fulfilled') g.value.forEach((r) => { const k = r.MNG_NO || `${r.BPLC_NM}|${r.ROAD_NM_ADDR}|${r.LCPMT_YMD}`; if (!seen.has(k)) seen.set(k, r); }); });
+  const siteKeys = new Set((siteAddrs || []).map(roadKeyOf).filter(Boolean));
+  const rows = [];
+  for (const r of seen.values()) {
+    const rb = String(r.BRNO || '').replace(/\D/g, '');
+    const rn = stripCorp(r.BPLC_NM).replace(/\s/g, '');
+    const nameEq = !!key && rn === key;
+    const nameHas = !!key && rn.includes(key);
+    const atSite = siteKeys.has(roadKeyOf(r.ROAD_NM_ADDR)) || siteKeys.has(roadKeyOf(r.LOTNO_ADDR));
+    // 사업자번호 일치 · 같은 상호(번호 없음/지점 번호) · 제조소 주소 + 상호 포함 — 상호만 같은 남의 회사(다른 본점 번호)는 뺀다
+    const branch = rb.length === 10 && rb.slice(3, 5) === '85';
+    const mine = (b && rb === b)
+      || (nameEq && (!rb || !b || branch || atSite))
+      || (atSite && nameHas);
+    if (!mine) continue;
+    rows.push({
+      name: r.BPLC_NM || '', bzno: rb || null, kind: r.BTP_NM || null, biz: r.BZSTAT_SE_NM || null, product: r.PRMN_PRDT_NM || null,
+      status: r.DTL_SALS_STTS_NM || null, permit: r.LCPMT_YMD || null, closed: r.CLSBIZ_YMD || null,
+      days: Number(r.EMSN_FCLT_ANL_OPRTNG_DAY_CNT) || null, hours: Number(r.EMSN_FCLT_WRK_HR) || null,
+      addr: r.ROAD_NM_ADDR || r.LOTNO_ADDR || '', lot: r.LOTNO_ADDR || '', mng: r.MNG_NO || null,
+    });
+  }
+  return { rows, queried: qs.length };
 }
 
 // ── 금융위 재무 조회 (최신 연도 확보 강화) ──
@@ -3291,7 +3401,12 @@ async function finishLive(name, corp) {
     hiring: hiringTrace(nm),
     // 국세청 진위확인 — 사업자번호·대표자·개업일 3요소 대조(상태조회와 동일 서비스)
     ntsVal: ntsValidate(corp.bzno, corp.rep, corp.estbDt),
+    // 고용·산재보험 — 사업자번호 정확 조회(사업장별 상시인원·업종·성립일)
+    insure: corp.bzno ? insureLookup(corp.bzno) : Promise.reject(new Error('사업자번호 없음')),
   };
+  // 대기배출시설 — 의약품안전나라 제조소 주소로도 찾아야 해서 그 결과를 기다렸다가 부른다
+  calls.air = Promise.resolve(calls.nedrug).catch(() => null)
+    .then((ned) => airLookup(corp.bzno, nm, ned && ned.found ? ned.sites.map((x) => x.addr) : []));
   const keys = Object.keys(calls);
   const res = {};
   const settleOf = {};
@@ -3362,6 +3477,16 @@ async function liveBackfill(res, corp, name, nm) {
     // 국민연금 — 상호검색 결과가 약하면(합산 미확보) 사업자번호로 정확 재조회
     if (uniqBz[0] && (!res.nps || !res.nps.ok || !(res.nps.data && res.nps.data.total))) {
       try { const npsBz = await npsLookup(nm, uniqBz[0]); if (npsBz && npsBz.count) res.nps = { ok: true, data: npsBz }; } catch { /* 유지 */ }
+    }
+    // 고용·산재보험·대기배출 — 사업자번호가 있어야 정확히 찾는다
+    if (uniqBz[0] && (!res.insure || !res.insure.ok)) {
+      try { res.insure = { ok: true, data: await insureLookup(uniqBz[0]) }; } catch { /* 유지 */ }
+    }
+    if (uniqBz[0] && res.air && res.air.ok && res.air.data && !res.air.data.bzTried) {
+      try {
+        const ned = res.nedrug && res.nedrug.ok && res.nedrug.data && res.nedrug.data.found ? res.nedrug.data.sites.map((x) => x.addr) : [];
+        const a = await airLookup(uniqBz[0], nm, ned); a.bzTried = true; res.air = { ok: true, data: a };
+      } catch { /* 유지 */ }
     }
   }
 }
@@ -3546,6 +3671,98 @@ function block(title, icon, fields, cat) {
     b.appendChild(d);
   }
   return b;
+}
+
+// ── 인력 · 사업장 구성(고용·산재보험) ──
+// 국민연금 가입자(회사 전체·본점 일괄)와 보험 상시근로자(사업장별)를 나란히 놓고,
+// 사업장마다 화장품 제조·본사·물류·다른 업종을 갈라 '실제로 만드는 인원'을 보여 준다.
+const WF_ROLE = { mfg: ['t-fac', '화장품 제조'], 'mfg-odd': ['t-oth', '제조소 주소 · 업종 상이'], logi: ['t-log', '물류'], office: ['t-hq', '본사·사무'], other: ['t-oth', '다른 업종'], cosm: ['t-fac', '화장품 업종'] };
+function workforceBlock(report) {
+  const W = report.meta && report.meta.workforce;
+  if (!W || !W.sites || !W.sites.length) return null;
+  const b = el('div', 'block full cat-prod wf');
+  const n = (v) => (v == null ? '—' : Number(v).toLocaleString());
+  const bz = ((report.basic || []).find((x) => x.key === '사업자등록번호') || {}).value || '';
+  const chip = (k, v, sub, t) => `<div class="vch vch-${t || 'num'}"><i>${esc(k)}</i><b>${esc(v)}${sub ? `<small>${esc(sub)}</small>` : ''}</b></div>`;
+  const mfgSub = W.mfgSiteN ? (W.mfgSiteN === 1 ? W.mfgNames[0] : `${W.mfgSiteN}곳 합계`) : '보험 업종 기준';
+  let h = `<h3>인력 · 사업장 구성<span class="cnt">고용·산재보험 · 보험 사업장 ${W.sites.length}곳${bz ? ` · ${esc(bz)}` : ''}</span></h3>`;
+  h += '<div class="vd-chips wf-chips">'
+    + chip('화장품 제조 사업장 인원', W.mfgSiteN ? `${n(W.mfg)}명` : '없음', mfgSub, W.mfgSiteN ? 'num' : 'bad')
+    + chip('보험 상시근로자 (회사 전체)', `${n(W.total)}명`, `고용 ${n(W.gyTotal)} · 산재 ${n(W.sjTotal)}`)
+    + chip('국민연금 가입자', W.nps != null ? `${n(W.nps)}명` : '미확인', W.npsAddr ? `${String(W.npsAddr).split(' ').slice(0, 2).join(' ')} 신고` : '비교용', W.nps != null ? 'num' : 'na')
+    + (W.other ? chip('다른 업종 사업장', `${n(W.other)}명`, W.otherInd || '', 'bad') : '')
+    + '</div>';
+  h += '<div class="xt-wrap"><table class="xt"><thead><tr><th>보험 사업장</th><th class="hide-m">주소</th><th>업종 (고용 / 산재)</th><th class="n">고용 상시</th><th class="n">산재 상시</th><th class="hide-m">성립</th></tr></thead><tbody>'
+    + W.sites.map((x) => {
+      const [cls, lab] = WF_ROLE[x.role] || ['', ''];
+      const gi = x.gy && x.gy.ind, si = x.sj && x.sj.ind;
+      return `<tr class="${x.atSite ? 'main' : ''}"><td>${x.atSite ? `<b>${esc(x.name)}</b>` : esc(x.name)}<br><span class="xtag ${cls}">${esc(lab)}</span>${x.atSite ? '<span class="xtag t-ok">제조소와 같은 주소 ✓</span>' : ''}</td>`
+        + `<td class="hide-m">${esc(x.addr)}</td><td>${esc(gi || si || '—')}${gi && si && gi !== si ? `<small>${esc(si)}</small>` : ''}</td>`
+        + `<td class="n">${x.gy ? n(x.gy.cnt) : '—'}</td><td class="n">${x.sj ? (x.atSite ? `<b>${n(x.sj.cnt)}</b>` : n(x.sj.cnt)) : '—'}</td><td class="hide-m">${esc(x.est || '—')}</td></tr>`;
+    }).join('') + '</tbody></table></div>';
+  // 해설 — 숫자만 놓으면 왜 다른지 읽는 사람이 계산해야 한다
+  const ins = [];
+  if (W.mfgSiteN) {
+    const share = W.total ? Math.round((W.mfg / W.total) * 100) : null;
+    ins.push(['good', `실제 화장품을 만드는 인원은 <b>${esc(W.mfgNames.join(' · '))} ${n(W.mfg)}명</b>입니다${share != null && share < 100 ? ` — 회사 전체 ${n(W.total)}명 중 ${share}%` : ''}.`
+      + (W.matched ? ' 의약품안전나라 제조소 주소에 보험 사업장이 실제로 있어 공장이 가동 중이라는 근거가 됩니다.' : ' (보험 사업장 주소가 제조소 주소와 정확히 맞지는 않아 업종으로 골랐습니다)')]);
+  } else {
+    ins.push(['warn', '보험 업종에 <b>화장품 제조 사업장이 없습니다</b> — 제조를 직접 하는지, 위탁·소분만 하는지 방문 때 확인하세요.']);
+  }
+  if (W.other) ins.push(['warn', `같은 법인에 <b>다른 업종 사업장(${n(W.other)}명${W.otherInd ? ` · ${esc(W.otherInd)}` : ''})</b>이 있습니다. 방문 대상인지 확인하세요.`]);
+  if (W.nps != null && W.total) {
+    const d = W.total - W.nps;
+    if (Math.abs(d) >= Math.max(3, W.total * 0.15)) {
+      ins.push(['', d > 0
+        ? `보험 상시근로자(${n(W.total)}명)가 국민연금 가입자(${n(W.nps)}명)보다 <b>${n(d)}명 많습니다</b> — 일용·단시간·외국인 등 연금 미가입 인력이 있을 수 있습니다(비고정 인력 신호).`
+        : `국민연금 가입자(${n(W.nps)}명)가 보험 상시근로자(${n(W.total)}명)보다 <b>${n(-d)}명 많습니다</b> — 대표·임원(보험 제외)이나 퇴사 반영 시차, 연금 사업장 조회 범위 차이일 수 있습니다.`]);
+    } else {
+      ins.push(['', `국민연금 가입자 ${n(W.nps)}명과 보험 상시근로자 ${n(W.total)}명이 비슷합니다 — 고정 인력 위주입니다.`]);
+    }
+  }
+  const gyL = W.sites.find((x) => x.gy && x.sj && x.gy.cnt && x.sj.cnt && Math.abs(x.gy.cnt - x.sj.cnt) >= Math.max(3, x.gy.cnt * 0.3));
+  if (gyL) ins.push(['', `${esc(gyL.name)}의 고용보험 ${n(gyL.gy.cnt)}명 · 산재보험 ${n(gyL.sj.cnt)}명처럼 두 보험 인원이 다르면, 한쪽에 본사 일괄 신고나 일용·단시간 인력이 몰려 있을 수 있습니다. 공장 인원은 산재보험 쪽이 정확합니다.`]);
+  h += '<ul class="xins">' + ins.map(([c, t]) => `<li class="${c}">${t}</li>`).join('') + '</ul>';
+  h += '<p class="xfoot">출처: 근로복지공단 고용·산재보험 가입 사업장(사업자번호 조회). <b>상시근로자</b>는 보험 신고 기준 월평균 근로자 수로 일용·단시간 근로자도 들어갑니다. '
+    + '<b>국민연금 가입자</b>는 월 60시간 이상 일하는 가입자(대표 포함)라 둘은 다를 수 있습니다. 사업장 역할은 보험 업종과 제조소 주소로 자동 분류합니다.</p>';
+  b.innerHTML = `${h.slice(0, h.indexOf('</h3>') + 5)}<div class="wf-in">${h.slice(h.indexOf('</h3>') + 5)}</div>`;
+  return b;
+}
+
+// ── 대기 배출시설 신고(공장 면적 탭) ──
+function airSecHtml(M) {
+  const A = M && M.air;
+  if (!A) return '';
+  const tagOf = { cur: ['t-fac', '화장품 제조소'], 'cur-closed': ['t-bad', '지금 제조소 · 폐업/휴업'], old: ['t-bad', '옛 사업장'], other: ['t-oth', '다른 업종'], etc: ['t-hq', '기타'] };
+  let h = `<div class="at-sec at-air"><h4>대기 배출시설 신고 <small>행정안전부 대기오염물질 배출시설 인허가 · ${A.rows.length}건</small></h4>`;
+  if (!A.rows.length) {
+    return h + '<p class="xfoot">사업자번호·상호·제조소 주소로 찾은 신고가 없습니다. <b>결격이 아닙니다</b> — 소규모 시설은 신고 대상이 아닐 수 있습니다.</p></div>';
+  }
+  const c = A.rows.find((r) => r.atSite && !r.isClosed) || A.rows.find((r) => r.atSite);
+  const chip = (k, v, sub, t) => `<div class="vch vch-${t || 'num'}"><i>${esc(k)}</i><b>${esc(v)}${sub ? `<small>${esc(sub)}</small>` : ''}</b></div>`;
+  h += '<div class="vd-chips">'
+    + chip('제조소 주소 신고', c ? (c.isClosed ? c.status || '폐업' : '있음 · 영업') : '없음', c ? '제조소 주소와 일치' : (A.siteKnown ? '다른 주소만 있음' : '제조소 주소 미확인'), c ? (c.isClosed ? 'bad' : 'num') : 'na')
+    + (c && c.kind ? chip('배출시설 종별', c.kind, '1종(대형)~5종(소형)') : '')
+    + (c && c.permit ? chip('인허가일', c.permit) : '')
+    + (c && (c.days || c.hours) ? chip('가동', `연 ${c.days || '—'}일`, `하루 ${c.hours || '—'}시간`) : '')
+    + (A.old ? chip('폐업한 옛 사업장', `${A.old}곳`, '', 'bad') : '')
+    + '</div>';
+  h += '<div class="xt-wrap"><table class="xt"><thead><tr><th>신고 사업장</th><th class="hide-m">주소</th><th>업태 · 주생산품</th><th>종별</th><th>상태</th><th class="n">가동</th><th class="hide-m">인허가</th></tr></thead><tbody>'
+    + A.rows.map((r) => {
+      const [cls, lab] = tagOf[r.tag] || ['', ''];
+      return `<tr class="${r.atSite ? 'main' : ''}"><td>${r.atSite ? `<b>${esc(r.name)}</b>` : esc(r.name)}<br><span class="xtag ${cls}">${esc(lab)}</span>${r.atSite ? '<span class="xtag t-ok">제조소 주소 일치 ✓</span>' : ''}</td>`
+        + `<td class="hide-m">${esc(r.addr)}</td><td>${esc(r.biz || '—')}${r.product ? `<small>주생산품 ${esc(r.product)}</small>` : ''}</td><td>${esc(r.kind || '—')}</td>`
+        + `<td><span class="xtag ${r.isClosed ? 't-bad' : 't-ok'}">${esc(r.status || '—')}</span>${r.closed ? `<small>${esc(r.closed)}</small>` : ''}</td>`
+        + `<td class="n">${r.days ? `연 ${r.days}일` : '—'}${r.hours ? `<small>하루 ${r.hours}시간</small>` : ''}</td><td class="hide-m">${esc(r.permit || '—')}</td></tr>`;
+    }).join('') + '</tbody></table></div>';
+  const ins = [];
+  if (c && !c.isClosed) ins.push(['good', '지금 제조소에 대기 배출시설 신고가 있고 <b>영업 중</b>입니다 — 보일러·유화·건조 등 생산 설비가 신고된 실제 공장입니다.']);
+  if (c && c.isClosed) ins.push(['warn', `지금 제조소 주소의 배출시설이 <b>${esc(c.status || '폐업')}</b> 상태입니다${c.closed ? `(${esc(c.closed)})` : ''}. 설비를 옮겼거나 가동을 멈췄을 수 있으니 확인하세요.`]);
+  if (A.old) ins.push(['warn', `<b>폐업한 옛 사업장 ${A.old}곳</b>이 있습니다 — 공장을 옮긴 이력으로 보입니다. 이전 이유와 설비 이전 여부를 물어볼 만합니다.`]);
+  if (c && c.days) ins.push(['', `배출시설 가동 연 ${c.days}일 · 하루 ${c.hours || '—'}시간으로 신고돼 있습니다${c.hours && c.hours <= 10 ? ' — 1교대 상시 가동 수준' : c.hours >= 16 ? ' — 2교대 이상' : ''}.`]);
+  if (ins.length) h += '<ul class="xins">' + ins.map(([k, t]) => `<li class="${k}">${t}</li>`).join('') + '</ul>';
+  h += '<p class="xfoot">출처: 행정안전부 대기오염물질 배출시설 설치 사업장(지자체 인허가). 공장 신고는 사업자번호가 비었거나 지점 번호인 경우가 많아 사업자번호·상호·제조소 주소로 함께 찾습니다.</p></div>';
+  return h;
 }
 
 // 재무 지표 정의 (금액 4종 + 비율 2종), 색상 구분
@@ -4234,6 +4451,18 @@ function qualityGrade(report) {
   // ③ 우수 기준
   add('CGMP', cgmp, cgmp ? '식약처 CGMP 적합업소' : '미등재', 'plus');
   add('공장 소재지', isFullAddr(site) ? true : null, isFullAddr(site) ? '번지까지 확인' : '번지까지 확인 못 함', 'plus');
+  // 고용·산재보험·대기배출 — 있으면 근거를 더하고, 이상 신호일 때만 주의. 자료가 없다는 이유로는 낮추지 않는다.
+  const W = report.meta && report.meta.workforce, AIR = report.meta && report.meta.air;
+  const wfWarn = !!(W && W.noMfg);
+  if (W) add('제조 인력', wfWarn ? null : true, wfWarn ? '보험상 화장품 제조 사업장 없음 — 직접 제조 여부 확인' : `보험상 화장품 제조 사업장 ${W.mfg}명${W.mfgNames && W.mfgNames.length ? ` (${W.mfgNames.slice(0, 2).join(', ')})` : ''}`, 'plus');
+  const airCur = AIR ? (AIR.rows || []).filter((r) => r.atSite) : [];
+  const airWarn = airCur.length > 0 && airCur.every((r) => r.isClosed);
+  const wfAt = !!(W && W.matched);
+  if (W || AIR) {
+    const bits = [wfAt ? '제조소 주소에 보험 사업장' : '', airCur.some((r) => !r.isClosed) ? '대기배출 신고(영업)' : ''].filter(Boolean);
+    add('공장 가동', airWarn ? null : (bits.length ? true : null),
+      airWarn ? '지금 제조소 주소의 대기 배출시설이 폐업·휴업' : bits.length ? bits.join(' + ') : '가동 근거 자료 없음(판정에 쓰지 않음)', 'plus');
+  }
 
   let grade, why;
   if (!licensed) { grade = 'D'; why = '제조업 허가 미확인'; }
@@ -4241,7 +4470,8 @@ function qualityGrade(report) {
   else if (bz.length !== 10) { grade = 'D'; why = '업체를 특정할 수 없음'; }
   else if (rcBad || capImpair) { grade = 'C'; why = [rcBad ? '최근 3년 중대 회수' : '', capImpair ? '자본잠식' : ''].filter(Boolean).join(' · '); }
   else {
-    const cautions = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회 불가' : '', !isFullAddr(site) ? '공장 번지 미확인' : ''].filter(Boolean);
+    const cautions = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회 불가' : '', !isFullAddr(site) ? '공장 번지 미확인' : '',
+      wfWarn ? '보험상 제조 인력 없음' : '', airWarn ? '제조소 배출시설 폐업·휴업' : ''].filter(Boolean);
     if (cgmp && !cautions.length) { grade = 'A'; why = 'CGMP 적합 · 중대 위험 없음'; }
     else { grade = 'B'; why = cgmp ? `CGMP 적합이나 주의: ${cautions.join(' · ')}` : `중대 위험 없음 · CGMP 미등재${cautions.length ? ` · 주의: ${cautions.join(' · ')}` : ''}`; }
   }
@@ -4508,7 +4738,7 @@ function openVerdictWhy(report) {
     + `<p class="vq-why">${esc(Q.why)}</p>`
     + `<section><h4>어떻게 정하나 <small>자료의 양이 아니라, 공식 기관 자료로 확인된 사실만 봅니다</small></h4>`
     + `<table class="vw-tbl"><thead><tr><th>판정</th><th>뜻</th><th>기준</th></tr></thead><tbody>${rules}</tbody></table>`
-    + `<p class="vw-note">주의 신호 — 최근 3년 경미 회수 1건(표시기재 등) · 부채비율 400% 초과 · 국세청 상태 조회 불가 · 공장 소재지 번지 미확인. 하나라도 있으면 A가 아니라 B입니다.</p></section>`
+    + `<p class="vw-note">주의 신호 — 최근 3년 경미 회수 1건(표시기재 등) · 부채비율 400% 초과 · 국세청 상태 조회 불가 · 공장 소재지 번지 미확인 · 보험상 화장품 제조 사업장 없음 · 지금 제조소의 대기 배출시설 폐업·휴업. 하나라도 있으면 A가 아니라 B입니다. 고용·산재보험·대기배출 자료가 <b>없다는 이유만으로는</b> 낮추지 않습니다(소규모는 신고 대상이 아닐 수 있음).</p></section>`
     + sec('gate', '① 검토 전제', '하나라도 ✕면 검토불가')
     + sec('risk', '② 중대 위험', '✕면 C')
     + sec('plus', '③ 우수 기준', 'CGMP ✓ + 주의 없음이면 A')
@@ -5297,7 +5527,7 @@ function renderAreaTab(report) {
   };
 
   const paint = () => {
-    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${candHtml()}${sumHtml()}${lotsHtml()}${bldgHtml()}${noteHtml()}`;
+    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${candHtml()}${sumHtml()}${lotsHtml()}${bldgHtml()}${airSecHtml(M)}${noteHtml()}`;
     ui.painted = true;
     const cmp = renderAreaCompare(report);
     if (cmp) wrap.appendChild(cmp);
@@ -5553,6 +5783,8 @@ function render(report, opts = {}) {
   const areaTab = renderAreaTab(report);
   core.appendChild(block('생산역량 · 인원', '',
     visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod'));
+  const wfB = workforceBlock(report);
+  if (wfB) core.appendChild(wfB);
   if (!excl.has('finance')) core.appendChild(financeBlock(report));
   const allF = [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])];
   const gapN = allF.filter((x) => x.data_gap || x.value == null).length;
@@ -5773,7 +6005,7 @@ function render(report, opts = {}) {
 // 그 사이 사용자가 한 일(홈페이지 추적·심층분석·면적 수정·직접 입력)은 새 리포트로 옮긴다.
 const LIVE_SRC_NAME = { finance: '금융위 재무', rpt: '식약처 보고품목', nps: '국민연금', maker: '식약처 제조업', nedrug: '의약품안전나라 제조소', gmp: '식약처 CGMP',
   factory: '산단공 공장등록', recall: '식약처 회수·판매중지', nts: '국세청 사업자상태', naverNews: '뉴스', oemTrace: '웹 언급',
-  hiring: '채용공고', ntsVal: '국세청 진위확인' };
+  hiring: '채용공고', ntsVal: '국세청 진위확인', insure: '고용·산재보험', air: '대기배출시설' };
 function hookLateReport(report) {
   if (!report || !report._late || report._lateHooked) return;
   Object.defineProperty(report, '_lateHooked', { value: true });

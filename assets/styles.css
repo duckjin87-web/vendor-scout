@@ -1971,3 +1971,39 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
   .at-sites li { grid-template-columns: 1fr; gap: 4px; }
   .at-sx { justify-content: flex-start; }
 }
+
+/* ── 인력·사업장 구성(고용·산재보험) · 대기 배출시설 표 ── */
+.wf .wf-in { padding: 4px 16px 14px; }
+.wf .wf-chips { margin: 0 0 12px; border-top: 0; }
+.xt-wrap { overflow-x: auto; }
+.xt { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.xt th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.xt td { padding: 8px; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.45; }
+.xt td small { display: block; color: var(--muted); font-size: 11px; }
+.xt .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.xt tr.main td { background: var(--accent-soft); }
+.xtag { display: inline-block; white-space: nowrap; margin: 3px 4px 0 0; padding: 1px 6px; border-radius: 4px; font-size: 10.5px; font-weight: 600; line-height: 1.6; background: var(--rule); color: var(--muted); }
+.xtag.t-fac { background: #dbeafe; color: #1e40af; }
+.xtag.t-ok { background: #dcfce7; color: #166534; }
+.xtag.t-oth { background: #fef3c7; color: #92400e; }
+.xtag.t-bad { background: #fee2e2; color: #991b1b; }
+.xtag.t-hq, .xtag.t-log { background: #ede9fe; color: #5b21b6; }
+.xins { margin: 10px 0 0; padding: 0 0 0 18px; font-size: 12.5px; line-height: 1.6; }
+.xins li { margin: 3px 0; }
+.xins li.good::marker { color: var(--gA, #16a34a); }
+.xins li.warn::marker { color: var(--gC, #d97706); }
+.xfoot { margin: 10px 0 0; font-size: 11px; color: var(--muted); line-height: 1.6; }
+.at-air { margin-top: 14px; }
+@media (max-width: 620px) { .xt .hide-m { display: none; } }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .xtag.t-fac { background: #1e3a5f; color: #bfdbfe; }
+  :root:not([data-theme="light"]) .xtag.t-ok { background: #14532d; color: #bbf7d0; }
+  :root:not([data-theme="light"]) .xtag.t-oth { background: #78350f; color: #fde68a; }
+  :root:not([data-theme="light"]) .xtag.t-bad { background: #7f1d1d; color: #fecaca; }
+  :root:not([data-theme="light"]) .xtag.t-hq, :root:not([data-theme="light"]) .xtag.t-log { background: #3b2a63; color: #ddd6fe; }
+}
+:root[data-theme="dark"] .xtag.t-fac { background: #1e3a5f; color: #bfdbfe; }
+:root[data-theme="dark"] .xtag.t-ok { background: #14532d; color: #bbf7d0; }
+:root[data-theme="dark"] .xtag.t-oth { background: #78350f; color: #fde68a; }
+:root[data-theme="dark"] .xtag.t-bad { background: #7f1d1d; color: #fecaca; }
+:root[data-theme="dark"] .xtag.t-hq, :root[data-theme="dark"] .xtag.t-log { background: #3b2a63; color: #ddd6fe; }

@@ -24,6 +24,10 @@ const DATAGO = {
   factoryLand:  'https://apis.data.go.kr/B550624/fctryRegistInfo/getFctryLandService_v2',
   factoryFclty: 'https://apis.data.go.kr/B550624/fctryRegistInfo/getFctryFcltyService_v2',
   recall:    'https://apis.data.go.kr/1471000/CsmtcsRtrvlSleStpgeInfo/getCsmtcsRtrvlSleStpgeInfo', // 식약처 화장품 회수·판매중지 정보
+  // 근로복지공단 고용·산재보험 가입 사업장 — 사업자번호 10자리(v_saeopjaDrno), 보험구분(opaBoheomFg 1=산재·2=고용). XML 응답.
+  insure:    'https://apis.data.go.kr/B490001/gySjbPstateInfoService/getGySjBoheomBsshItem',
+  // 행정안전부 대기오염물질 배출시설 설치 신고 — cond[필드::EQ|LIKE] 필터, returnType=json
+  air:       'https://apis.data.go.kr/1741000/air_pollution_facility_installation/info',
 };
 
 const CORS = {
@@ -129,6 +133,14 @@ function handleDataGo(url, service, env) {
     if (!q.has('dataType'))  q.set('dataType', 'json');
     if (!q.has('pageNo'))    q.set('pageNo', '1');
     if (!q.has('numOfRows')) q.set('numOfRows', '100');
+  } else if (service === 'insure') {
+    // XML 전용 — 다른 형식 파라미터를 붙이지 않는다(프론트 parseDataGo가 <item>을 파싱)
+    if (!q.has('pageNo'))     q.set('pageNo', '1');
+    if (!q.has('numOfRows'))  q.set('numOfRows', '50');
+  } else if (service === 'air') {
+    if (!q.has('returnType')) q.set('returnType', 'json');
+    if (!q.has('pageNo'))     q.set('pageNo', '1');
+    if (!q.has('numOfRows'))  q.set('numOfRows', '50');
   } else {
     if (!q.has('resultType')) q.set('resultType', 'json');
     if (NEEDS_TYPE.has(service) && !q.has('type')) q.set('type', 'json');

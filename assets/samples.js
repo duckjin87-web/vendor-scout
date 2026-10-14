@@ -1028,6 +1028,52 @@ function assembleLiveReport(name, corp, res) {
   const npsYmRaw = pick(npsDet, 'dataCrtYm') || pick(nps, 'dataCrtYm');
   const npsYm = npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1.$2') : null;
 
+  // ── 고용·산재보험 — 사업장별 상시인원과 역할(제조·본사·물류·다른 업종) ──
+  // 국민연금은 회사 전체(또는 본점 일괄) 가입자 수라 공장 인원을 알 수 없다. 보험은 사업장 단위로 오고
+  // 업종도 함께 와서 '실제로 화장품을 만드는 곳에 몇 명이 있는지'를 가를 수 있다.
+  const rk = typeof roadKeyOf === 'function' ? roadKeyOf : () => '';
+  const siteKeys = new Set([...nedSites.map((x) => rk(x.addr)), rk(R.site && R.site.ok && R.site.data ? R.site.data.addr : '')].filter(Boolean));
+  const COSM_IND = /화장품.*제조|화장품 및 향료/;
+  const insD = R.insure && R.insure.ok ? R.insure.data : null;
+  const workforce = insD && insD.sites && insD.sites.length ? (() => {
+    const sites = insD.sites.map((x) => {
+      const inds = [x.gy && x.gy.ind, x.sj && x.sj.ind].filter(Boolean);
+      const cosm = inds.some((i) => COSM_IND.test(i));
+      const atSite = siteKeys.has(rk(x.addr));
+      const logi = /물류|창고/.test(x.name) || inds.some((i) => /운송|창고|물류/.test(i));
+      const office = /본사|사무소|연구소|영업소/.test(x.name) || inds.some((i) => /도매|소매|도\.소매|사무|서비스업|연구개발/.test(i));
+      // 공장 인원은 산재보험 쪽이 정확하다 — 고용보험은 본사에 몰아 신고하는 회사가 많다(코스맥스)
+      const cnt = x.sj ? x.sj.cnt : (x.gy ? x.gy.cnt : 0);
+      const role = atSite ? (cosm || !inds.length ? 'mfg' : 'mfg-odd') : logi ? 'logi' : office ? 'office' : (inds.length && !cosm) ? 'other' : 'cosm';
+      return { ...x, cnt, cosm, atSite, role, est: (x.sj && x.sj.est) || (x.gy && x.gy.est) || null };
+    }).sort((a, b) => (b.atSite - a.atSite) || (b.cnt - a.cnt));
+    const total = Math.max(insD.gyTotal || 0, insD.sjTotal || 0);
+    const atS = sites.filter((x) => x.atSite);
+    // 제조 인원 — 제조소 주소의 사업장. 주소가 안 맞으면 화장품 업종 사업장(본사·물류 제외)
+    const mfgSites = atS.length ? atS : sites.filter((x) => x.role === 'cosm');
+    const mfg = mfgSites.reduce((a, x) => a + x.cnt, 0);
+    const other = sites.filter((x) => x.role === 'other');
+    return { sites, total, gyTotal: insD.gyTotal, sjTotal: insD.sjTotal, mfg, mfgNames: mfgSites.map((x) => x.name), mfgSiteN: mfgSites.length, matched: atS.length > 0,
+      other: other.reduce((a, x) => a + x.cnt, 0), otherInd: other.map((x) => (x.gy && x.gy.ind) || (x.sj && x.sj.ind)).filter(Boolean)[0] || null,
+      noMfg: !mfgSites.length || sites.every((x) => !x.cosm), nps: empVal != null ? Number(empVal) : null, npsAddr: npsAddr || null };
+  })() : null;
+
+  // ── 대기오염물질 배출시설 신고 — 공장이 실제로 설비를 돌리고 있다는 근거 ──
+  const airD = R.air && R.air.ok ? R.air.data : null;
+  const airInfo = airD ? (() => {
+    const ymd = (v) => { const d = String(v || '').replace(/\D/g, ''); return d.length >= 8 ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : null; };
+    const rows = (airD.rows || []).map((r) => {
+      const atSite = siteKeys.has(rk(r.addr)) || siteKeys.has(rk(r.lot));
+      const closed = /폐업|휴업|취소/.test(r.status || '');
+      const cosm = atSite || /화장품|마스크|크림|로션|에센스|샴푸|세안/.test(`${r.biz || ''} ${r.product || ''}`);
+      const tag = atSite ? (closed ? 'cur-closed' : 'cur') : !cosm && r.biz ? 'other' : closed ? 'old' : 'etc';
+      return { ...r, permit: ymd(r.permit), closed: ymd(r.closed), atSite, isClosed: closed, tag };
+    }).sort((a, b) => (b.atSite - a.atSite) || (a.isClosed - b.isClosed));
+    const cur = rows.filter((r) => r.atSite);
+    return { rows, cur: cur.length, curActive: cur.filter((r) => !r.isClosed).length, curClosed: cur.filter((r) => r.isClosed).length,
+      old: rows.filter((r) => r.tag === 'old').length, siteKnown: siteKeys.size > 0 };
+  })() : null;
+
   // 식약처 GMP 적합업소 (CGMP 등록여부) — 적합업체 전체목록에서 상호로 필터
   // 업체명 필드 키가 API마다 달라(BSSH_NM/CMPNY_NM/…) 모든 필드값을 훑어 상호 포함 여부로 매칭
   const gmpList = R.gmp && R.gmp.ok ? listOf(R.gmp.data, ['response.body.items.item', 'body.items', 'items']) : [];
@@ -1169,6 +1215,21 @@ function assembleLiveReport(name, corp, res) {
             ? `★ 동일 사업자번호의 ${npsSites}개 국민연금 사업장(본사·공장 등) 가입자 합산 — 4대보험 재직자(월 갱신). 파견·일용·프리랜서 미포함`
             : '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함')
         : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
+    // 고용·산재보험 상시근로자 — 국민연금 가입자와 다른 숫자다(일용·단시간 포함 월평균, 사업장별)
+    f('상시근로자 (고용·산재보험)',
+      workforce ? `${workforce.total}명 · 보험 사업장 ${workforce.sites.length}곳` : null,
+      workforce ? 'A' : 'D', '근로복지공단 고용·산재보험', workforce ? today : null,
+      workforce
+        ? `사업자번호로 조회한 이 회사 보험 사업장의 상시근로자 합계(고용 ${workforce.gyTotal ?? '—'} / 산재 ${workforce.sjTotal ?? '—'}). 일용·단시간 근로자도 포함한 월평균 인원이라 국민연금 가입자 수와 다를 수 있습니다`
+        : why('insure', '보험 가입 사업장 0건')),
+    f('화장품 제조 사업장 인원 (보험)',
+      workforce && workforce.mfgSiteN ? `${workforce.mfg}명 · ${workforce.mfgSiteN}곳` : (workforce ? '보험상 화장품 제조 사업장 없음' : null),
+      workforce ? (workforce.mfgSiteN ? (workforce.matched ? 'A' : 'B') : 'C') : 'D', '근로복지공단 고용·산재보험', workforce ? today : null,
+      workforce
+        ? (workforce.mfgSiteN
+          ? `${workforce.mfgNames.join(', ')} — ${workforce.matched ? '제조업 허가 제조소와 같은 주소의 보험 사업장' : '화장품 제조 업종 보험 사업장(제조소 주소와는 대조 못 함)'}. 공장 인원은 산재보험 기준`
+          : '보험 업종이 화장품 제조가 아닙니다 — 직접 제조하는지, 위탁인지 방문 때 확인하세요')
+        : why('insure', '보험 가입 사업장 0건')),
     // 지자체 공장정보에 실린 연락처 — 방문 약속을 잡을 유일한 공개 번호다
     // 연락처 — 공장등록 응답의 전화번호를 먼저 쓰고, 없을 때만 웹에서 긁은 값을 쓴다
     f('공장 연락처', fctTel || pubBizFacts.tel || pubBizFacts.fctryTel || null,
@@ -1188,6 +1249,16 @@ function assembleLiveReport(name, corp, res) {
     areaFieldFromBld(R.bld, fctFloor, fctRegDe, today),
     f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
+    (() => {
+      if (!airInfo) return f('대기 배출시설 신고', null, 'D', '행정안전부 대기배출시설 인허가', null, why('air', '조회 결과 없음'));
+      const c = airInfo.rows.find((r) => r.atSite && !r.isClosed) || airInfo.rows.find((r) => r.atSite);
+      const run = (r) => (r.days || r.hours) ? ` · 연 ${r.days || '—'}일×${r.hours || '—'}시간` : '';
+      const val = c ? `${c.isClosed ? `${c.status} (${c.closed || '일자 미상'})` : '영업'}${c.kind ? ` · ${c.kind}` : ''}${run(c)}`
+        : airInfo.rows.length ? `제조소 주소 신고 없음 · 이 회사 다른 신고 ${airInfo.rows.length}건` : '신고 없음 — 소규모 면제 가능';
+      return f('대기 배출시설 신고', val, c ? (c.isClosed ? 'C' : 'A') : 'B', '행정안전부 대기배출시설 인허가', today,
+        c ? `제조소 주소에 대기오염물질 배출시설 설치 신고가 있습니다${c.permit ? `(인허가 ${c.permit})` : ''} — ${c.isClosed ? '지금 제조소의 배출시설이 폐업·휴업 상태입니다. 가동 여부를 확인하세요' : '보일러·유화·건조 등 생산 설비가 신고된 실제 공장이라는 근거'}. 자세한 내역은 「공장 면적」 탭`
+          : '배출시설 신고가 없는 것은 결격이 아닙니다 — 소규모 시설은 신고 대상이 아닐 수 있습니다');
+    })(),
     // ★ 월 갱신 지표 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 가장 최신 근거
     (() => {
       const nw = npsData ? Number(npsData.newCnt || 0) : 0;
@@ -1498,6 +1569,8 @@ function assembleLiveReport(name, corp, res) {
     })(),
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null,
       rlAll.length ? `상호 일치 0건 (API가 업체명 미필터로 전체 ${rlAll.length}건 반환 — 이 업체 품목 아님)` : '0건 — 기능성 미취급 또는 미신고'),
+    stat('insure', 'insure', '고용·산재보험 (사업장·상시인원)', workforce ? `보험 사업장 ${workforce.sites.length}곳 · 상시 ${workforce.total}명` : null, '가입 사업장 0건'),
+    stat('air', 'air', '대기배출시설 신고', airInfo ? (airInfo.rows.length ? `${airInfo.rows.length}건${airInfo.cur ? ` · 제조소 주소 ${airInfo.cur}건` : ''}` : '신고 없음(소규모 면제 가능)') : null, '조회 결과 없음'),
     stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `사업장 ${npsData.count}곳${npsSites > 1 ? `(${npsSites}곳 합산)` : ''}${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
     { key: 'maker', name: '식약처 화장품제조업', ok: !!mk, warn: !mk && !!(R.maker && R.maker.ok),
       detail: mk ? `제조업 등록 확인${mkRep ? ` · 대표 ${mkRep}` : ''}${mkAddr ? ` · ${mkAddr}` : ''}`
@@ -1622,6 +1695,8 @@ function assembleLiveReport(name, corp, res) {
       bld: R.bld ? (R.bld.ok ? R.bld.data : { err: R.bld.err, queried: R.bld.queried }) : null,
       site: R.site && R.site.ok ? R.site.data : null,          // 실제 공장 소재지 선정 결과(후보·근거)
       mfds_sites: nedSites.length ? nedSites : null,            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
+      workforce,                                                // 고용·산재보험 사업장별 인원·역할
+      air: airInfo,                                             // 대기배출시설 신고(제조소 주소 대조)
       max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
       no_corp: !hasCorp, // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회 안내용
       // 길찾기(카카오·티맵) 연동용 — 기준점(한국콜마)→방문지
