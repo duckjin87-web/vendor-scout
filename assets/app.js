@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 193;
+const BUILD = 194;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3712,6 +3712,43 @@ function workforceBlock(report) {
 }
 
 // ── 대기 배출시설 신고(공장 면적 탭) ──
+// 대기배출 신고에서 읽어 낼 수 있는 것 한 줄 — 종별은 배출 규모, 가동일수·시간은 교대 형태,
+// 인허가일은 설비 도입 시점이다. 숫자를 그대로 두면 읽는 사람이 매번 환산해야 한다.
+// 종별 기준은 대기환경보전법 시행령(연간 대기오염물질 발생량).
+const AIR_KIND = { 1: ['80톤 이상', '대형'], 2: ['20~80톤', '중대형'], 3: ['10~20톤', '중형'], 4: ['2~10톤', '중소형'], 5: ['2톤 미만', '소형'] };
+function airInferLine(c, M) {
+  if (!c) return '';
+  const bits = [];
+  const kn = (String(c.kind || '').match(/[1-5]/) || [])[0];
+  if (kn) bits.push(`<b>${kn}종</b>(연간 배출량 ${AIR_KIND[kn][0]} — ${AIR_KIND[kn][1]} 배출시설)`);
+  if (c.days && c.hours) {
+    const rate = Math.round((c.days / 365) * 100);
+    const shift = c.hours >= 22 ? '3교대 연속 가동' : c.hours >= 16 ? '2교대' : c.hours >= 11 ? '1교대 + 연장' : '주간 1교대';
+    bits.push(`연 ${c.days}일 × ${c.hours}시간 = <b>연 ${(c.days * c.hours).toLocaleString()}시간</b>(가동률 ${rate}% · ${shift})`);
+  } else if (c.days) bits.push(`연 ${c.days}일 가동 신고`);
+  if (c.permit) {
+    const y = Number(String(c.permit).slice(0, 4));
+    const age = isFinite(y) ? new Date().getFullYear() - y : null;
+    bits.push(`${c.permit} 설치${age != null ? ` — 설비 ${age === 0 ? '1년 미만' : `약 ${age}년차`}` : ''}`);
+  }
+  if (!bits.length) return '';
+  // 보험 성립일과 견줘 '공장을 언제부터 돌렸는지'를 가늠한다
+  const W = M && M.workforce;
+  const est = W && W.sites ? W.sites.filter((x) => x.atSite).map((x) => x.est).filter(Boolean).sort()[0] : null;
+  let tail = '';
+  if (est && c.permit) {
+    const gap = Math.round((new Date(c.permit) - new Date(est)) / 31557600000);
+    tail = isFinite(gap)
+      ? (Math.abs(gap) <= 1
+        ? ` 보험 성립(${est})과 설치 시점이 거의 같아 <b>처음부터 이 자리에서 생산</b>한 것으로 보입니다.`
+        : gap > 1
+          ? ` 보험 성립(${est})보다 ${gap}년 뒤 설치라 <b>나중에 설비를 늘린</b> 것으로 보입니다 — 증설 내용을 물어볼 만합니다.`
+          : ` 설비가 보험 성립(${est})보다 ${-gap}년 앞서 신고돼 <b>기존 공장을 넘겨받았을</b> 수 있습니다.`)
+      : '';
+  }
+  return `<div class="xguess"><i>유추</i><span>${bits.join(' · ')}.${tail}</span></div>`;
+}
+
 function airSecHtml(M) {
   const A = M && M.air;
   if (!A) return '';
@@ -3737,11 +3774,11 @@ function airSecHtml(M) {
         + `<td><span class="xtag ${r.isClosed ? 't-bad' : 't-ok'}">${esc(r.status || '—')}</span>${r.closed ? `<small>${esc(r.closed)}</small>` : ''}</td>`
         + `<td class="n">${r.days ? `연 ${r.days}일` : '—'}${r.hours ? `<small>하루 ${r.hours}시간</small>` : ''}</td><td class="hide-m">${esc(r.permit || '—')}</td></tr>`;
     }).join('') + '</tbody></table></div>';
+  h += airInferLine(c, M);
   const ins = [];
   if (c && !c.isClosed) ins.push(['good', '지금 제조소에 대기 배출시설 신고가 있고 <b>영업 중</b>입니다 — 보일러·유화·건조 등 생산 설비가 신고된 실제 공장입니다.']);
   if (c && c.isClosed) ins.push(['warn', `지금 제조소 주소의 배출시설이 <b>${esc(c.status || '폐업')}</b> 상태입니다${c.closed ? `(${esc(c.closed)})` : ''}. 설비를 옮겼거나 가동을 멈췄을 수 있으니 확인하세요.`]);
   if (A.old) ins.push(['warn', `<b>폐업한 옛 사업장 ${A.old}곳</b>이 있습니다 — 공장을 옮긴 이력으로 보입니다. 이전 이유와 설비 이전 여부를 물어볼 만합니다.`]);
-  if (c && c.days) ins.push(['', `배출시설 가동 연 ${c.days}일 · 하루 ${c.hours || '—'}시간으로 신고돼 있습니다${c.hours && c.hours <= 10 ? ' — 1교대 상시 가동 수준' : c.hours >= 16 ? ' — 2교대 이상' : ''}.`]);
   if (ins.length) h += '<ul class="xins">' + ins.map(([k, t]) => `<li class="${k}">${t}</li>`).join('') + '</ul>';
   h += '<p class="xfoot">출처: 행정안전부 대기오염물질 배출시설 설치 사업장(지자체 인허가). 공장 신고는 사업자번호가 비었거나 지점 번호인 경우가 많아 사업자번호·상호·제조소 주소로 함께 찾습니다.</p></div>';
   return h;
@@ -5371,36 +5408,88 @@ function renderRoadview(addr, name) {
     const K = window.kakao.maps, pos = new K.LatLng(c.lat, c.lng);
     new K.RoadviewClient().getNearestPanoId(pos, 150, (panoId) => {
       if (!panoId) { msg('이 주소 반경 150m 안에 로드뷰 촬영 지점이 없습니다(산업단지 안쪽 도로는 촬영되지 않은 곳이 많습니다).'); return; }
-      // 로드뷰만 있으면 '지금 어디를 보고 있는지'를 알 수 없다 — 좌측 아래에 작은 지도를 띄우고
-      // 그 위에 방문지 핀과 보고 있는 방향을 함께 표시한다(카카오맵 로드뷰 화면과 같은 구성).
-      stage.innerHTML = '<div class="rv-view"></div><div class="rv-mini" title="방문지 위치"></div>';
+      // 로드뷰만 있으면 '지금 어디를 보고 있는지'를 알 수 없다 — 카카오맵 로드뷰처럼
+      // 좌측 아래에 작은 지도를 두고, 말뚝(현재 촬영 위치)을 끌어서 옮기거나 지도를 눌러 위치를 바꾼다.
+      stage.innerHTML = '<div class="rv-view"></div>'
+        + '<div class="rv-mini"><div class="rv-mini-map" title="말뚝을 끌거나 지도를 눌러 로드뷰 위치를 옮길 수 있습니다"></div>'
+        + '<button type="button" class="rv-mini-btn rv-mini-ex" aria-label="작은 지도 크게 보기" title="크게 보기">⤢</button>'
+        + '<button type="button" class="rv-mini-btn rv-mini-home" aria-label="방문지로 되돌리기" title="방문지로 되돌리기">⌖</button>'
+        + '<div class="rv-mini-msg" role="status"></div></div>';
       rv = new K.Roadview(stage.firstChild);
       rv.setPanoId(panoId, pos);
-      let mini = null, mark = null;
+      const rvc = new K.RoadviewClient();
+      const mbox = stage.querySelector('.rv-mini-map');
+      let mini = null, peg = null, cone = null, dragging = false;
+      const miniMsg = (t) => { const m = stage.querySelector('.rv-mini-msg'); if (!m) return; m.textContent = t || ''; m.classList.toggle('on', !!t); if (t) setTimeout(() => { m.textContent = ''; m.classList.remove('on'); }, 2600); };
       try {
-        const mbox = stage.querySelector('.rv-mini');
-        mini = new K.Map(mbox, { center: pos, level: 4, draggable: false, scrollwheel: false, disableDoubleClickZoom: true });
+        mini = new K.Map(mbox, { center: pos, level: 3, draggable: true, scrollwheel: false });
         mbox.__vsMap = mini;
-        if (mini.setZoomable) mini.setZoomable(false);
-        mark = new K.Marker({ position: pos, map: mini });                 // 방문지(건물)
-        new K.Circle({ center: pos, radius: 35, map: mini, strokeWeight: 0, fillColor: '#2563eb', fillOpacity: 0.15 });
+        // 로드뷰가 찍힌 길을 파랗게 덮어 준다 — 말뚝을 어디에 놓을 수 있는지 보여야 옮길 수 있다
+        try { const ov = new K.RoadviewOverlay(); ov.setMap(mini); } catch { /* 없으면 생략 */ }
+        try { new K.Circle({ center: pos, radius: 35, map: mini, strokeWeight: 0, fillColor: '#2563eb', fillOpacity: 0.15 }); } catch { /* 생략 */ }
+        // 방문지(목적 건물)는 고정 표식, 말뚝은 끌 수 있는 표식 — 둘을 구분해야 어디로 가는지 안다
+        const icon = (svg, w, h) => new K.MarkerImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, new K.Size(w, h), { offset: new K.Point(w / 2, h / 2) });
+        try {
+          new K.Marker({ position: pos, map: mini, zIndex: 3, title: '방문지',
+            image: icon('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="5.5" fill="#ef4444" stroke="#fff" stroke-width="2.5"/></svg>', 16, 16) });
+        } catch { /* 생략 */ }
+        // 보고 있는 방향(부채꼴)은 말뚝 아래에 깔고, 시점이 바뀌면 각도만 돌린다
+        const coneEl = document.createElement('div');
+        coneEl.className = 'rv-cone';
+        try { cone = new K.CustomOverlay({ position: pos, map: mini, content: coneEl, zIndex: 4, xAnchor: 0.5, yAnchor: 0.5 }); } catch { cone = null; }
+        peg = new K.Marker({ position: pos, map: mini, draggable: true, zIndex: 5, title: '로드뷰 위치 — 끌어서 옮기세요',
+          image: icon('<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22"><circle cx="11" cy="11" r="7" fill="#2563eb" stroke="#fff" stroke-width="3"/></svg>', 22, 22) });
+        // 말뚝을 놓은 자리(또는 누른 자리)에서 가장 가까운 촬영 지점으로 로드뷰를 옮긴다
+        const moveTo = (ll) => {
+          rvc.getNearestPanoId(ll, 60, (id) => {
+            if (!id) { miniMsg('그 자리에는 로드뷰가 없습니다 — 파란 길 위에 놓아 주세요'); if (peg) peg.setPosition(rv.getPosition()); return; }
+            rv.setPanoId(id, ll);
+          });
+        };
+        K.event.addListener(peg, 'dragstart', () => { dragging = true; });
+        K.event.addListener(peg, 'dragend', () => { dragging = false; moveTo(peg.getPosition()); });
+        K.event.addListener(mini, 'click', (e) => { const ll = e && e.latLng; if (ll) { if (peg) peg.setPosition(ll); moveTo(ll); } });
       } catch { /* 작은 지도는 없어도 로드뷰는 보여 준다 */ }
-      // 촬영 지점에서 건물 쪽을 바라보게 돌린다
+
+      // 로드뷰가 움직이면 말뚝·방향도 따라간다(끄는 중에는 건드리지 않는다)
       const syncMini = () => {
         if (!mini || !rv) return;
         try {
           const p = rv.getPosition();
-          mini.relayout();
-          mini.setCenter(new K.LatLng((p.getLat() + c.lat) / 2, (p.getLng() + c.lng) / 2));   // 촬영 지점과 건물이 함께 보이게
+          if (!dragging && peg) peg.setPosition(p);
+          if (!dragging && cone) cone.setPosition(p);
+          if (!dragging) mini.setCenter(p);
         } catch { /* 무시 */ }
+      };
+      const syncCone = () => {
+        if (!cone || !rv) return;
+        try { const vp = rv.getViewpoint(); const el = cone.getContent(); if (el && el.style) el.style.setProperty('--pan', `${vp.pan}deg`); } catch { /* 무시 */ }
       };
       K.event.addListener(rv, 'init', () => {
         const p = rv.getPosition();
         try { rv.setViewpoint({ pan: rvBearing({ lat: p.getLat(), lng: p.getLng() }, c), tilt: 0, zoom: 0 }); } catch { /* 기본 방향 */ }
-        syncMini();
+        try { mini && mini.relayout(); } catch { /* 무시 */ }
+        syncMini(); syncCone();
       });
-      // 로드뷰에서 이동하면 작은 지도도 따라간다
-      K.event.addListener(rv, 'position_changed', syncMini);
+      K.event.addListener(rv, 'position_changed', () => { syncMini(); syncCone(); });
+      K.event.addListener(rv, 'viewpoint_changed', syncCone);
+
+      // 크게 보기 / 방문지로 되돌리기
+      const mwrap = stage.querySelector('.rv-mini');
+      mwrap.addEventListener('click', (e) => {
+        const b = e.target.closest('.rv-mini-btn');
+        if (!b) return;
+        e.stopPropagation();
+        if (b.classList.contains('rv-mini-ex')) {
+          mwrap.classList.toggle('big');
+          b.textContent = mwrap.classList.contains('big') ? '⤡' : '⤢';
+          b.title = mwrap.classList.contains('big') ? '작게 보기' : '크게 보기';
+          setTimeout(() => { try { mini && mini.relayout(); mini && mini.setCenter(rv.getPosition()); } catch { /* 무시 */ } }, 220);
+        } else {
+          // 방문지(건물)에서 가장 가까운 촬영 지점으로 되돌린다
+          rvc.getNearestPanoId(pos, 150, (id) => { if (id) rv.setPanoId(id, pos); else miniMsg('방문지 근처 로드뷰를 찾지 못했습니다'); });
+        }
+      });
     });
   };
   const io = window.IntersectionObserver ? new IntersectionObserver((es) => {
