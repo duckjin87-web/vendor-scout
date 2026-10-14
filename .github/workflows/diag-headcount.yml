@@ -1,0 +1,64 @@
+name: Diagnose headcount sources
+
+# 한 회사의 인원을 국민연금(사업자번호·상호)과 고용·산재보험(사업자번호)으로 대조한다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      name: { description: '상호', required: true, type: string }
+      bzno: { description: '사업자번호 10자리', required: true, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          NM: ${{ inputs.name }}
+          BZ: ${{ inputs.bzno }}
+        run: |
+          cat > d.mjs <<'JS'
+          const K = process.env.KEY, NM = process.env.NM, BZ = process.env.BZ;
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3800));
+          const get = async (u) => { for (let i = 0; i < 3; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); return await r.text(); } catch (e) { if (i === 2) throw e; await new Promise((s) => setTimeout(s, 2000)); } } };
+          const tag = (s, t) => (s.match(new RegExp(`<${t}>([^<]*)</${t}>`)) || [])[1] || '';
+          const items = (t) => [...t.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => m[1]);
+          const NPS = 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2';
+          for (const [lab, q] of [['사업자번호', `bzowrRgstNo=${BZ}`], ['상호', `wkplNm=${encodeURIComponent(NM)}`]]) {
+            try {
+              const t = await get(`${NPS}/getBassInfoSearchV2?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=30&${q}`);
+              const its = items(t);
+              const rows = [];
+              for (const it of its.slice(0, 12)) {
+                const seq = tag(it, 'seq'), ym = tag(it, 'dataCrtYm');
+                let cnt = '';
+                try { const d = await get(`${NPS}/getDetailInfoSearchV2?serviceKey=${encodeURIComponent(K)}&seq=${seq}&dataCrtYm=${ym}`); cnt = tag(items(d)[0] || '', 'jnngpCnt'); } catch {}
+                rows.push(`${tag(it, 'wkplNm')}|bz6=${tag(it, 'bzowrRgstNo')}|${tag(it, 'wkplRoadNmDtlAddr') || tag(it, 'wkplRoadNmDetAddr') || tag(it, 'ldongAddrMgplDgCd')}|${cnt}명|업종 ${tag(it, 'vldtVlKrnNm') || tag(it, 'wkplIntpCd')}`);
+              }
+              n(`[국민연금 ${lab}] total ${tag(t, 'totalCount')} · ${rows.join(' ; ')}`);
+            } catch (e) { n(`[국민연금 ${lab}] 실패 ${e.message}`); }
+          }
+          for (const fg of ['1', '2']) {
+            try {
+              const t = await get(`https://apis.data.go.kr/B490001/gySjbPstateInfoService/getGySjBoheomBsshItem?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=20&v_saeopjaDrno=${BZ}&opaBoheomFg=${fg}`);
+              n(`[${fg === '1' ? '산재' : '고용'}보험] total ${tag(t, 'totalCount')} · ` + items(t).map((it) => `${tag(it, 'saeopjangNm')}|${tag(it, 'addr')}|상시 ${tag(it, 'sangsiInwonCnt')}|${tag(it, 'gyEopjongNm') || tag(it, 'sjEopjongNm')}|성립 ${tag(it, 'seongripDt')}`).join(' ; '));
+            } catch (e) { n(`보험 실패 ${e.message}`); }
+          }
+          try {
+            const A = 'https://apis.data.go.kr/1741000/air_pollution_facility_installation/info';
+            const outs = [];
+            for (const q of [`cond%5BBRNO%3A%3AEQ%5D=${BZ}`, `cond%5BBPLC_NM%3A%3ALIKE%5D=${encodeURIComponent(NM)}`]) {
+              const t = await get(`${A}?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=10&returnType=json&${q}`);
+              let j; try { j = JSON.parse(t); } catch { outs.push(t.slice(0, 120)); continue; }
+              let it = j.response.body.items.item; it = Array.isArray(it) ? it : (it ? [it] : []);
+              outs.push(`${decodeURIComponent(q).slice(5, 22)} total ${j.response.body.totalCount}: ` + it.map((x) => `${x.BPLC_NM}|${x.BRNO}|${x.BTP_NM}|${x.BZSTAT_SE_NM}|${x.DTL_SALS_STTS_NM}|${x.ROAD_NM_ADDR || x.LOTNO_ADDR}`).join(' ; '));
+            }
+            n(`[대기] ${outs.join(' ‖ ')}`);
+          } catch (e) { n(`대기 실패 ${e.message}`); }
+          JS
+          node d.mjs
