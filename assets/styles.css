@@ -2007,3 +2007,10 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 :root[data-theme="dark"] .xtag.t-oth { background: #78350f; color: #fde68a; }
 :root[data-theme="dark"] .xtag.t-bad { background: #7f1d1d; color: #fecaca; }
 :root[data-theme="dark"] .xtag.t-hq, :root[data-theme="dark"] .xtag.t-log { background: #3b2a63; color: #ddd6fe; }
+
+/* 카카오 지도 원인 확인 — 왜 안 뜨는지 화면에서 바로 본다 */
+.rv-msg { flex-direction: column; overflow: auto; }
+.rv-msg > * { max-width: 520px; }
+.rv-msg .rv-diag { margin: 10px auto 0; flex: none; }
+.rv-diagout:not(:empty) { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); line-height: 1.6; text-align: left; }
+.rv-diagout b { color: var(--text); font-weight: 700; word-break: break-all; }

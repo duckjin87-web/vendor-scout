@@ -736,27 +736,72 @@ const nbCssVar = (n, fb) => (getComputedStyle(document.documentElement).getPrope
 // 프록시에 카카오 JavaScript 키(KAKAO_JS_KEY)가 있고 이 도메인이 카카오에 등록돼 있으면 카카오맵,
 // 아니면 오픈스트리트맵(Leaflet). 한 번 정하면 이 화면에서는 그대로 쓴다.
 let _nbEngineP = null;
+// 왜 카카오 지도를 못 썼는지 — 예전에는 전부 삼키고 '연결되지 않음' 한 줄만 남아,
+// 키가 없는 건지·도메인 등록이 풀린 건지·한도를 넘긴 건지 화면에서 알 수가 없었다.
+let _nbKakaoWhy = null;
+function nbKakaoWhy() { return _nbKakaoWhy; }
 function nbMapEngine() {
   if (_nbEngineP) return _nbEngineP;
   _nbEngineP = (async () => {
+    let r;
+    try { r = await proxyOnlyGet('kakaoMapKey', {}); }
+    catch (e) {
+      const m = String(e && e.message || e);
+      _nbKakaoWhy = /미설정|404/.test(m)
+        ? { code: 'nokey', msg: '프록시에 카카오 JavaScript 키(KAKAO_JS_KEY)가 없습니다' }
+        : { code: 'proxy', msg: `프록시에서 키를 받지 못했습니다 — ${m}` };
+      return 'leaflet';
+    }
+    if (!r || !r.key) { _nbKakaoWhy = { code: 'nokey', msg: '프록시가 카카오 JavaScript 키를 주지 않았습니다' }; return 'leaflet'; }
     try {
-      const r = await proxyOnlyGet('kakaoMapKey', {});
-      if (!r || !r.key) return 'leaflet';
       await new Promise((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error('카카오맵 로드 시간 초과')), 8000);
+        const t = setTimeout(() => reject(new Error('시간 초과(8초)')), 8000);
         const sc = document.createElement('script');
         sc.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(r.key)}&autoload=false`;
         sc.onload = () => {
+          // SDK가 오류 응답이면 스크립트는 떠도 kakao 객체가 없다 — onload만 믿으면 안 된다
+          if (!window.kakao || !window.kakao.maps) { clearTimeout(t); reject(new Error('SDK는 응답했으나 kakao 객체가 없습니다(키 거부 가능)')); return; }
           try { window.kakao.maps.load(() => { clearTimeout(t); resolve(); }); } catch (e) { clearTimeout(t); reject(e); }
         };
-        sc.onerror = () => { clearTimeout(t); reject(new Error('카카오맵 SDK를 불러오지 못했습니다')); };
+        sc.onerror = () => { clearTimeout(t); reject(new Error('SDK 응답 없음(차단·네트워크·키 거부)')); };
         document.head.appendChild(sc);
       });
+      _nbKakaoWhy = null;
       return 'kakao';
-    } catch { return 'leaflet'; }      // 키 없음·도메인 미등록·차단 — 오픈스트리트맵으로
+    } catch (e) {
+      _nbKakaoWhy = { code: 'sdk', msg: `카카오 지도 SDK를 불러오지 못했습니다 — ${String(e && e.message || e)}`, keyTail: String(r.key).slice(-4) };
+      return 'leaflet';
+    }
   })();
   return _nbEngineP;
 }
+
+// 카카오 지도가 안 뜨는 원인을 서버(프록시)를 통해 확인한다 — 브라우저만으로는 구분이 안 된다.
+// 반환: 사람이 읽는 진단 문장(원인 + 할 일).
+async function nbKakaoDiag() {
+  const why = nbKakaoWhy();
+  if (!why) return '카카오 지도가 정상 동작 중입니다.';
+  if (why.code === 'nokey') return `${why.msg} — Vercel 프로젝트 환경변수에 KAKAO_JS_KEY를 넣고 다시 배포하세요(키는 저장소에 두지 않습니다).`;
+  if (why.code === 'proxy') return `${why.msg} — 프록시 주소와 배포 상태를 먼저 확인하세요.`;
+  let d = null;
+  try { d = await proxyOnlyGet('kakaoSdkCheck', { origin: location.origin }); } catch (e) { return `${why.msg} (서버 확인도 실패: ${String(e && e.message || e)})`; }
+  if (!d) return why.msg;
+  if (d.code === 'ok') {
+    return `서버에서 이 도메인(${location.origin})으로 확인했을 때는 카카오 SDK가 정상 응답했습니다(HTTP ${d.status}). `
+      + '브라우저에서만 막힌 것이라, 광고·추적 차단 확장이나 사내망 차단을 확인해 보세요.';
+  }
+  if (d.code === 'domain') {
+    return `카카오가 이 도메인을 거부했습니다(HTTP ${d.status}). 2025년 12월 개편으로 도메인 등록 위치가 바뀌었습니다 — `
+      + `카카오 개발자 콘솔 > 내 애플리케이션 > 앱 > 플랫폼 키 > JavaScript 키 > JavaScript SDK 도메인에 <b>${esc(location.origin)}</b>을 등록하세요`
+      + `${d.keyTail ? ` (지금 쓰는 JavaScript 키 …${esc(d.keyTail)})` : ''}.`;
+  }
+  if (d.code === 'limit') return `카카오맵 일일 호출 한도를 넘었습니다(HTTP ${d.status}). 테스트 앱은 하루 100건입니다 — 콘솔에서 유료 API > 카카오맵을 '사용함'으로 바꾸거나 다음 날 다시 시도하세요.`;
+  if (d.code === 'nokey') return '프록시에 KAKAO_JS_KEY가 없습니다 — Vercel 환경변수를 확인하세요.';
+  if (d.code === 'net') return `프록시에서 카카오로 연결하지 못했습니다 — ${esc(d.detail || '')}`;
+  return `카카오 SDK 응답이 정상이 아닙니다(HTTP ${d.status}) — ${esc(String(d.detail || '').slice(0, 160))}`;
+}
+window.nbKakaoDiag = nbKakaoDiag;
+window.nbKakaoWhy = nbKakaoWhy;
 function nbPanTo(st, v) {
   if (st.kmap && window.kakao && window.kakao.maps) st.kmap.panTo(new window.kakao.maps.LatLng(v.lat, v.lng));
   else if (st.map) st.map.panTo([v.lat, v.lng]);

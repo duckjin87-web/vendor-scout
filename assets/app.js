@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 190;
+const BUILD = 191;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -5329,7 +5329,17 @@ function renderRoadview(addr, name) {
       + '<small>로드뷰는 촬영 시점의 모습이라 지금과 다를 수 있습니다. 주소 위치에서 가장 가까운 촬영 지점을 보여 줍니다.</small>';
     const eng = typeof nbMapEngine === 'function' ? await nbMapEngine() : 'leaflet';
     if (eng !== 'kakao' || !window.kakao || !window.kakao.maps || !window.kakao.maps.Roadview) {
-      msg('카카오 지도 키가 연결되지 않아 화면 안에 띄우지 못했습니다 — 아래 링크로 카카오맵 로드뷰를 열어 보세요.');
+      // 왜 안 되는지를 적는다 — '연결되지 않았습니다'만으로는 키 문제인지 도메인 문제인지 알 수 없다
+      const w = typeof nbKakaoWhy === 'function' ? nbKakaoWhy() : null;
+      msg(`카카오 지도를 화면 안에 띄우지 못했습니다${w ? ` — ${esc(w.msg)}` : ''}. 아래 링크로 카카오맵 로드뷰를 열 수 있습니다.`
+        + '<button type="button" class="nb-btn sm rv-diag">원인 확인</button><div class="rv-diagout"></div>');
+      const db = stage.querySelector('.rv-diag');
+      if (db) db.addEventListener('click', async () => {
+        const out = stage.querySelector('.rv-diagout');
+        db.disabled = true; out.textContent = '확인 중…';
+        try { out.innerHTML = await nbKakaoDiag(); } catch (e) { out.textContent = String(e && e.message || e); }
+        db.disabled = false;
+      });
       return;
     }
     const K = window.kakao.maps, pos = new K.LatLng(c.lat, c.lng);

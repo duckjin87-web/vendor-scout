@@ -150,6 +150,28 @@ function handleDataGo(url, service, env) {
   return relay(`${DATAGO[service]}?${q}`, `data.go(${service})`);
 }
 
+// 카카오 지도 SDK가 이 도메인에서 동작하는지 서버가 대신 확인한다.
+// 브라우저는 <script>의 HTTP 상태를 읽을 수 없어 '키가 없는 건지, 도메인 미등록인지,
+// 한도 초과인지'를 구분하지 못한다. 카카오는 Referer로 도메인을 검사하므로 그대로 실어 보낸다.
+async function handleKakaoSdkCheck(url, env) {
+  if (!env.KAKAO_JS_KEY) return jsonRes({ ok: false, code: 'nokey', detail: 'KAKAO_JS_KEY 환경변수가 없습니다' });
+  const origin = String(url.searchParams.get('origin') || '').slice(0, 200);
+  const ref = origin ? (origin.endsWith('/') ? origin : origin + '/') : '';
+  const target = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(env.KAKAO_JS_KEY)}&autoload=false`;
+  try {
+    const r = await fetch(target, { headers: ref ? { Referer: ref } : {}, signal: AbortSignal.timeout(12000) });
+    const body = (await r.text()).slice(0, 400);
+    // 정상 응답은 SDK 자바스크립트다. 오류는 상태코드나 본문 문구로 온다.
+    const limit = /limit\s*has\s*been\s*exceeded|quota/i.test(body);
+    const denied = r.status === 401 || r.status === 403 || /not\s*allowed|unauthorized|도메인/i.test(body);
+    const code = limit ? 'limit' : denied ? 'domain' : r.status >= 400 ? 'http' : 'ok';
+    return jsonRes({ ok: code === 'ok', code, status: r.status, origin: ref || null,
+      keyTail: String(env.KAKAO_JS_KEY).slice(-4), detail: code === 'ok' ? null : body.replace(/\s+/g, ' ').slice(0, 200) });
+  } catch (e) {
+    return jsonRes({ ok: false, code: 'net', detail: String(e && e.message || e) });
+  }
+}
+
 // 네이버 검색(news/webkr/local) — kind로 엔드포인트 선택
 function handleNaver(url, env, kind) {
   if (!env.NAVER_CLIENT_ID || !env.NAVER_CLIENT_SECRET) return jsonRes({ error: 'NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정' }, 500);
@@ -369,6 +391,7 @@ export default async function handler(req) {
     if (service === 'growthRefresh')   return handleGrowth(env, 'refresh');
     if (service === 'growthStatus')    return handleGrowth(env, 'status');
     if (service === 'kakaoMapKey')     return env.KAKAO_JS_KEY ? jsonRes({ key: env.KAKAO_JS_KEY }) : jsonRes({ error: 'KAKAO_JS_KEY 미설정 — 오픈스트리트맵으로 표시' }, 404);
+    if (service === 'kakaoSdkCheck')   return handleKakaoSdkCheck(url, env);
     if (service === 'naverNews')       return handleNaver(url, env, 'news');
     if (service === 'naverWeb')        return handleNaver(url, env, 'webkr');
     if (service === 'naverLocal')      return handleNaver(url, env, 'local');
