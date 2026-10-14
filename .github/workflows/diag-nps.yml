@@ -1,0 +1,49 @@
+name: Diagnose NPS matching
+
+# 국민연금 사업장 검색을 사업자번호(10자리·6자리)·상호로 돌려 어떤 사업장이 걸리는지 본다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      name: { description: '상호', required: true, type: string }
+      bzno: { description: '사업자번호 10자리', required: true, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          NM: ${{ inputs.name }}
+          BZ: ${{ inputs.bzno }}
+        run: |
+          cat > d.mjs <<'JS'
+          const K = process.env.KEY, NM = process.env.NM, BZ = process.env.BZ;
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3900));
+          const get = async (u) => { for (let i = 0; i < 3; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); return await r.text(); } catch (e) { if (i === 2) throw e; await new Promise((s) => setTimeout(s, 2000)); } } };
+          const tag = (s, t) => (s.match(new RegExp(`<${t}>([^<]*)</${t}>`)) || [])[1] || '';
+          const items = (t) => [...t.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => m[1]);
+          const NPS = 'https://apis.data.go.kr/B552015/NpsBplcInfoInqireServiceV2';
+          for (const [lab, q] of [['bz10', `bzowrRgstNo=${BZ}`], ['bz6', `bzowrRgstNo=${BZ.slice(0, 6)}`], ['bz10+name', `bzowrRgstNo=${BZ}&wkplNm=${encodeURIComponent(NM)}`], ['name', `wkplNm=${encodeURIComponent(NM)}`]]) {
+            try {
+              const t = await get(`${NPS}/getBassInfoSearchV2?serviceKey=${encodeURIComponent(K)}&pageNo=1&numOfRows=100&${q}`);
+              let its = items(t);
+              if (lab === 'name') its = its.filter((it) => tag(it, 'bzowrRgstNo').startsWith(BZ.slice(0, 6)));
+              const rows = [];
+              for (const it of its.slice(0, 15)) {
+                const seq = tag(it, 'seq'), ym = tag(it, 'dataCrtYm');
+                let cnt = '', det = '';
+                try { const d = await get(`${NPS}/getDetailInfoSearchV2?serviceKey=${encodeURIComponent(K)}&seq=${seq}&dataCrtYm=${ym}`); const x = items(d)[0] || ''; cnt = tag(x, 'jnngpCnt'); det = [...x.matchAll(/<(\w+)>([^<]*)<\/\1>/g)].map((m) => m[1] + '=' + m[2]).join(',').slice(0, 400); } catch {}
+                rows.push(`${tag(it, 'wkplNm')}|${tag(it, 'bzowrRgstNo')}|${tag(it, 'wkplRoadNmDtlAddr')}|${ym}|${cnt}명|${tag(it, 'wkplJnngStcd')}`);
+                if (rows.length === 1) n(`[${lab} 첫건 상세] ${det} ‖ 검색필드: ${[...it.matchAll(/<(\w+)>([^<]*)<\/\1>/g)].map((m) => m[1] + '=' + m[2]).join(',')}`);
+              }
+              n(`[${lab}] total ${tag(t, 'totalCount')} · ${rows.join(' ; ')}`);
+            } catch (e) { n(`[${lab}] 실패 ${e.message}`); }
+          }
+          JS
+          node d.mjs
