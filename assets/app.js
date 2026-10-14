@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 191;
+const BUILD = 192;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3660,20 +3660,28 @@ function workforceBlock(report) {
   const bz = ((report.basic || []).find((x) => x.key === '사업자등록번호') || {}).value || '';
   const chip = (k, v, sub, t) => `<div class="vch vch-${t || 'num'}"><i>${esc(k)}</i><b>${esc(v)}${sub ? `<small>${esc(sub)}</small>` : ''}</b></div>`;
   const mfgSub = W.mfgSiteN ? (W.mfgSiteN === 1 ? W.mfgNames[0] : `${W.mfgSiteN}곳 합계`) : '보험 업종 기준';
+  // 전체(상시) · 정규(국민연금) · 그 차이(일용·단시간)를 한 줄에 세운다 — 숫자 하나만으로는 인력 구성이 안 보인다
+  const reg = W.npsBasis === 'confirmed' && W.nps != null ? W.nps : null;
+  const irr = reg != null ? W.total - reg : null;
   let h = `<h3>인력 · 사업장 구성<span class="cnt">고용·산재보험 · 보험 사업장 ${W.sites.length}곳${bz ? ` · ${esc(bz)}` : ''}</span></h3>`;
   h += '<div class="vd-chips wf-chips">'
-    + chip('화장품 제조 사업장 인원', W.mfgSiteN ? `${n(W.mfg)}명` : '없음', mfgSub, W.mfgSiteN ? 'num' : 'bad')
-    + chip('보험 상시근로자 (회사 전체)', `${n(W.total)}명`, `고용 ${n(W.gyTotal)} · 산재 ${n(W.sjTotal)}`)
-    + chip('국민연금 가입자 (참고)', W.nps != null ? `${n(W.nps)}명` : '미확인', W.nps == null ? '비교용' : W.npsBasis && W.npsBasis !== 'confirmed' ? '이 회사 사업장인지 불확실' : (W.npsAddr ? `${String(W.npsAddr).split(' ').slice(0, 2).join(' ')} 신고` : ''), W.nps != null ? (W.npsBasis === 'confirmed' ? 'num' : 'na') : 'na')
+    + chip('화장품 제조 사업장 인원', W.mfgSiteN ? `${n(W.mfg)}명` : '없음', W.mfgSiteN && W.mfgNps != null ? `정규 ${n(W.mfgNps)}명 · ${mfgSub}` : mfgSub, W.mfgSiteN ? 'num' : 'bad')
+    + chip('전체 근로자 (상시)', `${n(W.total)}명`, `고용 ${n(W.gyTotal)} · 산재 ${n(W.sjTotal)} · 사업장 ${W.sites.length}곳`)
+    + chip('그중 정규 (국민연금)', reg != null ? `${n(reg)}명` : '미확인', reg != null ? (W.npsAddr ? `${String(W.npsAddr).split(' ').slice(0, 2).join(' ')} 등 신고` : '') : (W.nps != null ? '이 회사 사업장인지 불확실' : '연금 자료 없음'), reg != null ? 'num' : 'na')
+    + chip('일용·단시간 추정', irr == null ? '—' : irr > 0 ? `약 ${n(irr)}명` : '없음', irr == null ? '정규 구분 불가' : irr > 0 ? `전체의 ${Math.round((irr / W.total) * 100)}%` : '전원 상용', irr != null && irr > 0 ? 'warn' : 'na')
     + (W.other ? chip('다른 업종 사업장', `${n(W.other)}명`, W.otherInd || '', 'bad') : '')
     + '</div>';
-  h += '<div class="xt-wrap"><table class="xt"><thead><tr><th>보험 사업장</th><th class="hide-m">주소</th><th>업종 (고용 / 산재)</th><th class="n">고용 상시</th><th class="n">산재 상시</th><th class="hide-m">성립</th></tr></thead><tbody>'
+  h += '<div class="xt-wrap"><table class="xt"><thead><tr><th>보험 사업장</th><th class="hide-m">주소</th><th>업종 (고용 / 산재)</th><th class="n">고용 상시</th><th class="n">산재 상시</th><th class="n">정규 <small>국민연금</small></th><th class="hide-m">성립</th></tr></thead><tbody>'
     + W.sites.map((x) => {
       const [cls, lab] = WF_ROLE[x.role] || ['', ''];
       const gi = x.gy && x.gy.ind, si = x.sj && x.sj.ind;
       return `<tr class="${x.atSite ? 'main' : ''}"><td>${x.atSite ? `<b>${esc(x.name)}</b>` : esc(x.name)}<br><span class="xtag ${cls}">${esc(lab)}</span>${x.atSite ? '<span class="xtag t-ok">제조소와 같은 주소 ✓</span>' : ''}</td>`
         + `<td class="hide-m">${esc(x.addr)}</td><td>${esc(gi || si || '—')}${gi && si && gi !== si ? `<small>${esc(si)}</small>` : ''}</td>`
-        + `<td class="n">${x.gy ? n(x.gy.cnt) : '—'}</td><td class="n">${x.sj ? (x.atSite ? `<b>${n(x.sj.cnt)}</b>` : n(x.sj.cnt)) : '—'}</td><td class="hide-m">${esc(x.est || '—')}</td></tr>`;
+        + `<td class="n">${x.gy ? n(x.gy.cnt) : '—'}</td><td class="n">${x.sj ? (x.atSite ? `<b>${n(x.sj.cnt)}</b>` : n(x.sj.cnt)) : '—'}</td>`
+        // 국민연금을 본점 한 곳에 몰아 신고하는 회사가 많다 — 그 사업장 상시인원보다 크면 그대로 믿으면 안 된다
+        + `<td class="n"${x.npsCnt != null && x.npsCnt > x.cnt ? ' title="이 사업장 상시근로자보다 많습니다 — 본점에 전사 일괄 신고한 것으로 보입니다"' : ''}>`
+        + `${x.npsCnt != null ? n(x.npsCnt) + (x.npsCnt > x.cnt ? '<small>전사 일괄 신고</small>' : '') : '—'}</td>`
+        + `<td class="hide-m">${esc(x.est || '—')}</td></tr>`;
     }).join('') + '</tbody></table></div>';
   // 해설 — 숫자만 놓으면 왜 다른지 읽는 사람이 계산해야 한다
   const ins = [];
@@ -3685,21 +3693,20 @@ function workforceBlock(report) {
     ins.push(['warn', '보험 업종에 <b>화장품 제조 사업장이 없습니다</b> — 제조를 직접 하는지, 위탁·소분만 하는지 방문 때 확인하세요.']);
   }
   if (W.other) ins.push(['warn', `같은 법인에 <b>다른 업종 사업장(${n(W.other)}명${W.otherInd ? ` · ${esc(W.otherInd)}` : ''})</b>이 있습니다. 방문 대상인지 확인하세요.`]);
-  if (W.nps != null && W.total && W.npsBasis === 'confirmed') {
-    const d = W.total - W.nps;
-    if (Math.abs(d) >= Math.max(3, W.total * 0.15)) {
-      ins.push(['', d > 0
-        ? `보험 상시근로자(${n(W.total)}명)가 국민연금 가입자(${n(W.nps)}명)보다 <b>${n(d)}명 많습니다</b> — 일용·단시간·외국인 등 연금 미가입 인력이 있을 수 있습니다(비고정 인력 신호).`
-        : `국민연금 가입자(${n(W.nps)}명)가 보험 상시근로자(${n(W.total)}명)보다 <b>${n(-d)}명 많습니다</b> — 대표·임원(보험 제외)이나 퇴사 반영 시차, 연금 사업장 조회 범위 차이일 수 있습니다.`]);
-    } else {
-      ins.push(['', `국민연금 가입자 ${n(W.nps)}명과 보험 상시근로자 ${n(W.total)}명이 비슷합니다 — 고정 인력 위주입니다.`]);
-    }
+  if (irr != null) {
+    ins.push(['', irr > 0
+      ? `전체 ${n(W.total)}명 중 국민연금 가입자는 ${n(reg)}명입니다 — 나머지 <b>약 ${n(irr)}명(${Math.round((irr / W.total) * 100)}%)</b>은 일용·단시간 등 비고정 인력으로 보입니다. 성수기 물량을 일용직으로 메우는지 확인하세요.`
+      : irr < 0
+        ? `국민연금 가입자(${n(reg)}명)가 보험 상시근로자(${n(W.total)}명)보다 많습니다 — 대표·임원은 보험 상시인원에서 빠지고, 퇴사 반영 시차도 있습니다.`
+        : `전원이 국민연금 가입자(${n(reg)}명)입니다 — 일용·단시간 없이 상용 인력으로 운영됩니다.`]);
+  } else if (W.nps != null) {
+    ins.push(['', `국민연금 쪽에서 이 회사 사업장을 특정하지 못해 정규·비정규를 나누지 못했습니다(동명 사업장 ${n(W.nps)}명은 참고만).`]);
   }
   const gyL = W.sites.find((x) => x.gy && x.sj && x.gy.cnt && x.sj.cnt && Math.abs(x.gy.cnt - x.sj.cnt) >= Math.max(3, x.gy.cnt * 0.3));
   if (gyL) ins.push(['', `${esc(gyL.name)}의 고용보험 ${n(gyL.gy.cnt)}명 · 산재보험 ${n(gyL.sj.cnt)}명처럼 두 보험 인원이 다르면, 한쪽에 본사 일괄 신고나 일용·단시간 인력이 몰려 있을 수 있습니다. 공장 인원은 산재보험 쪽이 정확합니다.`]);
   h += '<ul class="xins">' + ins.map(([c, t]) => `<li class="${c}">${t}</li>`).join('') + '</ul>';
   h += '<p class="xfoot">출처: 근로복지공단 고용·산재보험 가입 사업장(사업자번호 조회). <b>상시근로자</b>는 보험 신고 기준 월평균 근로자 수로 일용·단시간 근로자도 들어갑니다. '
-    + '<b>국민연금 가입자</b>는 월 60시간 이상 일하는 가입자(대표 포함)라 둘은 다를 수 있습니다. 사업장 역할은 보험 업종과 제조소 주소로 자동 분류합니다.</p>';
+    + '<b>국민연금 가입자</b>는 월 60시간 이상 일하는 가입자(대표 포함)로 사실상 정규·상용 인력이라, 둘의 차이를 일용·단시간 인력으로 봅니다. 사업장 역할은 보험 업종과 제조소 주소로 자동 분류합니다.</p>';
   b.innerHTML = `${h.slice(0, h.indexOf('</h3>') + 5)}<div class="wf-in">${h.slice(h.indexOf('</h3>') + 5)}</div>`;
   return b;
 }
@@ -3866,10 +3873,20 @@ function renderCheckWeb(report) {
   const ins = report.insights;
   const timeline = (ins && ins.timeline) || [];
   const assess = ins && ins.assessment;
-  const oem = report.oem_trace || [];
   const news = report.news || [];
   const rc = report.rel_check || null;
   const excl = (rc && rc.excluded) || [];
+  // 채용 관련 웹 언급은 바로 아래 '채용공고' 칸에 같은 공고가 다시 나온다 — 같은 글이면 여기서 뺀다.
+  // (링크가 같거나, 제목의 글자만 남겨 비교했을 때 한쪽이 다른 쪽을 품으면 같은 공고로 본다)
+  const hirePosts = (report.hiring && report.hiring.ok && report.hiring.posts) || [];
+  const tkey = (t) => String(t || '').replace(/[^가-힣a-z0-9]/gi, '').toLowerCase();
+  const hLinks = new Set(hirePosts.map((p) => p.link).filter(Boolean));
+  const hKeys = hirePosts.map((p) => tkey(p.title)).filter((k) => k.length >= 6);
+  const dupHire = (o) => o.tag === '채용' && (hLinks.has(o.link)
+    || hKeys.some((k) => { const t = tkey(o.title); return t.length >= 6 && (t.includes(k) || k.includes(t)); }));
+  const oemAll = report.oem_trace || [];
+  const oem = oemAll.filter((o) => !dupHire(o));
+  const hireDup = oemAll.length - oem.length;
   if (!timeline.length && !oem.length && !news.length && !excl.length) return null;
   // 관련 판정 근거 배지 — 왜 이 업체 자료로 봤는지
   const relB = (w) => (w ? `<span class="rel-ev" title="관련 판정 근거">✓ ${esc(w)}</span>` : '');
@@ -3937,6 +3954,9 @@ function renderCheckWeb(report) {
     if (oem.some((o) => o.tag === '채용')) {
       html += `<div class="ot-hint">ℹ️ 채용공고 확인 — 현재 가동·인력 충원 중일 가능성(생산 활동성 단서)</div>`;
     }
+  }
+  if (hireDup) {
+    html += `<div class="ot-hint">ℹ️ 채용 관련 웹 언급 ${hireDup}건은 아래 <b>채용공고</b> 칸에 같은 내용이 있어 여기서 뺐습니다.</div>`;
   }
 
   // ── 최신 관련기사(신호로 분류되지 않은 일반 기사) ──
@@ -4885,6 +4905,11 @@ function buildVisitChecklist(report) {
     add('mid', '실체', '최근 보도된 사업 동향이 없음 — 최근 3년 주요 실적·설비 투자 이력을 직접 질의', '신호성 기사 0건', '언론 노출이 적은 것 자체가 문제는 아니나, 성장/침체 판단 근거가 부족');
   }
 
+  // 근거가 '찾은 게 없다'인 항목은 제목만 보여 준다. '신호성 기사 0건' 같은 한 줄과
+  // 그에 딸린 해설까지 펼쳐 두면, 정작 자료가 있어 확인할 게 많은 항목과 분량이 똑같아진다.
+  const NODATA = /0건|없음|확인 불가|미확인|미수록|미실행|자동 채워짐/;
+  items.forEach((i) => { if (NODATA.test(i.why || '') || NODATA.test(i.text || '')) i.thin = true; });
+
   const order = { high: 0, mid: 1, low: 2 };
   items.sort((x, y) => order[x.pri] - order[y.pri]);
   return items;
@@ -4955,9 +4980,10 @@ function renderVisitChecklist(report) {
       + `<span class="vr-src vr-src-${SRC_CLS[src] || 'etc'}">${esc(src)}</span>`
       + `<span class="vr-pri vc-pri-${esc(it.pri)}">${esc(PRI_LABEL[it.pri] || it.pri)}</span>`
       + `<span class="vr-cat">${esc(it.cat || '기타')}</span>`
-      + `<div class="vr-body"><label for="vc-${esc(k)}">${esc(it.text)}</label>`
-      + (it.why ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '')
-      + (it.ins ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '')
+      + `<div class="vr-body"><label for="vc-${esc(k)}"${it.thin && (it.why || it.ins) ? ` title="${esc([it.why, it.ins].filter(Boolean).join(' / '))}"` : ''}>${esc(it.text)}</label>`
+      // 자료가 없어서 나온 항목은 근거·해설 줄을 접는다(내용은 제목 툴팁으로 남긴다)
+      + (it.why && !it.thin ? `<span class="vc-why">📎 ${esc(it.why)}</span>` : '')
+      + (it.ins && !it.thin ? `<span class="vc-ins">💡 ${esc(it.ins)}</span>` : '')
       // 메모는 쓸 때만 꺼낸다. 모든 줄에 입력칸을 깔아 두니 표가 입력 양식처럼 보였다.
       + `<button type="button" class="vr-memo-add" data-key="${esc(k)}"${memo ? ' hidden' : ''}>＋ 메모</button>`
       + `<div class="vr-memo"${memo ? '' : ' hidden'}><input type="text" class="vr-memo-in" data-key="${esc(k)}" maxlength="300"`
@@ -5345,20 +5371,42 @@ function renderRoadview(addr, name) {
     const K = window.kakao.maps, pos = new K.LatLng(c.lat, c.lng);
     new K.RoadviewClient().getNearestPanoId(pos, 150, (panoId) => {
       if (!panoId) { msg('이 주소 반경 150m 안에 로드뷰 촬영 지점이 없습니다(산업단지 안쪽 도로는 촬영되지 않은 곳이 많습니다).'); return; }
-      stage.innerHTML = '<div class="rv-view"></div>';
+      // 로드뷰만 있으면 '지금 어디를 보고 있는지'를 알 수 없다 — 좌측 아래에 작은 지도를 띄우고
+      // 그 위에 방문지 핀과 보고 있는 방향을 함께 표시한다(카카오맵 로드뷰 화면과 같은 구성).
+      stage.innerHTML = '<div class="rv-view"></div><div class="rv-mini" title="방문지 위치"></div>';
       rv = new K.Roadview(stage.firstChild);
       rv.setPanoId(panoId, pos);
+      let mini = null, mark = null;
+      try {
+        const mbox = stage.querySelector('.rv-mini');
+        mini = new K.Map(mbox, { center: pos, level: 4, draggable: false, scrollwheel: false, disableDoubleClickZoom: true });
+        mbox.__vsMap = mini;
+        if (mini.setZoomable) mini.setZoomable(false);
+        mark = new K.Marker({ position: pos, map: mini });                 // 방문지(건물)
+        new K.Circle({ center: pos, radius: 35, map: mini, strokeWeight: 0, fillColor: '#2563eb', fillOpacity: 0.15 });
+      } catch { /* 작은 지도는 없어도 로드뷰는 보여 준다 */ }
       // 촬영 지점에서 건물 쪽을 바라보게 돌린다
+      const syncMini = () => {
+        if (!mini || !rv) return;
+        try {
+          const p = rv.getPosition();
+          mini.relayout();
+          mini.setCenter(new K.LatLng((p.getLat() + c.lat) / 2, (p.getLng() + c.lng) / 2));   // 촬영 지점과 건물이 함께 보이게
+        } catch { /* 무시 */ }
+      };
       K.event.addListener(rv, 'init', () => {
         const p = rv.getPosition();
         try { rv.setViewpoint({ pan: rvBearing({ lat: p.getLat(), lng: p.getLng() }, c), tilt: 0, zoom: 0 }); } catch { /* 기본 방향 */ }
+        syncMini();
       });
+      // 로드뷰에서 이동하면 작은 지도도 따라간다
+      K.event.addListener(rv, 'position_changed', syncMini);
     });
   };
   const io = window.IntersectionObserver ? new IntersectionObserver((es) => {
     if (!es.some((e) => e.isIntersecting)) return;
     if (!started) start();
-    else if (rv) { try { rv.relayout(); } catch { /* 무시 */ } }
+    else if (rv) { try { rv.relayout(); const mn = stage.querySelector('.rv-mini'); if (mn && mn.__vsMap) mn.__vsMap.relayout(); } catch { /* 무시 */ } }
   }, { rootMargin: '4000px 0px' }) : null;      // 탭이 보이기만 하면(스크롤 아래여도) 바로 불러온다
   if (io) io.observe(box); else setTimeout(start, 0);
   return box;
@@ -5392,7 +5440,9 @@ function renderAreaTab(report) {
       + `<button type="button" class="nb-btn sm" data-act="at-edit">주소 수정</button>`
       + (ov ? '<button type="button" class="nb-btn sm" data-act="at-reset">원래 주소로</button>' : '')
       + `</div><small class="nb-osub">이 주소 → 법정동코드·지번으로 국토부 건축물대장을 조회한 값입니다${ui.busy === 'reset' ? ' · 다시 조회 중…' : ''}</small>`
-      + (!ui.editing && ui.err ? `<div class="nb-oerr" role="alert">${esc(ui.err)}</div>` : '');
+      + (!ui.editing && ui.err ? `<div class="nb-oerr" role="alert">${esc(ui.err)}</div>` : '')
+      // 후보 주소는 '지금 이 주소'를 정한 근거다 — 따로 떨어진 칸이 아니라 본 주소 바로 아래에서 펼친다
+      + candHtml();
   };
   const candHtml = () => {
     const cs = (M.site && M.site.cands) || [];
@@ -5403,11 +5453,11 @@ function renderAreaTab(report) {
       + '</li>';
     // 선정 주소만 펼쳐 두고 나머지는 접는다 — 필요할 때 열어서 다른 주소로 조회
     const pick = cs.filter((c) => c.state === 'pick'), rest = cs.filter((c) => c.state !== 'pick');
-    return `<div class="at-sec"><h4>후보 주소 <small>공장 소재지 선정 때 대조한 주소</small></h4>`
-      + `<ul class="at-cands">${pick.map(row).join('')}</ul>`
-      + (rest.length ? `<details class="at-more"${ui.candOpen ? ' open' : ''}><summary>다른 후보 주소 ${rest.length}곳 보기 <small>눌러서 그 주소로 조회</small></summary>`
-        + `<ul class="at-cands">${rest.map(row).join('')}</ul></details>` : '')
-      + '</div>';
+    const pickLab = pick.length ? pick.map((c) => c.label).join(' · ') : '';
+    return `<details class="at-cfold"${ui.candOpen ? ' open' : ''}>`
+      + `<summary>이 주소를 고른 근거${pickLab ? ` <b>${esc(pickLab)}</b>` : ''}`
+      + (rest.length ? ` <small>· 다른 후보 ${rest.length}곳 — 눌러서 그 주소로 조회</small>` : '') + '</summary>'
+      + `<ul class="at-cands">${pick.map(row).join('')}${rest.map(row).join('')}</ul></details>`;
   };
   const sumHtml = () => {
     if (!B) {
@@ -5514,7 +5564,7 @@ function renderAreaTab(report) {
   };
 
   const paint = () => {
-    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${candHtml()}${sumHtml()}${lotsHtml()}${bldgHtml()}${airSecHtml(M)}${noteHtml()}`;
+    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${sumHtml()}${lotsHtml()}${bldgHtml()}${airSecHtml(M)}${noteHtml()}`;
     ui.painted = true;
     const cmp = renderAreaCompare(report);
     if (cmp) wrap.appendChild(cmp);
@@ -5552,7 +5602,7 @@ function renderAreaTab(report) {
     commit({ queried: addr, ...bld });
   };
 
-  wrap.addEventListener('toggle', (e) => { if (e.target.classList && e.target.classList.contains('at-more')) ui.candOpen = e.target.open; }, true);
+  wrap.addEventListener('toggle', (e) => { if (e.target.classList && e.target.classList.contains('at-cfold')) ui.candOpen = e.target.open; }, true);
   wrap.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]'); if (!b || ui.busy) return;
     const act = b.dataset.act;

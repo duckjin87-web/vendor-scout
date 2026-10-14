@@ -1471,12 +1471,12 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 @media print { .pendbar { display: none !important; } }
 
 /* 공장 면적 — 선정 외 후보 주소는 접어 둔다 */
-.at-more { margin-top: 6px; border-top: 1px dashed var(--border); }
-.at-more > summary { cursor: pointer; padding: 8px 0 4px; font-size: 13px; font-weight: 700; color: var(--accent); list-style: none; }
-.at-more > summary::-webkit-details-marker { display: none; }
-.at-more > summary::before { content: '▸ '; display: inline-block; transition: transform .15s; }
-.at-more[open] > summary::before { transform: rotate(90deg); }
-.at-more > summary small { font-weight: 500; color: var(--muted); margin-left: 6px; }
+.at-cfold, .at-more { margin-top: 6px; border-top: 1px dashed var(--border); }
+.at-cfold > summary, .at-more > summary { cursor: pointer; padding: 8px 0 4px; font-size: 13px; font-weight: 700; color: var(--accent); list-style: none; }
+.at-cfold > summary::-webkit-details-marker, .at-more > summary::-webkit-details-marker { display: none; }
+.at-cfold > summary::before, .at-more > summary::before { content: '▸ '; display: inline-block; transition: transform .15s; }
+.at-cfold[open] > summary::before, .at-more[open] > summary::before { transform: rotate(90deg); }
+.at-cfold > summary small, .at-more > summary small { font-weight: 500; color: var(--muted); margin-left: 6px; }
 
 /* 종합판정 배지 — 눌러서 판단 기준 보기 */
 button.vd-badge { font: inherit; color: inherit; cursor: pointer; transition: transform .12s ease, box-shadow .12s ease; }
@@ -1978,6 +1978,8 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .xt-wrap { overflow-x: auto; }
 .xt { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .xt th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.xt th.n { text-align: right; }
+.xt th small { display: block; font-weight: 400; font-size: 10.5px; }
 .xt td { padding: 8px; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.45; }
 .xt td small { display: block; color: var(--muted); font-size: 11px; }
 .xt .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -2014,3 +2016,17 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .rv-msg .rv-diag { margin: 10px auto 0; flex: none; }
 .rv-diagout:not(:empty) { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); line-height: 1.6; text-align: left; }
 .rv-diagout b { color: var(--text); font-weight: 700; word-break: break-all; }
+
+/* 후보 주소 — '공장 면적' 탭의 본 주소 바로 아래에서 펼친다(별도 칸이 아니라 선정 근거) */
+.at-cfold { margin-top: 8px; }
+.at-cfold > summary b { color: var(--text); font-weight: 700; }
+.at-cfold > summary small { font-weight: 500; }
+
+/* 로드뷰 안 작은 지도 — 지금 보고 있는 곳이 어디인지 좌측 아래에서 바로 확인 */
+.rv-mini {
+  position: absolute; left: 10px; bottom: 10px; width: 170px; height: 120px; z-index: 3;
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .25); background: var(--panel-2);
+}
+@media (max-width: 720px) { .rv-mini { width: 120px; height: 86px; left: 8px; bottom: 8px; } }
+@media print { .rv-mini { display: none; } }
