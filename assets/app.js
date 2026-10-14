@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 189;
+const BUILD = 190;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2250,89 +2250,64 @@ function matchByNameApp(name, list) {
 // 국민연금 2단계(V2·JSON): 사업장 검색 → 첫 건 seq로 상세조회(가입자수 jnngpCnt는 상세에만 있음)
 // 사업자등록번호(bzowrRgstNo) 우선, 0건이면 상호명(wkplNm)으로 폴백.
 async function npsLookup(nm, bzno) {
+  // ── 국민연금 사업장 API의 구조(2026-10 실측, 인코스) ──
+  // ① 사업자번호는 앞 6자리만 공개('884860****'). 10자리 검색은 0건, 6자리 검색은 무관한 회사 734곳.
+  // ② 상호 검색은 '포함' 검색 — '인코스'에 인코스모·자인코스텍·관악구 다른 (주)인코스 등 207곳.
+  // ③ 같은 사업장이 '월마다 한 줄씩' 온다(dataCrtYm 202608, 202607 …). 이걸 사업장 여러 곳으로 보고
+  //    더하면 한 사업장의 12개월 치가 합산된다(인코스 27명 → 311명 사고).
+  // 그래서: 상호 검색 → 앞 6자리·상호 일치만 → 사업장(상호+주소+법정동)별로 묶어 최신 월 1줄 → 탈퇴 사업장 제외.
+  // 어느 사업장을 이 회사로 볼지는 주소·적용일을 제조소·보험 사업장과 대조하는 리포트 조립 단계(samples.js)에서 정한다.
   const digits = bzno ? String(bzno).replace(/\D/g, '') : '';
-  let items = [], byBzno = false;
-  if (digits.length >= 10) {
-    try {
-      items = itemsOf(await proxyGet('npsSearch', { bz: digits }));
-      // 공개 번호가 앞 6자리뿐이라 다른 회사가 섞일 수 있다 → 상호가 겹치는 사업장만(없으면 원본 유지)
-      const key = stripCorp(nm).replace(/\s/g, '');
-      const named = items.filter((it) => { const w = stripCorp(it.wkplNm).replace(/\s/g, ''); return w && (w.includes(key) || key.includes(w)); });
-      if (named.length) items = named;
-      byBzno = items.length > 0;
-    } catch { /* 상호명으로 폴백 */ }
-  }
-  let byBz6 = false;
-  if (!items.length) {
+  const bz6 = digits.length >= 10 ? digits.slice(0, 6) : '';
+  const key = stripCorp(nm).replace(/\s/g, '');
+  let items = [];
+  try {
     items = itemsOf(await proxyGet('npsSearch', { name: nm, rows: '100' }));
-    // 동명 사업장이 100곳을 넘으면 우리 회사가 뒤 페이지에 있을 수 있다(인코스: 207곳) → 최대 3페이지
     for (let pg = 2; pg <= 3 && items.length === (pg - 1) * 100; pg++) {
       try { items = items.concat(itemsOf(await proxyGet('npsSearch', { name: nm, rows: '100', page: String(pg) }))); } catch { break; }
     }
-    // 상호 검색은 '포함' 검색이라 '인코스'에 (주)인코스모·주식회사 인코스(관악)·자인코스텍 등 수백 곳이 걸린다.
-    // 그중 가입자 최다 사업장을 고르면 남의 회사 인원(인코스 248명 사례)이 찍힌다.
-    // 국민연금은 사업자번호 앞 6자리만 공개 → 사업자번호를 알면 앞 6자리 일치 사업장만 남긴다.
-    if (digits.length >= 10) {
-      const bz6 = digits.slice(0, 6);
-      const same = items.filter((it) => String(it.bzowrRgstNo || '').replace(/\D/g, '').slice(0, 6) === bz6);
-      items = same; byBz6 = same.length > 0;
-    } else {
-      // 사업자번호를 모르면 법인격을 뗀 상호가 정확히 같은 사업장만
-      const key = stripCorp(nm).replace(/\s/g, '');
-      items = items.filter((it) => stripCorp(it.wkplNm).replace(/\s/g, '') === key);
-    }
-  }
-  if (!items.length) return { search: null, detail: null, count: 0, total: null, sites: 0, byBzno };
-  if (byBz6) byBzno = true;   // 앞 6자리 + 상호 포함 일치 → 같은 사업자의 사업장으로 보고 합산
-
-  // 대기업은 본사·공장별로 국민연금 사업장이 분리 등록됨 → 가입자수를 사업장별로 조회해 합산.
-  // 가입자수(jnngpCnt)는 상세조회에만 있어 seq별 호출(상위 18개, 동시 6개로 제한 — 연결 포화 방지).
-  const targets = items.slice(0, 18).filter((it) => it.seq != null && it.seq !== '');
-  const details = await mapLimit(targets, 6, (it) =>
-    proxyGet('npsDetail', { seq: it.seq, ym: it.dataCrtYm }).then((d) => itemsOf(d)[0] || null).catch(() => null));
-  const cnt = (d) => Number(d && (d.jnngpCnt ?? d.subscrCnt)) || 0;
-  const counts = details.map(cnt);
-  const sumAll = counts.reduce((a, b) => a + b, 0);
-  let maxIdx = 0; counts.forEach((c, i) => { if (c > counts[maxIdx]) maxIdx = i; });
-
-  // ★ 그동안 버리던 월 갱신 지표 회수 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 핵심 근거.
-  //   신규취득/상실 = 인력 증감(채용·감원), 당월고지금액 = 인건비 규모 추정 재료.
-  const numOf = (d, ...keys) => { for (const k of keys) { const v = d && d[k]; if (v != null && v !== '') { const n = Number(String(v).replace(/,/g, '')); if (isFinite(n)) return n; } } return 0; };
-  const hasKey = (d, ...keys) => keys.some((k) => d && d[k] != null && d[k] !== '');
-  const pick = byBzno ? details : [details[maxIdx] || details[0]];   // 상호조회는 대표 사업장만(타사 혼입 방지)
-  const NEW_K = ['nwAcqzrCnt', 'newAcqzrCnt', 'acqzrCnt', 'nwAcqzrCnt1'];
-  const LOST_K = ['lssJnngpCnt', 'lossJnngpCnt', 'lssCnt', 'lssJnngpCnt1'];
-  let newCnt = 0, lostCnt = 0, noticeAmt = 0, churnKnown = false;
-  pick.forEach((d) => {
-    if (!d) return;
-    // ★ 값이 0인 것(그 달에 입·퇴사 없음)과 필드 자체가 없는 것을 구분해야 한다.
-    //   0을 '자료 없음'으로 처리하면 '변동 없음'이 공백으로 보인다.
-    if (hasKey(d, ...NEW_K) || hasKey(d, ...LOST_K)) churnKnown = true;
-    newCnt += numOf(d, ...NEW_K);
-    lostCnt += numOf(d, ...LOST_K);
-    noticeAmt += numOf(d, 'crrmmNtcAmt', 'currentMonthNoticeAmount', 'ntcAmt');
+  } catch (e) { throw e; }
+  const searched = items.length;
+  // 상호: 법인격·공백을 떼고 같거나, '(인천지점)'처럼 괄호 지점 표기만 붙은 것
+  const nameOk = (w) => { const n = stripCorp(w).replace(/\s/g, ''); return n === key || (n.startsWith(key) && /^\(.*\)$/.test(n.slice(key.length))); };
+  items = items.filter((it) => nameOk(it.wkplNm) && (!bz6 || String(it.bzowrRgstNo || '').replace(/\D/g, '').slice(0, 6) === bz6));
+  // 사업장별로 묶기 — 월별 중복 제거, 최신 월만
+  const groups = new Map();
+  items.forEach((it) => {
+    const g = [String(it.wkplNm || '').replace(/\s/g, ''), it.wkplRoadNmDtlAddr || it.wkplRoadNmDetAddr || '', it.ldongAddrMgplSgguCd || '', it.ldongAddrMgplSgguEmdCd || ''].join('|');
+    const arr = groups.get(g) || []; arr.push(it); groups.set(g, arr);
   });
-  // 필드를 못 찾았을 때 실제 응답의 숫자형 키를 남겨 다음 조회에서 이름을 확인할 수 있게 한다
-  const sample = pick.find(Boolean) || null;
-  const numKeys = churnKnown || !sample ? null
-    : Object.keys(sample).filter((k) => /cnt|amt|co$/i.test(k)).slice(0, 12).join(', ');
-  // 국민연금 보험료율 9%(근로자+사용자) → 고지금액 ÷ 0.09 ≈ 사업장 기준소득월액 합계.
-  // 기준소득월액에 상한·하한이 있어 고소득자는 과소 반영되므로 '하한 추정'으로만 사용.
-  const payrollEst = noticeAmt > 0 ? Math.round(noticeAmt / 0.09) : null;
-
-  // 사업자번호 조회면 전 사업장이 동일 사업자 → 합산 안전. 상호명 조회는 타 계열사 혼입 위험 → 최대 사업장 1곳만.
-  const total = byBzno ? (sumAll || null) : (counts[maxIdx] || null);
-  const activeSites = counts.filter((c) => c > 0).length;
-  return {
-    search: items[maxIdx] || items[0] || null,      // 대표(최대) 사업장 — 주소/기준월 표기용
-    detail: details[maxIdx] || details[0] || null,
-    count: items.length,
-    total,
-    sites: byBzno ? activeSites : 1,
-    byBzno,
-    newCnt, lostCnt, noticeAmt, payrollEst,          // 월 갱신 지표
-    churnKnown, numKeys,                             // 취득·상실 필드 확보 여부 / 미확보 시 후보 키 목록
-  };
+  let sites = [...groups.values()].map((arr) => {
+    arr.sort((a, b) => String(b.dataCrtYm || '').localeCompare(String(a.dataCrtYm || '')));
+    return { latest: arr[0], months: arr };
+  });
+  const quit = (it) => String(it.wkplJnngStcd || '') === '2';
+  const dropped = sites.filter((x) => quit(x.latest)).length;
+  sites = sites.filter((x) => !quit(x.latest)).slice(0, 8);
+  if (!sites.length) return { sites: [], searched, matched: 0, dropped, bz6: !!bz6, count: 0, total: null };
+  // 가입자수는 상세에만 있다 — 사업장별 최신 월 상세
+  const det = await mapLimit(sites, 4, (x) => proxyGet('npsDetail', { seq: x.latest.seq, ym: x.latest.dataCrtYm }).then((d) => itemsOf(d)[0] || null).catch(() => null));
+  const num = (v) => { const n = Number(String(v == null ? '' : v).replace(/,/g, '')); return isFinite(n) ? n : null; };
+  const ymd = (v) => { const d = String(v || '').replace(/\D/g, ''); return d.length >= 8 && !/^0001/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : null; };
+  const out = sites.map((x, i) => {
+    const d = det[i] || {};
+    return {
+      name: x.latest.wkplNm || '', addr: x.latest.wkplRoadNmDtlAddr || x.latest.wkplRoadNmDetAddr || d.wkplRoadNmDtlAddr || '',
+      ym: x.latest.dataCrtYm || null, cnt: num(d.jnngpCnt ?? d.subscrCnt), adpt: ymd(d.adptDt), ind: d.vldtVlKrnNm || null,
+      notice: num(d.crrmmNtcAmt), seq: x.latest.seq, months: x.months.map((m) => ({ ym: m.dataCrtYm, seq: m.seq })),
+    };
+  });
+  // 인원 추이 — 가장 큰 사업장의 최근 월별 가입자(최대 12개월). 같은 사업장이 월마다 오는 구조를 그대로 쓴다.
+  const top = out.reduce((a, b) => ((b.cnt || 0) > (a.cnt || 0) ? b : a), out[0]);
+  let trend = null;
+  if (top && top.months.length > 1) {
+    const ms = top.months.slice(0, 12);
+    const cs = await mapLimit(ms, 4, (m) => (m.seq === top.seq ? Promise.resolve(top.cnt)
+      : proxyGet('npsDetail', { seq: m.seq, ym: m.ym }).then((d) => num((itemsOf(d)[0] || {}).jnngpCnt)).catch(() => null)));
+    trend = ms.map((m, i) => ({ ym: m.ym, cnt: cs[i] })).filter((t) => t.cnt != null).reverse();
+  }
+  return { sites: out, searched, matched: items.length, dropped, bz6: !!bz6, trend, trendSite: top ? top.name + ' ' + top.addr : null,
+    count: out.length, total: out.reduce((a, x) => a + (x.cnt || 0), 0) || null };
 }
 
 // 주소 대조 키 — 도로명+건물번호('가정로37번길 29' → '가정로37번길29').
@@ -3475,7 +3450,7 @@ async function liveBackfill(res, corp, name, nm) {
       if ((!res.nts || !res.nts.ok) && errs.length) res.nts = { ok: false, err: `국세청 재조회 실패 (${errs.join(' / ')})` };
     }
     // 국민연금 — 상호검색 결과가 약하면(합산 미확보) 사업자번호로 정확 재조회
-    if (uniqBz[0] && (!res.nps || !res.nps.ok || !(res.nps.data && res.nps.data.total))) {
+    if (uniqBz[0] && (!res.nps || !res.nps.ok || !(res.nps.data && res.nps.data.bz6))) {   // 앞 6자리로 다시 걸러야 동명 회사가 빠진다
       try { const npsBz = await npsLookup(nm, uniqBz[0]); if (npsBz && npsBz.count) res.nps = { ok: true, data: npsBz }; } catch { /* 유지 */ }
     }
     // 고용·산재보험·대기배출 — 사업자번호가 있어야 정확히 찾는다
@@ -3507,8 +3482,8 @@ function liveSiteInputs(res, corp, name) {
   const ned = res.nedrug && res.nedrug.ok && res.nedrug.data && res.nedrug.data.found ? res.nedrug.data : null;
   const nedAddrs = ned ? ned.sites.map((x) => x.addr) : [];
   const mAddrs = [...new Set([...nedAddrs, ...apiAddrs])];
-  const npsSrch = res.nps && res.nps.ok && res.nps.data ? res.nps.data.search : null;
-  const npsAddr = npsSrch ? (npsSrch.wkplRoadNmDetAddr || npsSrch.wkplRoadNmDtlAddr || npsSrch.ldongAddr || null) : null;
+  const npsS = res.nps && res.nps.ok && res.nps.data && res.nps.data.sites ? res.nps.data.sites : [];
+  const npsAddr = npsS.length ? (npsS.reduce((a, b) => ((b.cnt || 0) > (a.cnt || 0) ? b : a)).addr || null) : null;
   return { fAddr, mAddr: mAddrs[0] || mAddr, mAddrs, nedAddrs, npsAddr, sig: [fAddr, mAddrs.join(';'), npsAddr].join('|') };
 }
 // 실제 공장 소재지 선정 → 카카오 방문거리 + 건축물대장 면적. res.site · res.kakao · res.bld를 채운다.
@@ -3689,7 +3664,7 @@ function workforceBlock(report) {
   h += '<div class="vd-chips wf-chips">'
     + chip('화장품 제조 사업장 인원', W.mfgSiteN ? `${n(W.mfg)}명` : '없음', mfgSub, W.mfgSiteN ? 'num' : 'bad')
     + chip('보험 상시근로자 (회사 전체)', `${n(W.total)}명`, `고용 ${n(W.gyTotal)} · 산재 ${n(W.sjTotal)}`)
-    + chip('국민연금 가입자', W.nps != null ? `${n(W.nps)}명` : '미확인', W.npsAddr ? `${String(W.npsAddr).split(' ').slice(0, 2).join(' ')} 신고` : '비교용', W.nps != null ? 'num' : 'na')
+    + chip('국민연금 가입자 (참고)', W.nps != null ? `${n(W.nps)}명` : '미확인', W.nps == null ? '비교용' : W.npsBasis && W.npsBasis !== 'confirmed' ? '이 회사 사업장인지 불확실' : (W.npsAddr ? `${String(W.npsAddr).split(' ').slice(0, 2).join(' ')} 신고` : ''), W.nps != null ? (W.npsBasis === 'confirmed' ? 'num' : 'na') : 'na')
     + (W.other ? chip('다른 업종 사업장', `${n(W.other)}명`, W.otherInd || '', 'bad') : '')
     + '</div>';
   h += '<div class="xt-wrap"><table class="xt"><thead><tr><th>보험 사업장</th><th class="hide-m">주소</th><th>업종 (고용 / 산재)</th><th class="n">고용 상시</th><th class="n">산재 상시</th><th class="hide-m">성립</th></tr></thead><tbody>'
@@ -3710,7 +3685,7 @@ function workforceBlock(report) {
     ins.push(['warn', '보험 업종에 <b>화장품 제조 사업장이 없습니다</b> — 제조를 직접 하는지, 위탁·소분만 하는지 방문 때 확인하세요.']);
   }
   if (W.other) ins.push(['warn', `같은 법인에 <b>다른 업종 사업장(${n(W.other)}명${W.otherInd ? ` · ${esc(W.otherInd)}` : ''})</b>이 있습니다. 방문 대상인지 확인하세요.`]);
-  if (W.nps != null && W.total) {
+  if (W.nps != null && W.total && W.npsBasis === 'confirmed') {
     const d = W.total - W.nps;
     if (Math.abs(d) >= Math.max(3, W.total * 0.15)) {
       ins.push(['', d > 0
@@ -4569,7 +4544,8 @@ function renderVerdict(report) {
   const dist = cv('방문 이동거리');
   const maker = bv('제조업 등록'), bstt = String(bv('사업자 상태') || ''), fct = bv('공장/제조소 소재지');
   const cgmp = cv('CGMP 적합업소');
-  const empRaw = cv('재직자수 (국민연금 가입자)');
+  // 재직자수는 제조소 상시근로자(고용·산재보험)가 기준, 예전 리포트는 국민연금 값
+  const empRaw = cv('재직자수 (제조소 상시근로자)') || cv('국민연금 가입자 (참고)') || cv('재직자수 (국민연금 가입자)');
   // '14명 · 2025.10 기준' 에서 숫자를 다 긁으면 기준일까지 붙어 14202510 이 된다.
   // 맨 앞 숫자만 읽는다.
   const empN = (() => {
@@ -4598,8 +4574,9 @@ function renderVerdict(report) {
     // CGMP는 없다고 결격은 아니지만 있으면 확실한 강점이라, 보유했을 때만 색을 준다.
     ['CGMP', cgmp ? '적합' : '미등재', cgmp ? 'good' : 'na'],
     // 5명 이하면 생산 물량·교대 운영을 감당할 수 있는지부터 확인해야 한다.
-    ['직원수', empRaw ? String(empRaw).replace(/\s*·.*$/, '') : '미확인',
-      empN == null ? 'na' : (empN <= 5 ? 'warn' : 'num')],
+    ['재직자수', empRaw ? String(empRaw).replace(/\s*·.*$/, '') : '미확인',
+      empN == null ? 'na' : (empN <= 5 ? 'warn' : 'num'),
+      cv('재직자수 (제조소 상시근로자)') ? (/제조 사업장 미확인|국민연금/.test(empRaw) ? '참고값' : '제조소 상시') : (empRaw ? '국민연금(참고)' : '')],
     ['설립', String(bv('설립일 / 등록일') || '').slice(0, 4) || '미확인', bv('설립일 / 등록일') ? 'num' : 'na'],
     ['매출', revF ? revF.value + (revF.grade === 'C' ? '*' : '') : '미확인',
       revEok == null || !isFinite(revEok) ? 'na' : (revEok <= 0 ? 'bad' : 'num')],

@@ -1011,22 +1011,38 @@ function assembleLiveReport(name, corp, res) {
     flat: null,
   };
 
-  // 국민연금 (nps) — {search, detail, count} 형태 (검색→상세 2단계)
+  // 국민연금 (nps) — npsLookup이 상호·사업자번호 앞 6자리로 거르고 월별 중복을 없앤 사업장 목록.
+  // 앞 6자리는 수백 개 회사가 같이 쓰고 상호는 동명 회사가 있어, 여기서 '이 회사 사업장'임을 주소·적용일로 확인한다.
+  //  · 주소: 국민연금 주소는 번지가 없다('…조마루로385번길') → 도로명이 본점·제조소·보험 사업장 주소와 같은지
+  //  · 적용일: 국민연금 적용일 = 고용·산재보험 성립일이면 같은 사업장(인코스 부천: 2016-09-19 양쪽 동일)
   const npsData = R.nps && R.nps.ok ? R.nps.data : null;
-  const nps = npsData ? npsData.search : null;
-  const npsDet = npsData ? npsData.detail : null;
-  // V2 JSON 필드: 가입자수=jnngpCnt(상세), 도로명주소=wkplRoadNmDetAddr, 법정동=ldongAddrMgpldongNm
-  // total = 동일 사업자번호의 전 사업장 가입자 합산(대기업 본사·공장 분리등록 대응)
-  const npsTotal = npsData ? npsData.total : null;
-  const npsSites = npsData ? (npsData.sites || 0) : 0;
-  const empRawSingle = (npsDet && (npsDet.jnngpCnt ?? npsDet.subscrCnt)) ?? (nps && (nps.jnngpCnt ?? nps.subscrCnt)) ?? null;
-  const empVal = (npsTotal != null && npsTotal !== '') ? npsTotal : ((empRawSingle != null && empRawSingle !== '') ? empRawSingle : null);
-  const pick = (o, ...ks) => { if (!o) return null; for (const k of ks) if (o[k] != null && o[k] !== '') return o[k]; return null; };
-  const npsAddr = pick(nps, 'wkplRoadNmDetAddr', 'wkplRoadNmDtlAddr', 'ldongAddrMgpldongNm', 'ldongAddr')
-    || pick(npsDet, 'wkplRoadNmDetAddr', 'wkplRoadNmDtlAddr', 'ldongAddrMgpldongNm') || null;
-  // 국민연금 자료 기준년월(dataCrtYm, YYYYMM) → 갱신일 표기
-  const npsYmRaw = pick(npsDet, 'dataCrtYm') || pick(nps, 'dataCrtYm');
+  const roadNm = (a) => (String(a || '').match(/([가-힣A-Za-z0-9]+(?:로|길))(?=\s|\d|$)/) || [])[1] || '';
+  const sidoOf = (a) => String(a || '').trim().slice(0, 2);
+  const insSites0 = R.insure && R.insure.ok && R.insure.data ? (R.insure.data.sites || []) : [];
+  const knownAddrs = [
+    ['본점', corp?.addr], ...nedSites.map((x, i) => [`제조소 ${i + 1}`, x.addr]),
+    ...insSites0.map((x) => [`보험 사업장(${x.name})`, x.addr]),
+  ].filter(([, v]) => roadNm(v));
+  const insEst = new Set(insSites0.flatMap((x) => [x.gy && x.gy.est, x.sj && x.sj.est]).filter(Boolean).map((d) => String(d).slice(0, 10)));
+  const npsAll = npsData && Array.isArray(npsData.sites) ? npsData.sites.map((x) => {
+    const hit = knownAddrs.find(([, v]) => roadNm(v) === roadNm(x.addr) && sidoOf(v) === sidoOf(x.addr));
+    const adptHit = !!(x.adpt && insEst.has(x.adpt));
+    return { ...x, addrHit: hit ? hit[0] : null, adptHit };
+  }) : [];
+  const npsConf = npsAll.filter((x) => x.addrHit || x.adptHit);
+  // 확인된 사업장만 합산. 확인 못 했으면 한 곳일 때만 쓰고(약한 근거), 여러 곳이면 가장 큰 곳 + '특정 불가' 표시
+  const npsUse = npsConf.length ? npsConf : (npsAll.length ? [npsAll.reduce((a, b) => ((b.cnt || 0) > (a.cnt || 0) ? b : a))] : []);
+  const npsBasis = !npsAll.length ? null : npsConf.length ? 'confirmed' : npsAll.length === 1 ? 'weak' : 'ambiguous';
+  const npsSites = npsUse.length;
+  const empVal = npsUse.some((x) => x.cnt != null) ? npsUse.reduce((a, x) => a + (x.cnt || 0), 0) : null;
+  const npsMain = npsUse.length ? npsUse.reduce((a, b) => ((b.cnt || 0) > (a.cnt || 0) ? b : a)) : null;
+  const npsAddr = npsMain ? npsMain.addr || null : null;
+  const npsYmRaw = npsMain ? npsMain.ym : null;
   const npsYm = npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1.$2') : null;
+  const npsWhy = npsBasis === 'confirmed'
+    ? npsUse.map((x) => `${x.name}(${x.addrHit ? `주소 = ${x.addrHit}` : ''}${x.addrHit && x.adptHit ? ', ' : ''}${x.adptHit ? `적용일 ${x.adpt} = 보험 성립일` : ''})`).join(' · ')
+    : npsBasis === 'weak' ? '상호·사업자번호 앞 6자리만 일치 — 주소·적용일로는 확인 못 함'
+      : npsBasis === 'ambiguous' ? `같은 상호·앞 6자리 사업장 ${npsAll.length}곳 중 이 회사를 특정하지 못해 가장 큰 곳만 표시 (${npsAll.map((x) => `${x.addr} ${x.cnt ?? '—'}명`).join(' / ')})` : '';
 
   // ── 고용·산재보험 — 사업장별 상시인원과 역할(제조·본사·물류·다른 업종) ──
   // 국민연금은 회사 전체(또는 본점 일괄) 가입자 수라 공장 인원을 알 수 없다. 보험은 사업장 단위로 오고
@@ -1053,9 +1069,10 @@ function assembleLiveReport(name, corp, res) {
     const mfgSites = atS.length ? atS : sites.filter((x) => x.role === 'cosm');
     const mfg = mfgSites.reduce((a, x) => a + x.cnt, 0);
     const other = sites.filter((x) => x.role === 'other');
-    return { sites, total, gyTotal: insD.gyTotal, sjTotal: insD.sjTotal, mfg, mfgNames: mfgSites.map((x) => x.name), mfgSiteN: mfgSites.length, matched: atS.length > 0,
+    const short = (x) => { const m = String(x.addr).match(/([가-힣]+(?:구|군|시))\s+(?:[가-힣]+(?:읍|면|동)\s+)?([가-힣A-Za-z0-9]+(?:로|길)\s*\d+(?:-\d+)?)/); return m ? `${m[1]} ${m[2]}` : x.name; };
+    return { sites, total, gyTotal: insD.gyTotal, sjTotal: insD.sjTotal, mfg, mfgNames: mfgSites.map((x) => x.name), mfgSites: mfgSites.map((x) => ({ name: x.name, short: short(x), cnt: x.cnt })), mfgSiteN: mfgSites.length, matched: atS.length > 0,
       other: other.reduce((a, x) => a + x.cnt, 0), otherInd: other.map((x) => (x.gy && x.gy.ind) || (x.sj && x.sj.ind)).filter(Boolean)[0] || null,
-      noMfg: !mfgSites.length || sites.every((x) => !x.cosm), nps: empVal != null ? Number(empVal) : null, npsAddr: npsAddr || null };
+      noMfg: !mfgSites.length || sites.every((x) => !x.cosm), nps: empVal != null ? Number(empVal) : null, npsAddr: npsAddr || null, npsBasis };
   })() : null;
 
   // ── 대기오염물질 배출시설 신고 — 공장이 실제로 설비를 돌리고 있다는 근거 ──
@@ -1206,30 +1223,36 @@ function assembleLiveReport(name, corp, res) {
   }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 
   const capacity = [
-    f('재직자수 (국민연금 가입자)',
-      empVal != null ? `${empVal}명${npsSites > 1 ? ` (${npsSites}개 사업장 합산)` : ''}${npsYm ? ` · ${npsYm} 기준` : ''}` : null,
-      empVal != null ? 'B' : 'D', '국민연금 사업장 API',
-      empVal != null ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null,
-      empVal != null
-        ? (npsSites > 1
-            ? `★ 동일 사업자번호의 ${npsSites}개 국민연금 사업장(본사·공장 등) 가입자 합산 — 4대보험 재직자(월 갱신). 파견·일용·프리랜서 미포함`
-            : '★ 현재 인원에 가장 근접 — 4대보험 가입 재직자(월 갱신). 사업장 단위 신고이며 파견·일용·프리랜서 미포함')
-        : why('nps', '국민연금 사업장 결과 없음(상호 불일치 가능)')),
-    // 고용·산재보험 상시근로자 — 국민연금 가입자와 다른 숫자다(일용·단시간 포함 월평균, 사업장별)
-    f('상시근로자 (고용·산재보험)',
+    // ★ 재직자수 = 제조업 허가 제조소 주소에 있는 고용·산재보험 사업장의 상시근로자.
+    //   국민연금은 본점 일괄 신고·동명 회사·월별 중복 때문에 공장 인원으로 믿기 어렵다 → 아래 '참고'로 내린다.
+    (() => {
+      const W = workforce;
+      if (W && W.mfgSiteN) {
+        const per = W.mfgSites.map((x) => `${x.short} ${x.cnt}명`).join(' · ');
+        return f('재직자수 (제조소 상시근로자)', `${W.mfg}명 · 제조소 ${W.mfgSiteN}곳${W.total !== W.mfg ? ` (회사 전체 ${W.total}명)` : ''}`,
+          W.matched ? 'A' : 'B', '근로복지공단 고용·산재보험', today,
+          `${per} — ${W.matched ? '제조업 허가 제조소와 같은 주소의 보험 사업장' : '화장품 제조 업종 보험 사업장(제조소 주소와는 대조 못 함)'} 상시근로자(산재보험 기준, 일용·단시간 포함 월평균). `
+          + `본사·물류·다른 업종 사업장은 뺐습니다.${empVal != null ? ` 국민연금 가입자 ${empVal}명은 아래 참고` : ''}`);
+      }
+      if (W) return f('재직자수 (제조소 상시근로자)', `회사 전체 ${W.total}명 (제조 사업장 미확인)`, 'C', '근로복지공단 고용·산재보험', today,
+        '보험 업종에 화장품 제조 사업장이 없어 회사 전체 상시근로자를 적었습니다 — 직접 제조하는지, 위탁인지 방문 때 확인하세요');
+      return f('재직자수 (제조소 상시근로자)', empVal != null ? `${empVal}명 · 국민연금 참고값` : null, empVal != null ? 'C' : 'D', '국민연금 사업장 API', empVal != null ? today : null,
+        empVal != null ? '고용·산재보험 자료가 없어 국민연금 가입자 수로 대신했습니다(본점 일괄 신고라 공장 인원과 다를 수 있음)' : why('insure', '고용·산재보험·국민연금 모두 인원 자료 없음'));
+    })(),
+    f('상시근로자 (회사 전체 · 보험)',
       workforce ? `${workforce.total}명 · 보험 사업장 ${workforce.sites.length}곳` : null,
       workforce ? 'A' : 'D', '근로복지공단 고용·산재보험', workforce ? today : null,
       workforce
-        ? `사업자번호로 조회한 이 회사 보험 사업장의 상시근로자 합계(고용 ${workforce.gyTotal ?? '—'} / 산재 ${workforce.sjTotal ?? '—'}). 일용·단시간 근로자도 포함한 월평균 인원이라 국민연금 가입자 수와 다를 수 있습니다`
+        ? `사업자번호로 조회한 이 회사 보험 사업장 전체(고용 ${workforce.gyTotal ?? '—'} / 산재 ${workforce.sjTotal ?? '—'}). 사업장별 내역은 「인력 · 사업장 구성」`
         : why('insure', '보험 가입 사업장 0건')),
-    f('화장품 제조 사업장 인원 (보험)',
-      workforce && workforce.mfgSiteN ? `${workforce.mfg}명 · ${workforce.mfgSiteN}곳` : (workforce ? '보험상 화장품 제조 사업장 없음' : null),
-      workforce ? (workforce.mfgSiteN ? (workforce.matched ? 'A' : 'B') : 'C') : 'D', '근로복지공단 고용·산재보험', workforce ? today : null,
-      workforce
-        ? (workforce.mfgSiteN
-          ? `${workforce.mfgNames.join(', ')} — ${workforce.matched ? '제조업 허가 제조소와 같은 주소의 보험 사업장' : '화장품 제조 업종 보험 사업장(제조소 주소와는 대조 못 함)'}. 공장 인원은 산재보험 기준`
-          : '보험 업종이 화장품 제조가 아닙니다 — 직접 제조하는지, 위탁인지 방문 때 확인하세요')
-        : why('insure', '보험 가입 사업장 0건')),
+    f('국민연금 가입자 (참고)',
+      empVal != null ? `${empVal}명${npsSites > 1 ? ` (${npsSites}개 사업장)` : ''}${npsYm ? ` · ${npsYm} 기준` : ''}${npsBasis === 'confirmed' ? '' : npsBasis === 'weak' ? ' · 특정 근거 약함' : ' · 특정 불가'}` : null,
+      empVal != null ? (npsBasis === 'confirmed' ? 'B' : 'C') : 'D', '국민연금 사업장 API',
+      empVal != null ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null,
+      empVal != null
+        ? `참고값 — 국민연금은 사업자번호를 앞 6자리만 공개하고 같은 사업장을 월마다 따로 줘서, 상호·앞 6자리로 거른 뒤 주소·적용일로 이 회사 사업장인지 확인합니다. 근거: ${npsWhy}. `
+          + '월 60시간 이상 가입자(대표 포함)라 보험 상시근로자와 다를 수 있습니다'
+        : (npsData && npsData.searched ? `상호 검색 ${npsData.searched}건 중 사업자번호 앞 6자리·상호가 맞는 사업장 없음` : why('nps', '국민연금 사업장 결과 없음'))),
     // 지자체 공장정보에 실린 연락처 — 방문 약속을 잡을 유일한 공개 번호다
     // 연락처 — 공장등록 응답의 전화번호를 먼저 쓰고, 없을 때만 웹에서 긁은 값을 쓴다
     f('공장 연락처', fctTel || pubBizFacts.tel || pubBizFacts.fctryTel || null,
@@ -1259,21 +1282,17 @@ function assembleLiveReport(name, corp, res) {
         c ? `제조소 주소에 대기오염물질 배출시설 설치 신고가 있습니다${c.permit ? `(인허가 ${c.permit})` : ''} — ${c.isClosed ? '지금 제조소의 배출시설이 폐업·휴업 상태입니다. 가동 여부를 확인하세요' : '보일러·유화·건조 등 생산 설비가 신고된 실제 공장이라는 근거'}. 자세한 내역은 「공장 면적」 탭`
           : '배출시설 신고가 없는 것은 결격이 아닙니다 — 소규모 시설은 신고 대상이 아닐 수 있습니다');
     })(),
-    // ★ 월 갱신 지표 — 재무가 오래된 업체에서 '현재 상태'를 보여주는 가장 최신 근거
+    // 인력 추이 — 국민연금은 같은 사업장을 월마다 주므로 최근 12개월 가입자 변화를 그대로 그릴 수 있다
     (() => {
-      const nw = npsData ? Number(npsData.newCnt || 0) : 0;
-      const ls = npsData ? Number(npsData.lostCnt || 0) : 0;
-      // 0(그 달 변동 없음)과 필드 미확보를 구분 — 0을 공백으로 처리하면 '변동 없음'이 사라진다
-      const has = !!(npsData && npsData.churnKnown);
-      const net = nw - ls;
-      const val = has ? `+${nw} / -${ls} (순 ${net >= 0 ? '+' : ''}${net}명)` : null;
-      return f('최근 인력 증감 (연금 취득·상실)', val, has ? 'B' : 'D', '국민연금 사업장 API',
-        has ? (npsYmRaw ? String(npsYmRaw).replace(/^(\d{4})(\d{2}).*$/, '$1-$2') : today) : null,
-        has
-          ? `해당 월 신규취득 ${nw}명 · 상실 ${ls}명 — ${net > 0 ? '증원(채용 진행) 신호' : net < 0 ? '감소(이탈·감원) 신호 — 사유 확인 권장' : '변동 없음'}. 월 단위로 갱신되는 최신 지표`
-          : ((npsData && npsData.numKeys)
-              ? `취득·상실 필드를 응답에서 찾지 못했습니다 (응답 내 수치 항목: ${npsData.numKeys})`
-              : why('nps', '취득·상실 자료 없음')));
+      const tr = npsData && Array.isArray(npsData.trend) ? npsData.trend : [];
+      const ok = tr.length >= 2 && npsBasis !== 'ambiguous';
+      const f0 = ok ? tr[0] : null, f1 = ok ? tr[tr.length - 1] : null;
+      const ym = (v) => String(v || '').replace(/^(\d{4})(\d{2}).*$/, '$1.$2');
+      const d = ok ? f1.cnt - f0.cnt : 0;
+      return f('인력 추이 (국민연금 월별)', ok ? `${f0.cnt}명 → ${f1.cnt}명 (${ym(f0.ym)}~${ym(f1.ym)}, ${d > 0 ? '+' : ''}${d}명)` : null,
+        ok ? 'B' : 'D', '국민연금 사업장 API', ok ? ym(f1.ym).replace('.', '-') : null,
+        ok ? `${tr.map((t) => `${ym(t.ym).slice(2)} ${t.cnt}`).join(' · ')} — ${Math.abs(d) <= Math.max(1, f0.cnt * 0.1) ? '안정' : d > 0 ? '증원 추세' : '감소 추세 — 사유 확인 권장'}. 사업장: ${npsData.trendSite || ''}`
+          : why('nps', npsBasis === 'ambiguous' ? '사업장을 특정하지 못해 추이를 쓰지 않음' : '월별 자료 부족'));
     })(),
     // 추정 인건비(연금 고지액 ÷ 9%)는 뺐다 — 기준소득월액 상·하한 때문에 신뢰도가 낮고 방문 판단에 쓰이지 않았다(사용자 요청)
     (() => {
@@ -1330,7 +1349,7 @@ function assembleLiveReport(name, corp, res) {
   // (재무 조립보다 앞에 둔다 — 아래에서 외부사이트 재무를 붙일 때 필요하다)
   const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
   const hiring = hireRaw && typeof analyzeHiring === 'function'
-    ? analyzeHiring(hireRaw.posts, hireRaw.heads, empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs)
+    ? analyzeHiring(hireRaw.posts, hireRaw.heads, workforce ? workforce.total : empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs)
     : null;
   if (hiring && hireRaw && hireRaw.contacts) hiring.contacts = hireRaw.contacts;   // 대표번호·메일(업체명 옆 표시)
 
@@ -1420,7 +1439,7 @@ function assembleLiveReport(name, corp, res) {
       : `금융위 재무정보 API (${L.year} 회계연도${viaAccounts ? ' · 계정과목 보완' : ''})`;
     // 계열이 끊겼거나 중간에 빠진 해가 있으면 그 사유를 추정해 덧붙인다
     // (끊긴 사실만 보이면 폐업·부실로 오해하기 쉬움 — financeBreakNote 주석 참고)
-    const breakNote = financeBreakNote(finance_history, curYear, empVal, bSttVal);
+    const breakNote = financeBreakNote(finance_history, curYear, workforce ? workforce.total : empVal, bSttVal);
     const baseNote = (usingExt
       ? `★ 금융위 재무 API에 이 업체의 재무 레코드가 없습니다. 이 API는 외부감사·상장 공시분만 `
         + `수록하므로, 외감 대상이 아닌 법인은 매출 규모와 무관하게 조회되지 않습니다. `
@@ -1571,7 +1590,7 @@ function assembleLiveReport(name, corp, res) {
       rlAll.length ? `상호 일치 0건 (API가 업체명 미필터로 전체 ${rlAll.length}건 반환 — 이 업체 품목 아님)` : '0건 — 기능성 미취급 또는 미신고'),
     stat('insure', 'insure', '고용·산재보험 (사업장·상시인원)', workforce ? `보험 사업장 ${workforce.sites.length}곳 · 상시 ${workforce.total}명` : null, '가입 사업장 0건'),
     stat('air', 'air', '대기배출시설 신고', airInfo ? (airInfo.rows.length ? `${airInfo.rows.length}건${airInfo.cur ? ` · 제조소 주소 ${airInfo.cur}건` : ''}` : '신고 없음(소규모 면제 가능)') : null, '조회 결과 없음'),
-    stat('nps', 'nps', '국민연금 (재직자수)', (npsData && npsData.count) ? `사업장 ${npsData.count}곳${npsSites > 1 ? `(${npsSites}곳 합산)` : ''}${empVal != null ? ` · 가입자 ${empVal}명` : ' · 가입자수 상세조회 실패'}` : null, '사업장 검색 0건 — 상호 표기 차이 가능'),
+    stat('nps', 'nps', '국민연금 (참고)', npsAll.length ? `상호·앞 6자리 일치 사업장 ${npsAll.length}곳${npsConf.length ? ` · 주소/적용일 확인 ${npsConf.length}곳` : ' · 주소 대조 못 함'}${empVal != null ? ` · 가입자 ${empVal}명` : ''}` : null, npsData && npsData.searched ? `상호 검색 ${npsData.searched}건 중 일치 사업장 없음` : '사업장 검색 0건'),
     { key: 'maker', name: '식약처 화장품제조업', ok: !!mk, warn: !mk && !!(R.maker && R.maker.ok),
       detail: mk ? `제조업 등록 확인${mkRep ? ` · 대표 ${mkRep}` : ''}${mkAddr ? ` · ${mkAddr}` : ''}`
         : (!R.maker ? '자료 미제출/미등록' : (!R.maker.ok ? briefErr(R.maker.err)
