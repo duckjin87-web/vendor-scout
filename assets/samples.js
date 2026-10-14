@@ -1064,17 +1064,29 @@ function assembleLiveReport(name, corp, res) {
       // 같은 사업장의 국민연금 가입자(정규·상용) — 보험 상시인원과 나란히 놓아야 비정규 비중이 보인다.
       // 국민연금 주소에는 번지가 없어('…조마루로385번길') 도로명과 시·도로만 맞춘다.
       const np = npsAll.find((q) => roadNm(q.addr) && roadNm(q.addr) === roadNm(x.addr) && sidoOf(q.addr) === sidoOf(x.addr));
-      return { ...x, cnt, cosm, atSite, role, npsCnt: np ? np.cnt : null, est: (x.sj && x.sj.est) || (x.gy && x.gy.est) || null };
+      const npsCnt = np ? np.cnt : null;
+      // 연금 가입자가 그 사업장 상시인원보다 많으면 본점에 전사를 몰아 신고한 것 — 이 사업장 몫으로 쓸 수 없다
+      const npsUnsplit = npsCnt != null && cnt > 0 && npsCnt > cnt;
+      return { ...x, cnt, cosm, atSite, role, npsCnt, npsUnsplit, est: (x.sj && x.sj.est) || (x.gy && x.gy.est) || null };
     }).sort((a, b) => (b.atSite - a.atSite) || (b.cnt - a.cnt));
     const total = Math.max(insD.gyTotal || 0, insD.sjTotal || 0);
     const atS = sites.filter((x) => x.atSite);
     // 제조 인원 — 제조소 주소의 사업장. 주소가 안 맞으면 화장품 업종 사업장(본사·물류 제외)
     const mfgSites = atS.length ? atS : sites.filter((x) => x.role === 'cosm');
     const mfg = mfgSites.reduce((a, x) => a + x.cnt, 0);
-    const mfgNps = mfgSites.some((x) => x.npsCnt != null) ? mfgSites.reduce((a, x) => a + (x.npsCnt || 0), 0) : null;
+    // 사업장별로 쪼개진 연금 가입자만 더한다(본점 일괄 신고분은 제외)
+    const mfgNps = mfgSites.some((x) => x.npsCnt != null && !x.npsUnsplit)
+      ? mfgSites.reduce((a, x) => a + (x.npsUnsplit ? 0 : (x.npsCnt || 0)), 0) : null;
     const other = sites.filter((x) => x.role === 'other');
+    // ★ 추정 근무 인원은 하나의 숫자가 아니라 폭이다.
+    //   산재 상시(일용·단시간 포함, 대표·임원 제외)와 국민연금 가입자(월 60시간 이상, 대표·임원 포함)는
+    //   세는 사람이 달라 어느 한쪽이 더 클 수 있다. 둘 중 작은 쪽~큰 쪽을 실제 근무 규모로 본다.
+    const npsAll2 = empVal != null && npsBasis === 'confirmed' ? Number(empVal) : null;
+    const rng = (a, b) => (b == null ? { lo: a, hi: a, one: true } : { lo: Math.min(a, b), hi: Math.max(a, b), one: Math.min(a, b) === Math.max(a, b) });
+    const mfgR = rng(mfg, mfgNps);
+    const allR = rng(total, npsAll2);
     const short = (x) => { const m = String(x.addr).match(/([가-힣]+(?:구|군|시))\s+(?:[가-힣]+(?:읍|면|동)\s+)?([가-힣A-Za-z0-9]+(?:로|길)\s*\d+(?:-\d+)?)/); return m ? `${m[1]} ${m[2]}` : x.name; };
-    return { sites, total, gyTotal: insD.gyTotal, sjTotal: insD.sjTotal, mfg, mfgNames: mfgSites.map((x) => x.name), mfgSites: mfgSites.map((x) => ({ name: x.name, short: short(x), cnt: x.cnt, npsCnt: x.npsCnt })), mfgNps, mfgSiteN: mfgSites.length, matched: atS.length > 0,
+    return { sites, total, gyTotal: insD.gyTotal, sjTotal: insD.sjTotal, mfg, mfgR, allR, npsSplit: sites.some((x) => x.npsCnt != null && !x.npsUnsplit), mfgNames: mfgSites.map((x) => x.name), mfgSites: mfgSites.map((x) => ({ name: x.name, short: short(x), cnt: x.cnt, npsCnt: x.npsUnsplit ? null : x.npsCnt })), mfgNps, mfgSiteN: mfgSites.length, matched: atS.length > 0,
       other: other.reduce((a, x) => a + x.cnt, 0), otherInd: other.map((x) => (x.gy && x.gy.ind) || (x.sj && x.sj.ind)).filter(Boolean)[0] || null,
       noMfg: !mfgSites.length || sites.every((x) => !x.cosm), nps: empVal != null ? Number(empVal) : null, npsAddr: npsAddr || null, npsBasis };
   })() : null;
@@ -1227,46 +1239,28 @@ function assembleLiveReport(name, corp, res) {
   }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 
   const capacity = [
-    // ★ 재직자수 = 제조업 허가 제조소 주소에 있는 고용·산재보험 사업장의 상시근로자.
-    //   국민연금은 본점 일괄 신고·동명 회사·월별 중복 때문에 공장 인원으로 믿기 어렵다 → 아래 '참고'로 내린다.
+    // ★ 생산역량 칸에는 '제조소에 실제로 몇 명이 있나' 한 줄만 둔다.
+    //   전체 근로자 구성·사업장별 내역·인력 추이·공장등록 신고값은 아래 「인력 · 사업장 구성」 표로 옮겼다.
+    //   숫자가 하나로 떨어지지 않는 이유: 산재 상시(일용·단시간 포함, 대표·임원 제외)와
+    //   국민연금 가입자(월 60시간 이상, 대표·임원 포함)는 세는 사람이 달라 어느 쪽이든 더 클 수 있다.
     (() => {
       const W = workforce;
+      const key = '제조소 추정 근무 인원';
       if (W && W.mfgSiteN) {
-        const per = W.mfgSites.map((x) => `${x.short} ${x.cnt}명${x.npsCnt != null ? `(정규 ${x.npsCnt})` : ''}`).join(' · ');
-        return f('재직자수 (제조소 상시근로자)', `${W.mfg}명${W.mfgNps != null ? ` (정규 ${W.mfgNps}명)` : ''} · 제조소 ${W.mfgSiteN}곳${W.total !== W.mfg ? ` · 회사 전체 ${W.total}명` : ''}`,
-          W.matched ? 'A' : 'B', '근로복지공단 고용·산재보험', today,
-          `${per} — ${W.matched ? '제조업 허가 제조소와 같은 주소의 보험 사업장' : '화장품 제조 업종 보험 사업장(제조소 주소와는 대조 못 함)'} 상시근로자(산재보험 기준, 일용·단시간 포함 월평균). `
-          + `본사·물류·다른 업종 사업장은 뺐습니다.${empVal != null ? ' 정규·비정규 구성은 아래 「전체 근로자 현황」' : ''}`);
+        const R = W.mfgR;
+        const val = `${R.one ? `${R.lo}명` : `${R.lo}~${R.hi}명`} · 제조소 ${W.mfgSiteN}곳`;
+        const per = W.mfgSites.map((x) => `${x.short} ${x.cnt}명${x.npsCnt != null ? `(연금 ${x.npsCnt})` : ''}`).join(' · ');
+        return f(key, val, W.matched ? 'A' : 'B', '근로복지공단 고용·산재보험 + 국민연금', today,
+          `${per} — ${W.matched ? '제조업 허가 제조소와 같은 주소의 보험 사업장' : '화장품 제조 업종 보험 사업장(제조소 주소와는 대조 못 함)'}. `
+          + (R.one
+            ? (W.mfgR.lo === W.mfg && W.npsSplit ? '산재 상시와 국민연금 가입자가 같습니다.' : '산재보험 상시근로자 기준입니다 — 국민연금은 본점 일괄 신고라 제조소 몫을 가를 수 없습니다.')
+            : `산재 상시 ${W.mfg}명과 국민연금 가입자 중 작은 쪽~큰 쪽입니다 — 둘은 세는 사람이 달라(일용·단시간 / 대표·임원) 폭으로 봅니다.`)
+          + ` 본사·물류·다른 업종은 뺐습니다. 사업장별 내역은 아래 「인력 · 사업장 구성」`);
       }
-      if (W) return f('재직자수 (제조소 상시근로자)', `회사 전체 ${W.total}명 (제조 사업장 미확인)`, 'C', '근로복지공단 고용·산재보험', today,
-        '보험 업종에 화장품 제조 사업장이 없어 회사 전체 상시근로자를 적었습니다 — 직접 제조하는지, 위탁인지 방문 때 확인하세요');
-      return f('재직자수 (제조소 상시근로자)', empVal != null ? `${empVal}명 · 국민연금 참고값` : null, empVal != null ? 'C' : 'D', '국민연금 사업장 API', empVal != null ? today : null,
+      if (W) return f(key, `회사 전체 ${W.allR.one ? `${W.allR.lo}명` : `${W.allR.lo}~${W.allR.hi}명`} (제조 사업장 미확인)`, 'C', '근로복지공단 고용·산재보험', today,
+        '보험 업종에 화장품 제조 사업장이 없어 회사 전체 인원을 적었습니다 — 직접 제조하는지, 위탁인지 방문 때 확인하세요');
+      return f(key, empVal != null ? `${empVal}명 · 국민연금 참고값` : null, empVal != null ? 'C' : 'D', '국민연금 사업장 API', empVal != null ? today : null,
         empVal != null ? '고용·산재보험 자료가 없어 국민연금 가입자 수로 대신했습니다(본점 일괄 신고라 공장 인원과 다를 수 있음)' : why('insure', '고용·산재보험·국민연금 모두 인원 자료 없음'));
-    })(),
-    // ★ 전체 근로자 현황 — 정규(국민연금 가입자)와 상시(고용·산재보험)를 한 칸에서 같이 본다.
-    //   예전에는 '상시근로자'와 '국민연금 가입자'가 따로 떨어져 있어 숫자만 늘어 보이고,
-    //   둘의 차이(일용·단시간 인력)가 읽히지 않았다.
-    (() => {
-      const W = workforce;
-      const reg = empVal != null && npsBasis === 'confirmed' ? Number(empVal) : null;
-      if (!W) {
-        return f('전체 근로자 현황', reg != null ? `정규 ${reg}명 (국민연금 기준)` : null, reg != null ? 'C' : 'D', '국민연금 사업장 API', reg != null ? today : null,
-          reg != null ? '고용·산재보험 자료가 없어 국민연금 가입자(정규·상용)만 확인했습니다 — 일용·단시간 인력은 알 수 없습니다' : why('insure', '보험·국민연금 모두 인원 자료 없음'));
-      }
-      const irr = reg != null ? W.total - reg : null;
-      const val = `전체 ${W.total}명`
-        + (reg != null ? ` · 정규 ${reg}명 / 일용·단시간 ${irr > 0 ? `약 ${irr}명` : irr < 0 ? '—' : '없음'}` : ' · 정규 구분 자료 없음')
-        + ` · 사업장 ${W.sites.length}곳`;
-      return f('전체 근로자 현황', val, reg != null ? 'A' : 'B', '근로복지공단 고용·산재보험 + 국민연금', today,
-        `전체 ${W.total}명은 고용·산재보험 상시근로자(일용·단시간 포함 월평균, 고용 ${W.gyTotal ?? '—'} / 산재 ${W.sjTotal ?? '—'})입니다. `
-        + (reg != null
-          ? (irr > 0
-            ? `이 중 국민연금 가입자가 ${reg}명이므로 나머지 약 ${irr}명은 일용·단시간 등 연금 미가입 인력으로 보입니다 — 비고정 인력 비중 ${Math.round((irr / W.total) * 100)}%.`
-            : irr < 0
-              ? `국민연금 가입자(${reg}명)가 보험 상시인원보다 많습니다 — 대표·임원(보험 제외)이나 신고 시차 때문일 수 있습니다.`
-              : '국민연금 가입자 수와 같아 전원 상용 인력으로 보입니다.')
-          : '국민연금 쪽에서 이 회사 사업장을 특정하지 못해 정규/비정규를 나누지 못했습니다.')
-        + ' 사업장별 내역은 「인력 · 사업장 구성」');
     })(),
     // 지자체 공장정보에 실린 연락처 — 방문 약속을 잡을 유일한 공개 번호다
     // 연락처 — 공장등록 응답의 전화번호를 먼저 쓰고, 없을 때만 웹에서 긁은 값을 쓴다
@@ -1285,7 +1279,6 @@ function assembleLiveReport(name, corp, res) {
     siteField(R.site, R.bld, today),
     // 건평 — 방문 전 물류 동선을 가늠하는 유일한 공개 수치다(건축물대장 → 없으면 산단공 신고값)
     areaFieldFromBld(R.bld, fctFloor, fctRegDe, today),
-    f('공장 종업원수', fctEmpl != null && fctEmpl !== '' ? `${fctEmpl}명${fctRegDe ? ` (${fctRegDe} 등록)` : ''}` : null, fctEmpl ? 'A' : 'D', '산업단지공단 공장등록', fctEmpl ? (fctRegDe || today) : null, fctEmpl ? '공장등록증 신고값(등록·변경 시점 스냅샷 — 오래될 수 있음). 국민연금 재직자수와 대조용' : why('factory', '공장등록 없음')),
     f('사업장 주소 (연금기준)', npsAddr, 'B', '국민연금 사업장 API', npsAddr ? today : null, npsAddr ? '식약처 제조소 주소와 대조용' : why('nps', '국민연금 결과 없음')),
     (() => {
       if (!airInfo) return f('대기 배출시설 신고', null, 'D', '행정안전부 대기배출시설 인허가', null, why('air', '조회 결과 없음'));
@@ -1296,18 +1289,6 @@ function assembleLiveReport(name, corp, res) {
       return f('대기 배출시설 신고', val, c ? (c.isClosed ? 'C' : 'A') : 'B', '행정안전부 대기배출시설 인허가', today,
         c ? `제조소 주소에 대기오염물질 배출시설 설치 신고가 있습니다${c.permit ? `(인허가 ${c.permit})` : ''} — ${c.isClosed ? '지금 제조소의 배출시설이 폐업·휴업 상태입니다. 가동 여부를 확인하세요' : '보일러·유화·건조 등 생산 설비가 신고된 실제 공장이라는 근거'}. 자세한 내역은 「공장 면적」 탭`
           : '배출시설 신고가 없는 것은 결격이 아닙니다 — 소규모 시설은 신고 대상이 아닐 수 있습니다');
-    })(),
-    // 인력 추이 — 국민연금은 같은 사업장을 월마다 주므로 최근 12개월 가입자 변화를 그대로 그릴 수 있다
-    (() => {
-      const tr = npsData && Array.isArray(npsData.trend) ? npsData.trend : [];
-      const ok = tr.length >= 2 && npsBasis !== 'ambiguous';
-      const f0 = ok ? tr[0] : null, f1 = ok ? tr[tr.length - 1] : null;
-      const ym = (v) => String(v || '').replace(/^(\d{4})(\d{2}).*$/, '$1.$2');
-      const d = ok ? f1.cnt - f0.cnt : 0;
-      return f('인력 추이 (국민연금 월별)', ok ? `${f0.cnt}명 → ${f1.cnt}명 (${ym(f0.ym)}~${ym(f1.ym)}, ${d > 0 ? '+' : ''}${d}명)` : null,
-        ok ? 'B' : 'D', '국민연금 사업장 API', ok ? ym(f1.ym).replace('.', '-') : null,
-        ok ? `${tr.map((t) => `${ym(t.ym).slice(2)} ${t.cnt}`).join(' · ')} — ${Math.abs(d) <= Math.max(1, f0.cnt * 0.1) ? '안정' : d > 0 ? '증원 추세' : '감소 추세 — 사유 확인 권장'}. 사업장: ${npsData.trendSite || ''}`
-          : why('nps', npsBasis === 'ambiguous' ? '사업장을 특정하지 못해 추이를 쓰지 않음' : '월별 자료 부족'));
     })(),
     // 추정 인건비(연금 고지액 ÷ 9%)는 뺐다 — 기준소득월액 상·하한 때문에 신뢰도가 낮고 방문 판단에 쓰이지 않았다(사용자 요청)
     (() => {
@@ -1730,6 +1711,12 @@ function assembleLiveReport(name, corp, res) {
       site: R.site && R.site.ok ? R.site.data : null,          // 실제 공장 소재지 선정 결과(후보·근거)
       mfds_sites: nedSites.length ? nedSites : null,            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
       workforce,                                                // 고용·산재보험 사업장별 인원·역할
+      // 인력 표에 함께 싣는 참고값 — 국민연금 월별 추이, 공장등록 신고 종업원수
+      manpower: {
+        nps: empVal != null ? Number(empVal) : null, npsBasis, npsWhy, npsSiteN: npsAll.length, npsAddr: npsAddr || null, npsYm,
+        trend: (npsData && npsData.trend) || null, trendSite: (npsData && npsData.trendSite) || null,
+        fctEmpl: fctEmpl != null && fctEmpl !== '' ? Number(fctEmpl) : null, fctRegDe: fctRegDe || null,
+      },
       air: airInfo,                                             // 대기배출시설 신고(제조소 주소 대조)
       max_age_years: 5, live: true, src_status, factory_homepage: fctHmpadr || null,
       no_corp: !hasCorp, // 금융위 법인 미검색(개인사업자·법인명 불일치) → 상호명 기반 조회 안내용

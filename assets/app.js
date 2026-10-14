@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 194;
+const BUILD = 195;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3653,61 +3653,109 @@ function block(title, icon, fields, cat) {
 // 사업장마다 화장품 제조·본사·물류·다른 업종을 갈라 '실제로 만드는 인원'을 보여 준다.
 const WF_ROLE = { mfg: ['t-fac', '화장품 제조'], 'mfg-odd': ['t-oth', '제조소 주소 · 업종 상이'], logi: ['t-log', '물류'], office: ['t-hq', '본사·사무'], other: ['t-oth', '다른 업종'], cosm: ['t-fac', '화장품 업종'] };
 function workforceBlock(report) {
-  const W = report.meta && report.meta.workforce;
-  if (!W || !W.sites || !W.sites.length) return null;
+  const M = report.meta || {};
+  const W = M.workforce, MP = M.manpower || {};
+  const hasSites = !!(W && W.sites && W.sites.length);
+  if (!hasSites && !(MP.nps != null || MP.fctEmpl != null || (MP.trend && MP.trend.length))) return null;
   const b = el('div', 'block full cat-prod wf');
   const n = (v) => (v == null ? '—' : Number(v).toLocaleString());
+  const rng = (R) => (!R ? '—' : R.one ? `${n(R.lo)}명` : `${n(R.lo)}~${n(R.hi)}명`);
   const bz = ((report.basic || []).find((x) => x.key === '사업자등록번호') || {}).value || '';
-  const chip = (k, v, sub, t) => `<div class="vch vch-${t || 'num'}"><i>${esc(k)}</i><b>${esc(v)}${sub ? `<small>${esc(sub)}</small>` : ''}</b></div>`;
-  const mfgSub = W.mfgSiteN ? (W.mfgSiteN === 1 ? W.mfgNames[0] : `${W.mfgSiteN}곳 합계`) : '보험 업종 기준';
-  // 전체(상시) · 정규(국민연금) · 그 차이(일용·단시간)를 한 줄에 세운다 — 숫자 하나만으로는 인력 구성이 안 보인다
-  const reg = W.npsBasis === 'confirmed' && W.nps != null ? W.nps : null;
-  const irr = reg != null ? W.total - reg : null;
-  let h = `<h3>인력 · 사업장 구성<span class="cnt">고용·산재보험 · 보험 사업장 ${W.sites.length}곳${bz ? ` · ${esc(bz)}` : ''}</span></h3>`;
-  h += '<div class="vd-chips wf-chips">'
-    + chip('화장품 제조 사업장 인원', W.mfgSiteN ? `${n(W.mfg)}명` : '없음', W.mfgSiteN && W.mfgNps != null ? `정규 ${n(W.mfgNps)}명 · ${mfgSub}` : mfgSub, W.mfgSiteN ? 'num' : 'bad')
-    + chip('전체 근로자 (상시)', `${n(W.total)}명`, `고용 ${n(W.gyTotal)} · 산재 ${n(W.sjTotal)} · 사업장 ${W.sites.length}곳`)
-    + chip('그중 정규 (국민연금)', reg != null ? `${n(reg)}명` : '미확인', reg != null ? (W.npsAddr ? `${String(W.npsAddr).split(' ').slice(0, 2).join(' ')} 등 신고` : '') : (W.nps != null ? '이 회사 사업장인지 불확실' : '연금 자료 없음'), reg != null ? 'num' : 'na')
-    + chip('일용·단시간 추정', irr == null ? '—' : irr > 0 ? `약 ${n(irr)}명` : '없음', irr == null ? '정규 구분 불가' : irr > 0 ? `전체의 ${Math.round((irr / W.total) * 100)}%` : '전원 상용', irr != null && irr > 0 ? 'warn' : 'na')
-    + (W.other ? chip('다른 업종 사업장', `${n(W.other)}명`, W.otherInd || '', 'bad') : '')
-    + '</div>';
-  h += '<div class="xt-wrap"><table class="xt"><thead><tr><th>보험 사업장</th><th class="hide-m">주소</th><th>업종 (고용 / 산재)</th><th class="n">고용 상시</th><th class="n">산재 상시</th><th class="n">정규 <small>국민연금</small></th><th class="hide-m">성립</th></tr></thead><tbody>'
-    + W.sites.map((x) => {
-      const [cls, lab] = WF_ROLE[x.role] || ['', ''];
-      const gi = x.gy && x.gy.ind, si = x.sj && x.sj.ind;
-      return `<tr class="${x.atSite ? 'main' : ''}"><td>${x.atSite ? `<b>${esc(x.name)}</b>` : esc(x.name)}<br><span class="xtag ${cls}">${esc(lab)}</span>${x.atSite ? '<span class="xtag t-ok">제조소와 같은 주소 ✓</span>' : ''}</td>`
-        + `<td class="hide-m">${esc(x.addr)}</td><td>${esc(gi || si || '—')}${gi && si && gi !== si ? `<small>${esc(si)}</small>` : ''}</td>`
-        + `<td class="n">${x.gy ? n(x.gy.cnt) : '—'}</td><td class="n">${x.sj ? (x.atSite ? `<b>${n(x.sj.cnt)}</b>` : n(x.sj.cnt)) : '—'}</td>`
-        // 국민연금을 본점 한 곳에 몰아 신고하는 회사가 많다 — 그 사업장 상시인원보다 크면 그대로 믿으면 안 된다
-        + `<td class="n"${x.npsCnt != null && x.npsCnt > x.cnt ? ' title="이 사업장 상시근로자보다 많습니다 — 본점에 전사 일괄 신고한 것으로 보입니다"' : ''}>`
-        + `${x.npsCnt != null ? n(x.npsCnt) + (x.npsCnt > x.cnt ? '<small>전사 일괄 신고</small>' : '') : '—'}</td>`
-        + `<td class="hide-m">${esc(x.est || '—')}</td></tr>`;
-    }).join('') + '</tbody></table></div>';
-  // 해설 — 숫자만 놓으면 왜 다른지 읽는 사람이 계산해야 한다
+  let h = `<h3>인력 · 사업장 구성<span class="cnt">고용·산재보험 + 국민연금${hasSites ? ` · 보험 사업장 ${W.sites.length}곳` : ''}${bz ? ` · ${esc(bz)}` : ''}</span></h3>`;
+  h += '<div class="wf-in">';
+
+  // ── ① 요약 한 줄 — 방문해서 만날 인원이 몇 명인지 ──
+  // 숫자를 하나로 못 박지 않는다. 산재 상시와 국민연금 가입자는 세는 사람이 달라 어느 쪽이든 더 클 수 있다.
+  if (hasSites) {
+    const R = W.mfgSiteN ? W.mfgR : W.allR;
+    const lab = W.mfgSiteN ? `제조소 추정 근무 인원 <small>제조소 ${W.mfgSiteN}곳</small>` : '추정 근무 인원 <small>제조 사업장 미확인 — 회사 전체</small>';
+    const why = R.one
+      ? (W.npsSplit ? '산재 상시와 국민연금 가입자가 같습니다' : '산재보험 상시근로자 기준 — 국민연금은 사업장 미분류')
+      : `산재 상시 ${n(W.mfgSiteN ? W.mfg : W.total)}명 ↔ 국민연금 가입자 ${n(W.mfgSiteN ? (W.mfgR.lo === W.mfg ? W.mfgR.hi : W.mfgR.lo) : MP.nps)}명 — 작은 쪽~큰 쪽`;
+    h += `<div class="wf-lead"><div class="wf-lead-m"><i>${lab}</i><b>${rng(R)}</b><span>${esc(why)}</span></div>`
+      + (W.mfgSiteN && W.total !== W.mfg ? `<div class="wf-lead-s"><i>회사 전체</i><b>${rng(W.allR)}</b><span>보험 사업장 ${W.sites.length}곳 합계</span></div>` : '')
+      + '</div>';
+  }
+
+  // ── ② 사업장별 표 ──
+  if (hasSites) {
+    const cell = (x) => {
+      // 한 사업장의 추정 근무도 폭이다. 연금이 본점 일괄이면 그 사업장 몫을 가를 수 없어 산재값만 쓴다.
+      if (x.npsCnt == null || x.npsUnsplit) return `<b>${n(x.cnt)}</b>`;
+      return x.npsCnt === x.cnt ? `<b>${n(x.cnt)}</b>` : `<b>${n(Math.min(x.cnt, x.npsCnt))}~${n(Math.max(x.cnt, x.npsCnt))}</b>`;
+    };
+    h += '<div class="xt-wrap"><table class="xt wf-t"><thead><tr><th>보험 사업장</th><th class="hide-m">주소</th><th class="hide-m">업종 (고용 / 산재)</th>'
+      + '<th class="n hide-m">고용</th><th class="n">산재</th><th class="n">연금</th><th class="n">추정<small>근무</small></th><th class="hide-m">성립</th></tr></thead><tbody>'
+      + W.sites.map((x) => {
+        const [cls, lab] = WF_ROLE[x.role] || ['', ''];
+        const gi = x.gy && x.gy.ind, si = x.sj && x.sj.ind;
+        return `<tr class="${x.atSite ? 'main' : ''}"><td>${x.atSite ? `<b>${esc(x.name)}</b>` : esc(x.name)}<br><span class="xtag ${cls}">${esc(lab)}</span>${x.atSite ? '<span class="xtag t-ok">제조소와 같은 주소 ✓</span>' : ''}</td>`
+          + `<td class="hide-m">${esc(x.addr)}</td><td class="hide-m">${esc(gi || si || '—')}${gi && si && gi !== si ? `<small>${esc(si)}</small>` : ''}</td>`
+          + `<td class="n hide-m">${x.gy ? n(x.gy.cnt) : '—'}</td><td class="n">${x.sj ? n(x.sj.cnt) : '—'}</td>`
+          // 본점에 전사를 몰아 신고한 값은 숫자를 적되 이 사업장 몫이 아님을 밝힌다
+          + `<td class="n"${x.npsUnsplit ? ' title="이 사업장 상시근로자보다 많습니다 — 본점에 전사를 몰아 신고한 값입니다"' : ''}>`
+          + `${x.npsCnt != null ? n(x.npsCnt) + (x.npsUnsplit ? '<small>사업장 미분류</small>' : '') : '—'}</td>`
+          + `<td class="n wf-est">${cell(x)}</td><td class="hide-m">${esc(x.est || '—')}</td></tr>`;
+      }).join('')
+      + `<tr class="wf-sum"><td>합계</td><td class="hide-m"></td><td class="hide-m"></td><td class="n hide-m">${n(W.gyTotal)}</td><td class="n">${n(W.sjTotal)}</td>`
+      + `<td class="n">${MP.nps != null ? n(MP.nps) + (W.npsSplit ? '' : '<small>사업장 미분류</small>') : '—'}</td>`
+      + `<td class="n wf-est"><b>${rng(W.allR)}</b></td><td class="hide-m"></td></tr>`
+      + '</tbody></table></div>';
+  }
+
+  // ── ③ 표 아래 해석 ──
   const ins = [];
-  if (W.mfgSiteN) {
-    const share = W.total ? Math.round((W.mfg / W.total) * 100) : null;
-    ins.push(['good', `실제 화장품을 만드는 인원은 <b>${esc(W.mfgNames.join(' · '))} ${n(W.mfg)}명</b>입니다${share != null && share < 100 ? ` — 회사 전체 ${n(W.total)}명 중 ${share}%` : ''}.`
-      + (W.matched ? ' 의약품안전나라 제조소 주소에 보험 사업장이 실제로 있어 공장이 가동 중이라는 근거가 됩니다.' : ' (보험 사업장 주소가 제조소 주소와 정확히 맞지는 않아 업종으로 골랐습니다)')]);
-  } else {
-    ins.push(['warn', '보험 업종에 <b>화장품 제조 사업장이 없습니다</b> — 제조를 직접 하는지, 위탁·소분만 하는지 방문 때 확인하세요.']);
+  if (hasSites) {
+    if (W.mfgSiteN) {
+      const share = W.total ? Math.round((W.mfg / W.total) * 100) : null;
+      ins.push(['good', `실제 화장품을 만드는 인원은 <b>${esc(W.mfgNames.join(' · '))} ${rng(W.mfgR)}</b>입니다${share != null && share < 100 ? ` — 회사 전체 ${n(W.total)}명 중 ${share}%` : ''}.`
+        + (W.matched ? ' 의약품안전나라 제조소 주소에 보험 사업장이 실제로 있어 공장이 가동 중이라는 근거가 됩니다.' : ' (보험 사업장 주소가 제조소 주소와 정확히 맞지는 않아 업종으로 골랐습니다)')]);
+    } else {
+      ins.push(['warn', '보험 업종에 <b>화장품 제조 사업장이 없습니다</b> — 제조를 직접 하는지, 위탁·소분만 하는지 방문 때 확인하세요.']);
+    }
+    if (W.other) ins.push(['warn', `같은 법인에 <b>다른 업종 사업장(${n(W.other)}명${W.otherInd ? ` · ${esc(W.otherInd)}` : ''})</b>이 있습니다. 방문 대상인지 확인하세요.`]);
+    if (MP.nps != null && !W.npsSplit) {
+      ins.push(['', `국민연금 ${n(MP.nps)}명은 <b>본점에 전사를 몰아 신고</b>한 값이라 사업장별로 쪼갤 수 없습니다 — 표에는 적되 추정 근무에는 사업장 단위로 반영하지 않았습니다.`]);
+    } else if (MP.nps != null && W.total) {
+      const d = W.total - MP.nps;
+      ins.push(['', d > 0
+        ? `전체 ${n(W.total)}명 중 국민연금 가입자는 ${n(MP.nps)}명입니다 — 나머지 <b>약 ${n(d)}명(${Math.round((d / W.total) * 100)}%)</b>은 일용·단시간 등 비고정 인력으로 보입니다.`
+        : d < 0
+          ? `국민연금 가입자(${n(MP.nps)}명)가 보험 상시근로자(${n(W.total)}명)보다 많습니다 — 대표·임원은 보험 상시인원에서 빠지고, 퇴사 반영 시차도 있습니다. 이때는 연금 쪽이 실제에 가깝습니다.`
+          : `국민연금 가입자와 보험 상시근로자가 ${n(MP.nps)}명으로 같습니다 — 전원 상용 인력입니다.`]);
+    }
+  } else if (MP.nps != null) {
+    ins.push(['', `고용·산재보험 가입 사업장을 찾지 못해 <b>국민연금 가입자 ${n(MP.nps)}명</b>만 확인했습니다 — 일용·단시간 인력은 알 수 없습니다.`]);
   }
-  if (W.other) ins.push(['warn', `같은 법인에 <b>다른 업종 사업장(${n(W.other)}명${W.otherInd ? ` · ${esc(W.otherInd)}` : ''})</b>이 있습니다. 방문 대상인지 확인하세요.`]);
-  if (irr != null) {
-    ins.push(['', irr > 0
-      ? `전체 ${n(W.total)}명 중 국민연금 가입자는 ${n(reg)}명입니다 — 나머지 <b>약 ${n(irr)}명(${Math.round((irr / W.total) * 100)}%)</b>은 일용·단시간 등 비고정 인력으로 보입니다. 성수기 물량을 일용직으로 메우는지 확인하세요.`
-      : irr < 0
-        ? `국민연금 가입자(${n(reg)}명)가 보험 상시근로자(${n(W.total)}명)보다 많습니다 — 대표·임원은 보험 상시인원에서 빠지고, 퇴사 반영 시차도 있습니다.`
-        : `전원이 국민연금 가입자(${n(reg)}명)입니다 — 일용·단시간 없이 상용 인력으로 운영됩니다.`]);
-  } else if (W.nps != null) {
-    ins.push(['', `국민연금 쪽에서 이 회사 사업장을 특정하지 못해 정규·비정규를 나누지 못했습니다(동명 사업장 ${n(W.nps)}명은 참고만).`]);
+  if (ins.length) h += '<ul class="xins">' + ins.map(([c, t]) => `<li class="${c}">${t}</li>`).join('') + '</ul>';
+
+  // ── ④ 참고줄 — 월별 추이와 공장등록 신고값 ──
+  const refs = [];
+  const tr = MP.trend || [];
+  if (tr.length >= 2 && MP.npsBasis !== 'ambiguous') {
+    const ym = (v) => String(v || '').replace(/^(\d{4})(\d{2}).*$/, '$1.$2');
+    const f0 = tr[0], f1 = tr[tr.length - 1], d = f1.cnt - f0.cnt;
+    // 0부터 재면 22~27명 같은 변화가 모두 꽉 찬 막대로 보인다 — 최솟값 언저리를 바닥으로 잡는다
+    const hi = Math.max(...tr.map((t) => t.cnt)), lo = Math.min(...tr.map((t) => t.cnt));
+    const span = Math.max(1, hi - lo);
+    const bars = tr.map((t) => `<i style="height:${Math.round(18 + ((t.cnt - lo) / span) * 82)}%" title="${esc(ym(t.ym))} ${t.cnt}명"></i>`).join('');
+    refs.push(`<div class="wf-ref"><i>인력 추이</i><span><b>${f0.cnt}명 → ${f1.cnt}명</b> (${ym(f0.ym)}~${ym(f1.ym)}, ${d > 0 ? '+' : ''}${d}명 · ${Math.abs(d) <= Math.max(1, f0.cnt * 0.1) ? '안정' : d > 0 ? '증원 추세' : '감소 추세 — 사유 확인 권장'})`
+      + `<em>국민연금 월별 · ${esc(MP.trendSite || '')}</em></span><div class="wf-spark">${bars}</div></div>`);
   }
-  const gyL = W.sites.find((x) => x.gy && x.sj && x.gy.cnt && x.sj.cnt && Math.abs(x.gy.cnt - x.sj.cnt) >= Math.max(3, x.gy.cnt * 0.3));
-  if (gyL) ins.push(['', `${esc(gyL.name)}의 고용보험 ${n(gyL.gy.cnt)}명 · 산재보험 ${n(gyL.sj.cnt)}명처럼 두 보험 인원이 다르면, 한쪽에 본사 일괄 신고나 일용·단시간 인력이 몰려 있을 수 있습니다. 공장 인원은 산재보험 쪽이 정확합니다.`]);
-  h += '<ul class="xins">' + ins.map(([c, t]) => `<li class="${c}">${t}</li>`).join('') + '</ul>';
-  h += '<p class="xfoot">출처: 근로복지공단 고용·산재보험 가입 사업장(사업자번호 조회). <b>상시근로자</b>는 보험 신고 기준 월평균 근로자 수로 일용·단시간 근로자도 들어갑니다. '
-    + '<b>국민연금 가입자</b>는 월 60시간 이상 일하는 가입자(대표 포함)로 사실상 정규·상용 인력이라, 둘의 차이를 일용·단시간 인력으로 봅니다. 사업장 역할은 보험 업종과 제조소 주소로 자동 분류합니다.</p>';
-  b.innerHTML = `${h.slice(0, h.indexOf('</h3>') + 5)}<div class="wf-in">${h.slice(h.indexOf('</h3>') + 5)}</div>`;
+  if (MP.fctEmpl != null) {
+    const y = Number(String(MP.fctRegDe || '').slice(0, 4));
+    const age = isFinite(y) && y ? new Date().getFullYear() - y : null;
+    refs.push(`<div class="wf-ref"><i>공장등록 신고</i><span><b>${n(MP.fctEmpl)}명</b>${MP.fctRegDe ? ` (${esc(MP.fctRegDe)} 등록)` : ''}`
+      + `<em>산단공 공장등록증 신고값 — 등록·변경 시점의 스냅샷입니다${age != null && age >= 3 ? `. ${age}년 전 값이라 현재와 다를 수 있습니다` : ''}</em></span></div>`);
+  }
+  if (refs.length) h += `<div class="wf-refs">${refs.join('')}</div>`;
+
+  h += '<p class="xfoot"><b>추정 근무 인원</b>은 산재보험 상시근로자와 국민연금 가입자 중 작은 쪽~큰 쪽입니다. '
+    + '<b>상시근로자</b>는 보험 신고 기준 월평균 근로자 수로 일용·단시간을 포함하고 대표·임원은 빠집니다. '
+    + '<b>국민연금 가입자</b>는 월 60시간 이상 일하는 가입자로 대표·임원을 포함하고 단기 일용은 빠집니다 — 그래서 어느 쪽이든 더 클 수 있어 하나로 못 박지 않습니다. '
+    + '사업장 역할은 보험 업종과 제조소 주소로 자동 분류합니다.</p>';
+  h += '</div>';
+  b.innerHTML = h;
   return b;
 }
 
@@ -4602,7 +4650,7 @@ function renderVerdict(report) {
   const maker = bv('제조업 등록'), bstt = String(bv('사업자 상태') || ''), fct = bv('공장/제조소 소재지');
   const cgmp = cv('CGMP 적합업소');
   // 재직자수는 제조소 상시근로자(고용·산재보험)가 기준, 예전 리포트는 국민연금 값
-  const empRaw = cv('재직자수 (제조소 상시근로자)') || cv('국민연금 가입자 (참고)') || cv('재직자수 (국민연금 가입자)');
+  const empRaw = cv('제조소 추정 근무 인원') || cv('재직자수 (제조소 상시근로자)') || cv('재직자수 (국민연금 가입자)');
   // '14명 · 2025.10 기준' 에서 숫자를 다 긁으면 기준일까지 붙어 14202510 이 된다.
   // 맨 앞 숫자만 읽는다.
   const empN = (() => {
@@ -4633,7 +4681,7 @@ function renderVerdict(report) {
     // 5명 이하면 생산 물량·교대 운영을 감당할 수 있는지부터 확인해야 한다.
     ['재직자수', empRaw ? String(empRaw).replace(/\s*·.*$/, '') : '미확인',
       empN == null ? 'na' : (empN <= 5 ? 'warn' : 'num'),
-      cv('재직자수 (제조소 상시근로자)') ? (/제조 사업장 미확인|국민연금/.test(empRaw) ? '참고값' : '제조소 상시') : (empRaw ? '국민연금(참고)' : '')],
+      cv('제조소 추정 근무 인원') ? (/제조 사업장 미확인|국민연금/.test(empRaw) ? '참고값' : '보험+연금 추정') : (empRaw ? '국민연금(참고)' : '')],
     ['설립', String(bv('설립일 / 등록일') || '').slice(0, 4) || '미확인', bv('설립일 / 등록일') ? 'num' : 'na'],
     ['매출', revF ? revF.value + (revF.grade === 'C' ? '*' : '') : '미확인',
       revEok == null || !isFinite(revEok) ? 'na' : (revEok <= 0 ? 'bad' : 'num')],
