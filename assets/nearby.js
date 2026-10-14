@@ -4,7 +4,7 @@
 //
 // 화면 — 시안 A(지도 중심)와 B(리스트·동선)를 합친다
 //   머리줄: 조회 업체명 (기준 주소) · [주소 수정] — 기준이 틀렸으면 고쳐서 다시 찾는다
-//   지도(A): 기점 ◆, 반경 링, 제조업 허가 ● / CGMP 적합 ●, 선택 업체 카드(상세 주소·차량 이동시간)
+//   지도(A): 기점 ◆, 반경 링, 제조업 허가 ● / CGMP 적합 ●, 선택 업체 카드(주소·차량 이동시간)
 //   목록(B): 전체 · CGMP 적합 · 위치 미확인 탭, 지역 단계별 묶음, 펼치면 동선 담기·사전검증 리포트
 //
 // ── 어떻게 찾나 ──
@@ -506,12 +506,6 @@ function nbGeoText(v) {
 }
 // 이동 — 실측이 있으면 실측, 없으면 추정
 const NB_SAME_KM = 0.15;   // 이보다 가까우면 기점과 같은 부지로 본다
-function nbDriveText(v) {
-  if (!nbPlaced(v)) return '';
-  if (v.km < NB_SAME_KM) return '기점과 같은 위치';
-  if (v.drive && v.drive.min != null) return `차량 ${nbFmtMin(v.drive.min)} · 도로 ${nbFmtKm(v.drive.km)}km`;
-  return `차량 약 ${nbFmtMin(nbEstMin(v.km))}`;
-}
 function nbKakaoRoute(st, stops) {
   const pt = (n, lat, lng) => `${encodeURIComponent(String(n).replace(/[,/]/g, ' '))},${lat},${lng}`;
   return 'https://map.kakao.com/link/by/car/'
@@ -564,62 +558,47 @@ function nbHeadHtml(st) {
     + `</div><small class="nb-osub">이 주소 기준 · 식약처 화장품 제조업 허가 업체</small>`;
 }
 
-function nbSheetHtml(st) {
-  const vis = nbVisible(st);
-  let h = '';
-  const s = st.items.find((v) => v.id === st.sel);
-  if (!s || !vis.includes(s)) return `<div class="nb-empty">${vis.length ? '지도나 오른쪽 목록에서 업체를 고르면 여기에 상세가 보입니다.' : '이 반경 안에서 찾은 업체가 없습니다. 반경을 넓혀 보세요.'}</div>`;
-  const tel = s.phone ? `<a href="tel:${esc(s.phone.replace(/[^\d+]/g, ''))}">${esc(s.phone)}</a>` : '—';
+// 고른 업체의 실행 버튼 — 동선·길찾기·카카오맵·리포트. 목록 줄 안(업체명 아래)에서 펼친다.
+// 예전에는 지도·목록 아래에 상세 칸이 따로 있었는데, 업체명 옆 CGMP 배지와 같은 말을 되풀이하고
+// 고를 때마다 시선이 화면 아래로 내려가야 했다. 쓰는 건 결국 이 버튼 네 개였다.
+function nbActsHtml(st, s) {
   const pl = nbPlaced(s);
   const mapUrl = s.url || (pl
     ? `https://map.kakao.com/link/map/${encodeURIComponent(s.name.replace(/[,/]/g, ' '))},${s.lat},${s.lng}`
     : `https://map.kakao.com/link/search/${encodeURIComponent(s.addr || s.name)}`);
-  const mapAddrRow = s.mapAddr && s.mapAddr.replace(/\s/g, '') !== String(s.addr || '').replace(/\s/g, '')
-    ? `지도 위치 ${esc(s.mapAddr)}` : '';
-  const pdate = String(s.pdate || '').replace(/\D/g, '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') || '';
-  const chip = (k, v, t, sub) => `<div class="vch vch-${t || 'num'}"><i>${esc(k)}</i><b>${v}${sub ? `<small>${sub}</small>` : ''}</b></div>`;
-  // 사전검증 리포트 요약처럼 '카테고리 칸'에 값을 넣는다 — 거리는 이동 칸에 함께 적고,
-  // 위치 근거는 글이 길어 칸을 넘치므로 칸 줄 아래 한 줄로 뺀다.
-  const km = pl ? `${nbFmtKm(s.km)}km` : '';
-  const moveMain = pl ? (s.km < NB_SAME_KM ? '같은 위치' : `${km} · ${s.drive && s.drive.min != null ? `차량 ${nbFmtMin(s.drive.min)}` : `약 ${nbFmtMin(nbEstMin(s.km))}`}`) : '거리 미확인';
-  const moveSub = pl ? (s.km < NB_SAME_KM ? '기점과 같은 부지·건물' : (s.drive && s.drive.min != null ? `도로 ${nbFmtKm(s.drive.km)}km · 카카오내비 실측` : (s.driveP ? '직선거리 · 실측 확인 중…' : '직선거리 · 차량시간 추정'))) : '';
-  const acts = `<div class="nb-selacts">`
+  return `<div class="nb-selacts">`
     + (pl ? `<button type="button" class="nb-btn sm${st.route.includes(s.id) ? '' : ' blue'}" data-act="route" data-id="${esc(s.id)}">${st.route.includes(s.id) ? '동선에서 빼기' : '동선에 추가'}</button>`
       : `<button type="button" class="nb-btn sm" disabled title="위치가 번지까지 확인되지 않아 동선에 넣지 않습니다">동선에 추가 불가</button>`)
     + (pl ? `<a class="nb-btn sm" href="${esc(nbKakaoRoute(st, [s]))}" target="_blank" rel="noopener">길찾기</a>`
       : `<button type="button" class="nb-btn sm" disabled title="위치가 번지까지 확인되지 않았습니다">길찾기</button>`)
     + `<a class="nb-btn sm" href="${esc(mapUrl)}" target="_blank" rel="noopener">카카오맵</a>`
-    + `<button type="button" class="nb-btn sm dark" data-act="report" data-id="${esc(s.id)}">사전검증 리포트</button></div>`;
-  h += `<div class="nb-selmain"><div class="nb-selhead">`
-    + `<div class="nb-selname"><b>${esc(s.name)}</b><span class="nb-badge reg">제조업 허가</span>${s.cgmp ? '<span class="nb-badge gmp">CGMP</span>' : ''}`
-    + `<span class="nb-seladdr">${esc(s.addr || '')}</span></div>${acts}</div>`
-    + '<div class="vd-chips nb-chips">'
-    + chip('이동', esc(moveMain), pl ? 'num' : 'na', esc(moveSub))
-    + chip('CGMP', s.cgmp ? '적합' : (st.gmp ? '미등재' : '확인 불가'), s.cgmp ? 'good' : 'na')
-    + chip('허가', s.lcns ? esc(s.lcns) : (pdate || '명단 등재'), 'num', s.lcns ? '식약처 화장품제조업' : (pdate ? '허가일 · 식약처' : '식약처 제조업 명단'))
-    + (s.rep ? chip('대표자', esc(s.rep), 'num') : '')
-    + chip('전화', tel, s.phone ? 'num' : 'na')
-    + chip('지역', esc(nbTierLabel(st, s.tier)), 'num')
-    + '</div>'
-    + `<div class="nb-selgeo${pl ? '' : ' unk'}"><i>위치 근거</i>${esc(nbGeoText(s))}${mapAddrRow ? ` · ${mapAddrRow}` : ''}</div>`
+    + `<button type="button" class="nb-btn sm dark" data-act="report" data-id="${esc(s.id)}">사전검증 리포트</button>`
+    + (pl ? '' : `<span class="nb-actwhy">${esc(nbGeoText(s))}</span>`)
     + `</div>`;
-  return h;
 }
 
 function nbRowHtml(st, v) {
   const open = st.sel === v.id, inRoute = st.route.includes(v.id), pl = nbPlaced(v);
+  // 거리와 차량 시간은 방문 일정을 짜는 기준이라 줄에서 바로 보여야 한다(실측이 오면 실측으로 바뀐다)
   const dist = pl ? `<b>${nbFmtKm(v.km)}</b><i>km</i>` : `<b class="nb-dq">—</b><i>${v.geo === 'pending' ? '확인 전' : '미확인'}</i>`;
+  const drive = pl && v.km >= NB_SAME_KM
+    ? (v.drive && v.drive.min != null ? `차량 ${nbFmtMin(v.drive.min)}` : `차량 약 ${nbFmtMin(nbEstMin(v.km))}`)
+    : (pl ? '기점과 같은 위치' : '');
+  const driveSub = pl && v.km >= NB_SAME_KM
+    ? (v.drive && v.drive.min != null ? `도로 ${nbFmtKm(v.drive.km)}km · 실측` : (v.driveP ? '추정 · 실측 확인 중' : '추정'))
+    : '';
   return `<div class="nb-row${open ? ' open' : ''}${st.sel === v.id ? ' sel' : ''}${pl ? '' : ' unplaced'}" data-row="${esc(v.id)}">`
     + `<button type="button" class="nb-rowbtn" data-act="pick" data-id="${esc(v.id)}" aria-expanded="${open}">`
     + `<span class="nb-d">${dist}</span>`
     + `<span class="nb-main"><span class="nb-nm"><span class="nb-mark ${nbCls(v)}"></span>${esc(v.name)}</span>`
     + `<span class="nb-sub">${esc(v.addr || nbRegionText(v.parts))}</span>`
-    + (pl ? `<span class="nb-time">${esc(nbDriveText(v))}</span>` : '')
+    + (drive ? `<span class="nb-time">${esc(drive)}${driveSub ? `<em>${esc(driveSub)}</em>` : ''}</span>` : '')
     + `</span>`
     + (v.cgmp ? '<span class="nb-chip">CGMP</span>' : '')
     + (inRoute ? '<span class="nb-inroute" title="동선에 담음">동선</span>' : '')
     + `</button>`
-    // 상세는 오른쪽 칸 한 곳에서만 보인다 — 줄 아래 펼침은 없앴다(같은 내용이 두 번 보였다)
+    // 고른 줄에서만 실행 버튼을 편다 — 버튼은 중첩될 수 없어 줄 버튼 바깥(형제)에 둔다
+    + (open ? nbActsHtml(st, v) : '')
     + `</div>`;
 }
 
@@ -647,7 +626,7 @@ function nbListHtml(st) {
   }
   const r = nbRouteOrder(st);
   const foot = `<div class="nb-route"><div><small>오늘 동선</small><b>기점 포함 ${r.stops.length + 1}곳</b>`
-    + (r.stops.length ? `<small>직선 합계 약 ${Math.round(r.km)}km · 차량 약 ${nbFmtMin(r.min)}(추정) · ${esc(r.stops.map((s) => s.name).join(' → '))}</small>` : '<small>업체를 고른 뒤 아래 상세에서 동선에 추가하세요 (위치가 확인된 곳만)</small>')
+    + (r.stops.length ? `<small>직선 합계 약 ${Math.round(r.km)}km · 차량 약 ${nbFmtMin(r.min)}(추정) · ${esc(r.stops.map((s) => s.name).join(' → '))}</small>` : '<small>목록에서 업체를 누르면 나오는 「동선에 추가」로 담으세요 (위치가 확인된 곳만)</small>')
     + `</div>`
     + (r.stops.length ? `<button type="button" class="nb-btn" data-act="clear">비우기</button>`
       + `<a class="nb-btn dark" href="${esc(nbKakaoRoute(st, r.stops.slice(0, 6)))}" target="_blank" rel="noopener">카카오맵 경로 보기</a>` : '')
@@ -678,10 +657,9 @@ function nbPaint(st) {
       + `<div class="nb-head"><div class="nb-title"></div>`
       + `<div class="nb-legend"><span><i class="nb-mark reg"></i>제조업 허가</span><span><i class="nb-mark gmp"></i>CGMP 적합</span></div>`
       + `<div class="nb-seg" role="group" aria-label="반경">${NB.RADII.map((r) => `<button type="button" data-act="radius" data-r="${r}">${r}km</button>`).join('')}</div></div>`
-      // 지도를 위에 크게, 그 아래를 이분할 — 왼쪽: 업체 거르기·목록 / 오른쪽: 고른 업체 상세(한 곳에서만)
-      // 위: 지도 | 업체 목록(좌우 이분할), 아래: 고른 업체 상세를 가로 전체로
+      // 지도 | 업체 목록 좌우 이분할. 고른 업체의 실행 버튼은 그 줄 안에서 편다(상세 칸은 없앴다)
       + `<div class="nb-body"><div class="nb-top"><div class="nb-map" role="region" aria-label="근처 업체 지도"></div>`
-      + `<div class="nb-listcol"></div></div><div class="nb-sheet" aria-live="polite"></div></div>`
+      + `<div class="nb-listcol" aria-live="polite"></div></div></div>`
       + `<div class="nb-status"></div></div>`;
   }
   const title = pane.querySelector('.nb-title');
@@ -690,13 +668,11 @@ function nbPaint(st) {
   pane.querySelectorAll('.nb-seg button').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.r) === st.radius)));
   const status = pane.querySelector('.nb-status');
   if (st.error) {
-    pane.querySelector('.nb-sheet').innerHTML = `<div class="nb-empty err">${esc(st.error)}</div>`;
-    pane.querySelector('.nb-listcol').innerHTML = '';
+    pane.querySelector('.nb-listcol').innerHTML = `<div class="nb-empty err">${esc(st.error)}</div>`;
     status.textContent = '';
     nbDrawMapSafe(st);
     return;
   }
-  pane.querySelector('.nb-sheet').innerHTML = st.center ? nbSheetHtml(st) : '<div class="nb-empty">기준 주소의 위치를 확인하는 중…</div>';
   pane.querySelector('.nb-listcol').innerHTML = nbListHtml(st);
   status.innerHTML = (st.phase ? `<span class="nb-spin" aria-hidden="true"></span>${esc(st.phase)} · ` : '') + nbStatusLine(st)
     + ' · 거리는 직선, 이동시간은 추정(업체를 고르면 카카오내비 실측)입니다';
@@ -1027,11 +1003,10 @@ function nbBind(st) {
     if (act === 'radius') { st.radius = Number(b.dataset.r); if (st.sel && !nbVisible(st).some((v) => v.id === st.sel)) st.sel = (nbVisible(st).find(nbPlaced) || {}).id || null; nbPaint(st); }
     else if (act === 'filter') { st.filter = b.dataset.f; nbPaint(st); }
     else if (act === 'pick') {
-      nbSelect(st, id);
-      // 좁은 화면은 상세 칸이 목록 아래에 있다 — 고르면 상세로 내려 준다
-      // 상세는 지도·목록 아래에 있다 — 화면 밖이면 보이는 자리로 옮겨 준다
-      const sh = st.pane.querySelector('.nb-sheet');
-      if (sh) { const r = sh.getBoundingClientRect(); if (r.top > innerHeight - 90 || r.bottom < 90) sh.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+      // 같은 줄을 다시 누르면 접는다 — 버튼 줄이 펴진 채로 남아 있을 이유가 없다
+      nbSelect(st, st.sel === id ? null : id);
+      const row = st.pane.querySelector(`.nb-row[data-row="${CSS.escape(id)}"]`);
+      if (row) { const r = row.getBoundingClientRect(); if (r.top < 70 || r.bottom > innerHeight - 20) row.scrollIntoView({ block: 'nearest' }); }
     }
     else if (act === 'route') { st.route = st.route.includes(id) ? st.route.filter((x) => x !== id) : st.route.concat(id); nbPaint(st); }
     else if (act === 'clear') { st.route = []; nbPaint(st); }
