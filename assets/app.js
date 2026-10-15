@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 196;
+const BUILD = 197;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3754,6 +3754,13 @@ function workforceBlock(report) {
     refs.push(`<div class="wf-ref"><i>인력 추이</i><span><b>${f0.cnt}명 → ${f1.cnt}명</b> (${ym(f0.ym)}~${ym(f1.ym)}, ${d > 0 ? '+' : ''}${d}명 · ${Math.abs(d) <= Math.max(1, f0.cnt * 0.1) ? '안정' : d > 0 ? '증원 추세' : '감소 추세 — 사유 확인 권장'})`
       + `<em>국민연금 월별 · ${esc(MP.trendSite || '')}</em></span><div class="wf-spark">${bars}</div></div>`);
   }
+  // 채용사이트가 적어 둔 사원수 — 출처도 시점도 다른 값이라 '참고'로만 둔다(예전엔 채용공고 칸에 있었다)
+  const ht = report.hiring && report.hiring.ok && report.hiring.headTrend;
+  if (ht) {
+    const list = (ht.sites || []).map((v) => `${esc(v.host)} ${v.count}명${v.asOf ? `(${esc(v.asOf)})` : ''}`).join(' · ');
+    refs.push(`<div class="wf-ref"><i>채용사이트 표기</i><span><b>${list}</b> ↔ 국민연금 ${ht.nps.count}명${ht.nps.asOf ? `(${esc(ht.nps.asOf)})` : ''} · 차이 ${ht.diff > 0 ? '+' : ''}${ht.diff}명`
+      + `<em>채용사이트 게재값은 갱신이 늦거나 오래된 신고값 그대로인 경우가 많습니다 — 기준일을 함께 보세요</em></span></div>`);
+  }
   if (MP.fctEmpl != null) {
     const y = Number(String(MP.fctRegDe || '').slice(0, 4));
     const age = isFinite(y) && y ? new Date().getFullYear() - y : null;
@@ -4128,16 +4135,8 @@ function renderHiring(h) {
       + roles.map(([r, n]) => `<span class="hrole">${esc(r)}<b>${n}</b></span>`).join('') + '</div>';
   }
 
-  // [우] 인력 관측치 대조 — 채용사이트 공시 사원수 ↔ 연금 가입자수
-  if (h.headTrend) {
-    const t = h.headTrend;
-    right += `<div class="hire-sec">인력 관측치 대조 <em>출처가 다른 두 시점</em></div><div class="hire-head">`
-      + `<div><i>${esc(t.site.host)}</i><b>${t.site.count}명</b><u>${esc(t.site.asOf || '기준일 미상')}</u></div>`
-      + `<div class="arrow">→</div>`
-      + `<div><i>국민연금</i><b>${t.nps.count}명</b><u>${esc(t.nps.asOf || '')}</u></div>`
-      + `<div class="delta ${t.diff > 0 ? 'up' : t.diff < 0 ? 'down' : ''}">${t.diff > 0 ? '+' : ''}${t.diff}명</div>`
-      + '</div>';
-  }
+  // 인력 관측치 대조(채용사이트 사원수 ↔ 연금)는 「인력 · 사업장 구성」으로 옮겼다 —
+  // 같은 인원 이야기가 두 군데 흩어져 있으면 어느 숫자를 믿어야 할지 더 헷갈린다.
   // [우] 채용 강도
   if (h.intensity) {
     const i = h.intensity;
@@ -4161,7 +4160,7 @@ function renderHiring(h) {
   else if (left || right) html += left || right;
   // 오른쪽이 통째로 빌 수도 있다(연금·채용사이트 값 미확보). 왜 비었는지는 말해 준다.
   if (left && !right) {
-    html += `<div class="hire-warn">인력 관측치·채용 강도·급여 수준은 국민연금 가입자수나 채용사이트 기업정보가 있어야 계산됩니다 — 이번에는 확보하지 못했습니다.</div>`;
+    html += `<div class="hire-warn">채용 강도·급여 수준은 국민연금 가입자수나 채용사이트 기업정보가 있어야 계산됩니다 — 이번에는 확보하지 못했습니다.</div>`;
   }
 
   // 근거 원문 — 추정의 출처를 사용자가 직접 열어볼 수 있어야 한다
@@ -5851,15 +5850,22 @@ function animateAreaCompare(box) {
 // 구역마다 펼침 상태를 기억하고(다음 조회에도 유지), 인쇄할 때는 모두 펼친다.
 const FOLD_KEY = 'vs_fold_v1';
 const foldGet = () => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || '{}') || {}; } catch { return {}; } };
+// 확인사항 목록은 길어서 펴 둔 채로 시작하면 아래 자료가 전부 화면 밖으로 밀린다.
+// 이 구역만은 펼침 상태를 기억하지 않고 항상 접은 채로 연다.
+const FOLD_ALWAYS_SHUT = new Set(['check']);
 function foldSec(id, title, sub, ...content) {
   const d = document.createElement('details');
   d.className = 'rsec'; d.dataset.fold = id;
-  d.open = foldGet()[id] === true;
+  d.open = !FOLD_ALWAYS_SHUT.has(id) && foldGet()[id] === true;
   const sm = document.createElement('summary');
   sm.innerHTML = `<span class="rsec-t">${esc(title)}</span>${sub ? `<span class="rsec-s">${sub}</span>` : ''}<span class="rsec-c" aria-hidden="true"></span>`;
   d.appendChild(sm);
   content.filter(Boolean).forEach((c) => d.appendChild(c));
-  d.addEventListener('toggle', () => { const st = foldGet(); st[id] = d.open; try { localStorage.setItem(FOLD_KEY, JSON.stringify(st)); } catch { /* 저장 못 해도 동작 */ } });
+  d.addEventListener('toggle', () => {
+    if (FOLD_ALWAYS_SHUT.has(id)) return;
+    const st = foldGet(); st[id] = d.open;
+    try { localStorage.setItem(FOLD_KEY, JSON.stringify(st)); } catch { /* 저장 못 해도 동작 */ }
+  });
   return d;
 }
 function foldAll(root, open) { root.querySelectorAll('details.rsec').forEach((d) => { d.open = open; }); }

@@ -403,7 +403,7 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .block h3, .chkbox h3, .vcbox h4, .hirebox h4, .hpbox h4 { font-size: 11px !important; }
   
   
-  .field .v, .hire-head b { font-size: 11px !important; }   /* 수치는 본문보다 조금 크게 — 훑어볼 때 눈에 걸려야 한다 */
+  .field .v { font-size: 11px !important; }   /* 수치는 본문보다 조금 크게 — 훑어볼 때 눈에 걸려야 한다 */
 
   /* 여백 압축 */
   .summary { padding: 10px 12px; margin-bottom: 8px; gap: 10px; }
@@ -813,15 +813,6 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
 .hire-roles { display: flex; flex-wrap: wrap; gap: 6px; }
 .hrole { font-size: 12px; border: 1px solid var(--border); border-radius: 3px; padding: 4px 11px; background: var(--panel-2); }
 .hrole b { margin-left: 6px; font-weight: 800; color: #7c5cff; }
-.hire-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.hire-head > div { text-align: center; }
-.hire-head i { font-style: normal; display: block; font-size: 10.5px; color: var(--muted); }
-.hire-head b { display: block; font-size: 17px; font-weight: 800; }
-.hire-head u { text-decoration: none; display: block; font-size: 10px; color: var(--faint); }
-.hire-head .arrow { color: var(--faint); font-size: 15px; }
-.hire-head .delta { font-size: 14px; font-weight: 800; padding: 4px 10px; border-radius: 8px; background: var(--gD-bg); color: var(--gD); }
-.hire-head .delta.up { background: var(--gA-bg); color: var(--gA); }
-.hire-head .delta.down { background: var(--risk-bg); color: var(--risk); }
 .hire-int { font-size: 12.5px; line-height: 1.55; }
 .hire-int b { font-weight: 800; color: #7c5cff; }
 .hire-list { list-style: none; margin: 0; padding: 0; }
@@ -1876,21 +1867,21 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 /* ── 관련기사 탭 ── 제목만 보이고, 누르면 펼쳐져 요약·원문 읽기 */
 .trp { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 16px 18px; }
 .trp-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
-.trp-h b { font-size: 16px; font-weight: 800; }
-.trp-h small { flex: 1; font-size: 12px; color: var(--muted); }
+.trp-h b { font-size: 14.5px; font-weight: 800; }
+.trp-h small { flex: 1; font-size: 11px; color: var(--muted); }
 .trp-list { list-style: none; margin: 4px 0 0; padding: 0; }
 .trp-list li { border-bottom: 1px solid var(--rule); }
-.trp-t { font: inherit; width: 100%; display: flex; align-items: center; gap: 8px; padding: 11px 6px; background: none; border: 0;
+.trp-t { font: inherit; width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 6px; background: none; border: 0;
   color: var(--text); text-align: left; cursor: pointer; }
 .trp-t:hover { background: var(--panel-2); }
-.trp-t b { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
+.trp-t b { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
 .trp-t:hover b { color: var(--accent); }
 .trp-list li.on .trp-t b { color: var(--accent); }
-.trp-m { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+.trp-m { font-size: 10.5px; color: var(--faint); white-space: nowrap; }
 .trp-c { width: 7px; height: 7px; flex: none; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .2s; }
 .trp-list li.on .trp-c { transform: rotate(-135deg); }
 .trp-body { padding: 0 6px 14px; animation: rsecIn .22s ease both; }
-.trp-d { margin: 0 0 10px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+.trp-d { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.6; }
 .trp-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 @media (max-width: 720px) {
   .trp { padding: 12px; }

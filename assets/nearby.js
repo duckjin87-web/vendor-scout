@@ -673,7 +673,14 @@ function nbPaint(st) {
     nbDrawMapSafe(st);
     return;
   }
-  pane.querySelector('.nb-listcol').innerHTML = nbListHtml(st);
+  // 목록을 통째로 다시 그리면 스크롤이 맨 위로 튄다 — 업체를 누를 때마다 목록이 처음으로
+  // 돌아가 방금 고른 줄을 다시 찾아야 했다. 다시 그리기 전후로 스크롤 위치를 옮겨 둔다.
+  const col = pane.querySelector('.nb-listcol');
+  const prevRows = col.querySelector('.nb-rows');
+  const keepTop = prevRows ? prevRows.scrollTop : 0;
+  col.innerHTML = nbListHtml(st);
+  const rows = col.querySelector('.nb-rows');
+  if (rows && keepTop) rows.scrollTop = keepTop;
   status.innerHTML = (st.phase ? `<span class="nb-spin" aria-hidden="true"></span>${esc(st.phase)} · ` : '') + nbStatusLine(st)
     + ' · 거리는 직선, 이동시간은 추정(업체를 고르면 카카오내비 실측)입니다';
   nbDrawMapSafe(st);
@@ -953,9 +960,12 @@ function nbSelect(st, id, opts = {}) {
   if (opts.quiet) return;
   nbPaint(st);
   if (v && !opts.fromMap && nbPlaced(v)) nbPanTo(st, v);
+  // 지도에서 고른 경우에만 목록을 그 줄로 옮긴다 — 목록 칸 안에서만 움직이고 페이지는 건드리지 않는다
   if (opts.fromMap) {
     const row = st.pane.querySelector(`[data-row="${CSS.escape(id)}"]`);
-    if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const box = st.pane.querySelector('.nb-rows');
+    if (row && box) box.scrollTop += row.getBoundingClientRect().top - box.getBoundingClientRect().top - 8;
+    else if (row) row.scrollIntoView({ block: 'nearest' });
   }
 }
 
@@ -1005,8 +1015,14 @@ function nbBind(st) {
     else if (act === 'pick') {
       // 같은 줄을 다시 누르면 접는다 — 버튼 줄이 펴진 채로 남아 있을 이유가 없다
       nbSelect(st, st.sel === id ? null : id);
+      // 누른 자리에 그대로 둔다 — 버튼이 펴지면서 줄이 길어져 아래가 잘릴 때만 그만큼만 내린다
       const row = st.pane.querySelector(`.nb-row[data-row="${CSS.escape(id)}"]`);
-      if (row) { const r = row.getBoundingClientRect(); if (r.top < 70 || r.bottom > innerHeight - 20) row.scrollIntoView({ block: 'nearest' }); }
+      const box = st.pane.querySelector('.nb-rows');
+      if (row && box) {
+        const r = row.getBoundingClientRect(), b = box.getBoundingClientRect();
+        if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom + 6;
+        else if (r.top < b.top) box.scrollTop -= b.top - r.top + 6;
+      }
     }
     else if (act === 'route') { st.route = st.route.includes(id) ? st.route.filter((x) => x !== id) : st.route.concat(id); nbPaint(st); }
     else if (act === 'clear') { st.route = []; nbPaint(st); }
