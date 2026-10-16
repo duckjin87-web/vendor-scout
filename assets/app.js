@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 197;
+const BUILD = 198;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2028,11 +2028,47 @@ async function makerLookupRaw(nm) {
       const all = await nbMfdsAll();
       const key = nbNorm(nm);
       const hits = key.length >= 2 ? all.list.filter((x) => x.key && (x.key === key || (key.length >= 3 && x.key.includes(key)))) : [];
-      hits.forEach((x) => { if (x.raw) merged.unshift(x.raw); });
+      // 공개 API 응답에 없고 주간 명단에만 있는 업체는 raw가 없다. 예전에는 여기서 그냥 버려
+      // 제조업 등록이 '없음'으로 나왔다(대전 (주)에이텍: 명단에는 있는데 리포트에선 미등록).
+      // 명단이 가진 값(상호·주소·사업자번호·허가일)으로 레코드를 만들어 넣는다.
+      hits.forEach((x) => {
+        merged.unshift(x.raw || {
+          INDUTY: '화장품제조업', ENTP_NAME: x.nm, FACTORY_ADDR: x.addr || '',
+          BIZRNO: x.bz || '', ENTP_PERMIT_DATE: x.pdate || '', _fromLedger: true,
+        });
+      });
       register = { searched: true, total: all.total, size: all.list.length, full: all.full, hits: hits.length };
     } catch (e) { register = { searched: false, err: e && e.message ? e.message : String(e) }; }
   }
   return { items: merged, register, sale };
+}
+
+// 주소의 시·도 + 시·군·구만 뽑는다 — 같은 상호를 가른 기준은 결국 '어느 동네 회사인가'다
+function regionKeyOf(addr) {
+  const m = String(addr || '').match(/^\s*([가-힣]+(?:특별자치시|특별자치도|특별시|광역시|도))\s*([가-힣]+[시군구])?/);
+  if (!m) return '';
+  const sido = m[1].replace(/(특별자치시|특별자치도|특별시|광역시|도)$/, '').slice(0, 2);
+  return `${sido}|${m[2] || ''}`;
+}
+// 금융위 법인 후보를 보여 줄 때는 식약처 화장품제조업 등록업체를 반드시 함께 올린다.
+// 예전에는 금융위에 동명 법인이 둘 이상이면 식약처를 아예 묻지 않아, 금융위에 없는 제조사는
+// 고를 방법이 없었다((주)에이텍: 금융위 4곳 모두 다른 회사, 실제 제조사는 대전 — 조회 불가).
+async function withMfdsCands(fsc, name) {
+  let mf = [];
+  try { mf = await mfdsCandidates(name); } catch { return fsc; }
+  if (!mf.length) return fsc;
+  const nk = (v) => stripCorp(v || '').replace(/\s/g, '');
+  const bz = (v) => String(v || '').replace(/\D/g, '');
+  const same = (a, b) => (bz(a.bzno) && bz(a.bzno) === bz(b.bzno))
+    || (nk(a.corpNm) === nk(b.corpNm) && !!regionKeyOf(a.addr) && regionKeyOf(a.addr) === regionKeyOf(b.addr));
+  // 같은 회사면 '식약처 등록' 표시를 금융위 후보에 얹고, 없는 제조사는 후보로 추가한다
+  const out = fsc.map((c) => {
+    const hit = mf.find((m) => same(m, c));
+    return hit ? { ...c, mfds: true, lcns: c.lcns || hit.lcns, addr: c.addr || hit.addr, bzno: c.bzno || hit.bzno } : c;
+  });
+  const extra = mf.filter((m) => !out.some((c) => same(m, c)));
+  // 찾는 건 화장품 제조사다 — 제조업 허가가 확인된 업체를 앞에 세운다
+  return [...out, ...extra].sort((a, b) => (b.mfds ? 1 : 0) - (a.mfds ? 1 : 0));
 }
 
 // 식약처 화장품제조업 등록업체 기준 후보 — 상호명으로 조회해 등록 업체명(중복제거) 목록화
@@ -2044,16 +2080,25 @@ async function mfdsCandidates(name) {
   if (nk.length >= 2) list = list.filter((r) => Object.values(r).some((v) => stripCorp(String(v == null ? '' : v)).replace(/\s/g, '').includes(nk)));
   const seen = new Set(); const out = [];
   for (const r of list) {
-    const nm = pickByKey(r, /BSSH_NM|CMPNY_NM|ENTRPS_?NM|MANF|업체|회사|제조사/i) || pickByKey(r, /_NM$/i);
+    // 공개 API의 업체명 칸은 ENTP_NAME이다 — 예전 정규식(_NM$)에 걸리지 않아 후보가 늘 0건이었다
+    const nm = pickByKey(r, /BSSH_NM|CMPNY_NM|ENTRPS_?NM|ENTP_?NAME|MANF|업체|회사|제조사/i)
+      || pickByKey(r, /_NM$|_NAME$/i);
     if (!nm) continue;
     const key = stripCorp(nm).replace(/\s/g, '');
-    if (key.length < 2 || seen.has(key)) continue;
-    seen.add(key);
+    const addr0 = pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i);
+    // 같은 상호라도 주소가 다르면 다른 회사다 — 상호만으로 묶으면 대전 업체가 판교 업체에 먹힌다
+    const dk = `${key}|${String(addr0 || '').replace(/\s/g, '').slice(0, 12)}`;
+    if (key.length < 2 || seen.has(dk)) continue;
+    seen.add(dk);
     out.push({
       corpNm: nm,
       rep: pickByKey(r, /PRSNL|PRSDNT|RPRSNTV|REPRE|대표/i),
-      addr: pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i),
-      lcns: pickByKey(r, /LCNS_?NO|PERMIT|허가/i),
+      addr: addr0,
+      // 허가'번호'만 — PERMIT_DATE(허가일)까지 집어 '허가 20121123'처럼 보이던 것을 가른다
+      lcns: pickByKey(r, /LCNS_?NO|PRMISN_?NO|허가번호/i),
+      pdate: fmtDate(String(pickByKey(r, /PERMIT_?DATE|PRMISN_?DE|허가일/i) || '').replace(/\D/g, '')) || null,
+      // 사업자번호가 있으면 국세청·국민연금·보험·대기까지 정확히 이 회사로 조회할 수 있다
+      bzno: (findBznoIn(r) || '') || null,
       mfds: true,
     });
     if (out.length >= 12) break;
@@ -2072,12 +2117,19 @@ async function mfdsCandidates(name) {
 // 식약처 후보 선택 시: 정확한 등록업체명으로 금융위 재조회(법인 매칭되면 법인/재무 확보) → 없으면 상호명 조회
 async function finishLiveMfds(name, cand) {
   const nk = (s) => stripCorp(s || '').replace(/\s/g, '');
+  const bz = String(cand.bzno || '').replace(/\D/g, '');
   try {
     const cc = window.mapCorpCandidates(await proxyGet('corp', { name: cand.corpNm }));
-    const exact = cc.find((x) => nk(x.corpNm) === nk(cand.corpNm)) || (cc.length === 1 ? cc[0] : null);
-    if (exact) return await finishLive(cand.corpNm, exact);
-  } catch { /* 금융위 재조회 실패 → 상호명 기반 */ }
-  return await finishLive(cand.corpNm, { corpNm: cand.corpNm });
+    const mine = cc.filter((x) => nk(x.corpNm) === nk(cand.corpNm));
+    // 동명 법인이 여럿일 때 아무거나 집으면 남의 회사 재무가 붙는다.
+    // ① 사업자번호가 같은 법인 ② 같은 시·군의 법인 ③ 동명이 하나뿐일 때만 그것.
+    const pick = (bz ? mine.find((x) => String(x.bzno || '').replace(/\D/g, '') === bz) : null)
+      || (regionKeyOf(cand.addr) ? mine.find((x) => regionKeyOf(x.addr) === regionKeyOf(cand.addr)) : null)
+      || (mine.length === 1 ? mine[0] : null);
+    if (pick) return await finishLive(cand.corpNm, { ...pick, bzno: pick.bzno || bz || null });
+  } catch { /* 금융위 재조회 실패 → 상호·사업자번호 기반 */ }
+  // 금융위에 없거나 특정 못 해도, 식약처가 준 사업자번호가 있으면 국세청·국민연금·보험까지 간다
+  return await finishLive(cand.corpNm, { corpNm: cand.corpNm, bzno: bz || null, addr: cand.addr || null });
 }
 
 // 1단계: 기준정보(동명업체 후보) 조회 → {candidates} 또는 {report}
@@ -2102,14 +2154,14 @@ async function liveLookup(name) {
         // bzno가 후보에 없으면(금융위 미수록) 상호 후보를 그대로 제시 — 사용자가 선택
         return byName.length === 1
           ? { report: await finishLive(nameOnly, { ...byName[0], bzno: byName[0].bzno || bno }) }
-          : { candidates: byName, name: `${nameOnly} (사업자 ${bno})`, source: 'fsc' };
+          : { candidates: await withMfdsCands(byName, nameOnly), name: `${nameOnly} (사업자 ${bno})`, source: 'fsc' };
       }
     }
     if (byBno.length === 1) return { report: await finishLive(nameOnly || byBno[0].corpNm, { ...byBno[0], bzno: byBno[0].bzno || bno }) };
     if (byBno.length >= 2) {
       const hit = nameOnly ? matchByNameApp(nameOnly, byBno) : null;
       if (hit) return { report: await finishLive(nameOnly, { ...hit, bzno: hit.bzno || bno }) };
-      return { candidates: byBno, name: nameOnly || bno, source: 'fsc' };
+      return { candidates: await withMfdsCands(byBno, nameOnly || bno), name: nameOnly || bno, source: 'fsc' };
     }
     // 금융위 법인 0건 → 사업자번호로 국세청·국민연금·식약처·집계까지 최대 조회(개인/소규모 대응)
     return { report: await finishLive(nameOnly || bno, { corpNm: nameOnly || bno, bzno: bno }) };
@@ -2139,8 +2191,13 @@ async function liveLookup(name) {
   const exact = cands.filter((c) => c._sim >= 0.995);
 
   // 이름이 그대로 맞는 법인이 하나면 바로 조회 — 여럿이면 고르게 한다
-  if (exact.length === 1) return { report: await finishLive(name, exact[0]) };
-  if (exact.length >= 2) return { candidates: exact, name, source: 'fsc' };
+  if (exact.length === 1) {
+    // 이름이 하나뿐이어도 식약처에 같은 이름의 다른 제조사가 있으면 고르게 한다
+    const withM = await withMfdsCands(exact, name);
+    if (withM.length === 1) return { report: await finishLive(name, withM[0]) };
+    return { candidates: withM, name, source: 'fsc' };
+  }
+  if (exact.length >= 2) return { candidates: await withMfdsCands(exact, name), name, source: 'fsc' };
 
   // 이름이 딱 맞는 법인이 없다 — 식약처 등록업체와 묶어 '고르게' 한다.
   // 예전에는 후보가 하나뿐이면 이름이 달라도 그대로 조회해 엉뚱한 회사 리포트가 나왔다.
@@ -3524,8 +3581,11 @@ function renderCandidates(name, cands, source, similar) {
   root.classList.remove('hidden');
   root.innerHTML = '';
   const isMfds = source === 'mfds';
+  const mixed = !isMfds && cands.some((c) => c.mfds);
   const box = el('div', 'candbox');
-  const headSrc = isMfds ? '식약처 화장품제조업 등록업체 기준' : '금융위 법인 기준';
+  const headSrc = isMfds ? '식약처 화장품제조업 등록업체 기준'
+    : mixed ? '금융위 법인 + 식약처 화장품제조업 등록업체 · 제조업 허가가 확인된 업체를 위에 올렸습니다'
+      : '금융위 법인 기준';
   // 유사 추천은 '같은 이름을 못 찾았다'는 사실을 먼저 알려야 한다 — 정확 일치로 오해하면 안 된다
   box.appendChild(el('div', 'candhead',
     similar
@@ -3539,6 +3599,7 @@ function renderCandidates(name, cands, source, similar) {
       c.rep ? '대표 ' + esc(c.rep) : '',
       c.bzno ? '사업자 ' + esc(c.bzno) : '',
       c.lcns ? '허가 ' + esc(c.lcns) : '',
+      c.pdate ? esc(c.pdate) + ' 허가' : '',
       c.addr ? esc(c.addr) : '',
     ].filter(Boolean).join(' · ');
     const tag = (c.mfds ? '<span class="cand-tag">식약처 등록</span>' : '')
