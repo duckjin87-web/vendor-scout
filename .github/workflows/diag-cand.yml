@@ -1,0 +1,55 @@
+name: Diagnose candidate sources
+
+# 한 상호로 금융위 법인·식약처 제조업·의약품안전나라가 각각 무엇을 주는지 본다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      name: { description: '상호', required: true, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          NM: ${{ inputs.name }}
+        run: |
+          cat > d.mjs <<'JS'
+          const K = process.env.KEY, NM = process.env.NM;
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3800));
+          const get = async (u, o) => { for (let i = 0; i < 3; i++) { try { const r = await fetch(u, { ...o, signal: AbortSignal.timeout(25000) }); return await r.text(); } catch (e) { if (i === 2) throw e; await new Promise((s) => setTimeout(s, 2000)); } } };
+          // ① 식약처 화장품제조업 (공개 API)
+          try {
+            const t = await get(`https://apis.data.go.kr/1471000/CsmtcsMfcrtrInfoService01/getCsmtcsMfcrtrInfoList01?serviceKey=${encodeURIComponent(K)}&bssh_nm=${encodeURIComponent(NM)}&numOfRows=30&pageNo=1&type=json`);
+            let j; try { j = JSON.parse(t); } catch { n('[식약처] JSON 아님: ' + t.slice(0, 200)); j = null; }
+            if (j) {
+              const body = j.body || (j.response && j.response.body) || {};
+              let it = body.items || (body.items && body.items.item) || [];
+              it = Array.isArray(it) ? it : [it];
+              it = it.map((x) => x.item || x);
+              const hit = it.filter((x) => JSON.stringify(x).includes(NM.replace(/\(주\)|주식회사/g, '')));
+              n(`[식약처 maker] total ${body.totalCount} · 상호포함 ${hit.length}건 · 키: ${Object.keys(it[0] || {}).join(',')}`);
+              hit.slice(0, 6).forEach((x, i) => n(`[식약처 ${i + 1}] ` + Object.entries(x).map(([k, v]) => `${k}=${v}`).join(' | ')));
+            }
+          } catch (e) { n('[식약처] 실패 ' + e.message); }
+          // ② 금융위 법인
+          try {
+            const t = await get(`https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2/getCorpOutline_V2?serviceKey=${encodeURIComponent(K)}&corpNm=${encodeURIComponent(NM)}&numOfRows=30&pageNo=1&resultType=json`);
+            const j = JSON.parse(t); const it = ((j.response || {}).body || {}).items || {};
+            const rows = Array.isArray(it.item) ? it.item : (it.item ? [it.item] : []);
+            n(`[금융위] total ${((j.response || {}).body || {}).totalCount} · ` + rows.slice(0, 8).map((r) => `${r.corpNm}|bz ${r.bzno}|crno ${r.crno}|${r.enpBsadr || ''}`).join(' ; '));
+          } catch (e) { n('[금융위] 실패 ' + e.message); }
+          // ③ 의약품안전나라 업체 목록(화장품 제조업 V)
+          try {
+            const t = await get(`https://nedrug.mfds.go.kr/pbp/CCBBA01/getList?searchYn=true&page=1&limit=50&cobCode=V&entpName=${encodeURIComponent(NM.replace(/\(주\)|주식회사/g, ''))}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            const rows = [...t.matchAll(/<tr[\s\S]*?<\/tr>/g)].map((m) => m[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter((x) => x.includes(NM.replace(/\(주\)|주식회사/g, '')));
+            n(`[의약품안전나라] 행 ${rows.length}건 · ` + rows.slice(0, 6).join(' ;; ').slice(0, 2400));
+          } catch (e) { n('[의약품안전나라] 실패 ' + e.message); }
+          JS
+          node d.mjs
