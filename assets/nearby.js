@@ -820,7 +820,9 @@ function nbDrawKakao(st, box) {
   overlay(up(st.radius), node('nb-rlabel', `<span>${st.radius}km</span>`, 48, 18));
   overlay(up(st.radius / 2), node('nb-rlabel half', `<span>${st.radius / 2}km</span>`, 48, 18));
   if (st.drawnCenter !== `${st.center.lat},${st.center.lng}`) { st.drawnRadius = null; st.drawnCenter = `${st.center.lat},${st.center.lng}`; }
-  overlay(c, node('nb-origin-pin', `<span class="nb-dia"></span><span class="nb-plabel strong">${esc(st.vendorName)} · 기점</span>`, 18, 18), 1000);
+  // 반경·기점이 바뀐 첫 그림에서만 움직인다 — 업체를 고를 때마다 다시 그리는데 그때마다 튀면 산만하다
+  const fresh = st.drawnRadius !== st.radius;
+  overlay(c, node('nb-origin-pin', `${fresh ? '<span class="nb-pulse" aria-hidden="true"></span>' : ''}<span class="nb-dia"></span><span class="nb-plabel strong">${esc(st.vendorName)} · 기점</span>`, 18, 18), 1000);
   if (st.drawnRadius !== st.radius) {
     const dLat = st.radius / 111.32, dLng = st.radius / (111.32 * Math.cos(st.center.lat * Math.PI / 180));
     map.setBounds(new K.LatLngBounds(new K.LatLng(st.center.lat - dLat, st.center.lng - dLng), new K.LatLng(st.center.lat + dLat, st.center.lng + dLng)), 8, 8, 8, 8);
@@ -854,11 +856,21 @@ function nbDrawKakao(st, box) {
     const on = v.id === st.sel;
     const side = labelSide.get(v.id);
     const label = side ? `<span class="nb-plabel${on ? ' strong' : ''}${side === 'left' ? ' left' : ''}">${esc(v.name)}</span>` : '';
-    const el2 = node('nb-pinwrap', `<span class="nb-pin ${nbCls(v)}${on ? ' on' : ''}"></span>${label}`, 32, 32);
+    const el2 = node('nb-pinwrap', `<span class="nb-pin ${nbCls(v)}${on ? ' on' : ''}${fresh ? ' pop' : ''}" style="--d:${nbPopDelay(st, v)}ms"></span>${label}`, 32, 32);
     el2.title = v.name; el2.style.cursor = 'pointer';
     el2.addEventListener('click', (e) => { e.stopPropagation(); nbSelect(st, v.id, { fromMap: true }); });
     overlay(new K.LatLng(v.lat, v.lng), el2, on ? 900 : 10);
   });
+}
+
+// 핀이 가까운 업체부터 차례로 뜨게 한다 — '어디부터 갈지'가 순서로 보인다
+function nbPopDelay(st, v) {
+  const key = `${st.radius}|${st.drawnCenter}|${st.items.length}`;
+  if (st._popKey !== key) {
+    st._popKey = key;
+    st._popRank = new Map(nbVisible(st).filter(nbPlaced).sort((a, b) => a.km - b.km).map((x, i) => [x.id, i]));
+  }
+  return Math.min(st._popRank.get(v.id) ?? 20, 20) * 45;
 }
 
 function nbDrawMap(st) {
@@ -908,7 +920,8 @@ function nbDrawMap(st) {
   L.marker(up(st.radius / 2), { interactive: false, keyboard: false, icon: L.divIcon({ className: 'nb-rlabel half', html: `<span>${st.radius / 2}km</span>`, iconSize: [48, 18], iconAnchor: [24, 9] }) }).addTo(st.layer);
   // 원을 새로 그렸으면(주소를 고쳤으면) 기점도 새 위치로 옮긴다
   if (st.drawnCenter !== `${c[0]},${c[1]}`) { st.drawnRadius = null; st.drawnCenter = `${c[0]},${c[1]}`; }
-  L.marker(c, { keyboard: false, zIndexOffset: 1000, icon: L.divIcon({ className: 'nb-origin-pin', html: `<span class="nb-dia"></span><span class="nb-plabel strong">${esc(st.vendorName)} · 기점</span>`, iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(st.layer);
+  const fresh = st.drawnRadius !== st.radius;   // 반경·기점이 바뀐 첫 그림에서만 움직인다
+  L.marker(c, { keyboard: false, zIndexOffset: 1000, icon: L.divIcon({ className: 'nb-origin-pin', html: `${fresh ? '<span class="nb-pulse" aria-hidden="true"></span>' : ''}<span class="nb-dia"></span><span class="nb-plabel strong">${esc(st.vendorName)} · 기점</span>`, iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(st.layer);
   // 시점을 먼저 맞춘다 — 이름표 겹침은 화면 좌표로 따지므로 줌이 정해진 뒤여야 한다
   // (원의 getBounds()는 그리기 직후 불안정해서 좌표에서 바로 계산한다)
   if (st.drawnRadius !== st.radius) { map.fitBounds(L.latLng(c).toBounds(st.radius * 2000), { padding: [8, 8], animate: false }); st.drawnRadius = st.radius; }
@@ -946,7 +959,7 @@ function nbDrawMap(st) {
     const label = side ? `<span class="nb-plabel${on ? ' strong' : ''}${side === 'left' ? ' left' : ''}">${esc(v.name)}</span>` : '';
     const m = L.marker([v.lat, v.lng], {
       title: v.name, alt: v.name, riseOnHover: true, zIndexOffset: on ? 900 : 0,
-      icon: L.divIcon({ className: 'nb-pinwrap', html: `<span class="nb-pin ${nbCls(v)}${on ? ' on' : ''}"></span>${label}`, iconSize: [32, 32], iconAnchor: [16, 16] }),
+      icon: L.divIcon({ className: 'nb-pinwrap', html: `<span class="nb-pin ${nbCls(v)}${on ? ' on' : ''}${fresh ? ' pop' : ''}" style="--d:${nbPopDelay(st, v)}ms"></span>${label}`, iconSize: [32, 32], iconAnchor: [16, 16] }),
     }).addTo(st.layer);
     m.on('click', () => nbSelect(st, v.id, { fromMap: true }));
   });

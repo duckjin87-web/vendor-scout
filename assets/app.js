@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 198;
+const BUILD = 199;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3660,7 +3660,9 @@ function noteLines(note) {
 // 3열 압축 행: [등급+항목] | [값] | [출처(우측 소형)]
 function fieldRow(fld) {
   const isGap = fld.data_gap || fld.value == null;
-  const row = el('div', 'field' + (isCgmpField(fld) ? ' cgmp' : ''));
+  // 아직 도착하지 않은 기관의 칸 — '해당 없음' 대신 빛이 지나가는 빈 칸을 둔다(도착하면 그 자리에 채워진다)
+  const pending = isGap && /^불러오는 중/.test(String(fld.note || ''));
+  const row = el('div', 'field' + (isCgmpField(fld) ? ' cgmp' : '') + (pending ? ' pending' : ''));
 
   const k = el('div', 'k');
   k.appendChild(el('span', 'ktxt', esc(fld.key)));
@@ -3673,14 +3675,15 @@ function fieldRow(fld) {
   const info = fld.note ? ` <button type="button" class="ninfo" aria-expanded="false" aria-label="설명 보기">ⓘ</button>` : '';
   const valHtml = Array.isArray(fld.checklist)
     ? checklistHtml(fld.checklist) + info
-    : (isGap ? '해당 없음' : esc(fld.value)) + stale + info;
-  row.appendChild(el('div', 'v' + (isGap && !fld.checklist ? ' gap' : ''), valHtml));
+    : pending ? '<span class="skel-v" aria-label="불러오는 중"></span>'
+      : (isGap ? '해당 없음' : esc(fld.value)) + stale + info;
+  row.appendChild(el('div', 'v' + (isGap && !fld.checklist && !pending ? ' gap' : ''), valHtml));
 
   const src = el('div', 'src');
   src.innerHTML = esc(fld.source || '—') + (fld.as_of ? `<br><span class="asof">${esc(fld.as_of)}</span>` : '');
   row.appendChild(src);
 
-  if (fld.note) {
+  if (fld.note && !pending) {
     const nt = el('div', 'fnote', noteLines(fld.note).map((s) => `<p>${esc(s)}</p>`).join(''));
     nt.hidden = true;
     row.appendChild(nt);
@@ -3697,8 +3700,9 @@ function block(title, icon, fields, cat) {
   const b = el('div', 'block' + (cat ? ' cat-' + cat : ''));
   // 값이 없는 항목은 접어 둔다. 씨앤티드림 조회에서 '생산역량·인원' 9개 중 4개가 빈칸이었고
   // 각각 긴 설명까지 달려 블록의 절반을 먹었다. 없다는 사실은 한 줄이면 충분하다.
-  const gaps = fields.filter((f) => f.data_gap || f.value == null);
-  const filled = fields.filter((f) => !(f.data_gap || f.value == null));
+  const isPend = (f) => /^불러오는 중/.test(String(f.note || ''));
+  const gaps = fields.filter((f) => (f.data_gap || f.value == null) && !isPend(f));
+  const filled = fields.filter((f) => !(f.data_gap || f.value == null) || isPend(f));
   b.appendChild(el('h3', null, `${icon ? `<span class="ic">${icon}</span>` : ''}${esc(title)}`
     + `<span class="cnt">${fields.length}개 필드${gaps.length ? ' · 공백 ' + gaps.length : ''}</span>`));
   filled.forEach((f) => b.appendChild(fieldRow(f)));
@@ -3745,8 +3749,18 @@ function workforceBlock(report) {
     const why = R.one
       ? (W.npsSplit ? '산재 상시와 국민연금 가입자가 같습니다' : '산재보험 상시근로자 기준 — 국민연금은 사업장 미분류')
       : `산재 상시 ${n(W.mfgSiteN ? W.mfg : W.total)}명 ↔ 국민연금 가입자 ${n(W.mfgSiteN ? (W.mfgR.lo === W.mfg ? W.mfgR.hi : W.mfgR.lo) : MP.nps)}명 — 작은 쪽~큰 쪽`;
-    h += `<div class="wf-lead"><div class="wf-lead-m"><i>${lab}</i><b>${rng(R)}</b><span>${esc(why)}</span></div>`
+    // 숫자 두 개를 한 막대에 — 제조소가 회사의 몇 할인지, 추정 폭이 얼마나 넓은지가 함께 보인다
+    const top = Math.max(W.allR.hi, R.hi, 1);
+    const scale = top <= 10 ? 10 : Math.ceil((top * 1.15) / 10) * 10;
+    const pct = (v) => `${Math.min(100, (v / scale) * 100).toFixed(1)}%`;
+    const bar = `<div class="wf-bar" role="img" aria-label="제조소 ${rng(R)}, 회사 전체 ${rng(W.allR)}, 눈금 0~${scale}명">`
+      + `<i class="wb-m" style="width:${pct(R.lo)}"></i>`
+      + (R.one ? '' : `<i class="wb-mr" style="left:${pct(R.lo)};width:${pct(R.hi - R.lo)}"></i>`)
+      + (W.mfgSiteN && W.total !== W.mfg ? `<i class="wb-a" style="left:${pct(W.allR.lo)};width:${pct(Math.max(W.allR.hi - W.allR.lo, scale * 0.012))}"></i>` : '')
+      + `</div><div class="wf-scale"><span>0</span><span>${scale}명</span></div>`;
+    h += `<div class="wf-lead"><div class="wf-lead-m"><i>${lab}</i><b>${cuWrap(rng(R))}</b><span>${esc(why)}</span></div>`
       + (W.mfgSiteN && W.total !== W.mfg ? `<div class="wf-lead-s"><i>회사 전체</i><b>${rng(W.allR)}</b><span>보험 사업장 ${W.sites.length}곳 합계</span></div>` : '')
+      + `<div class="wf-lead-bar">${bar}<div class="wf-key"><span><i class="wb-m"></i>제조소</span>${W.mfgSiteN && W.total !== W.mfg ? '<span><i class="wb-a"></i>회사 전체(폭)</span>' : ''}</div></div>`
       + '</div>';
   }
 
@@ -3923,7 +3937,7 @@ const FIN_SERIES = [
   // 자료가 없는 것과 값이 0인 것은 전혀 다른 말이라, 없으면 빈칸으로 둔다.
   { name: '영업이익률', unit: '%', grp: 'rat', color: '#a855f7',
     g: (d) => (d.revenue && d.operatingProfit != null ? +(d.operatingProfit / d.revenue * 100).toFixed(1) : null) },
-  { name: '부채비율', unit: '%', grp: 'rat', color: '#94a3b8', invert: true,
+  { name: '부채비율', unit: '%', grp: 'rat', color: '#94a3b8', invert: true, guides: [[200, '주의', 'warn'], [400, '위험', 'bad']],
     g: (d) => {
       if (d.assets == null || d.debt == null) return null;
       const eq = d.assets - d.debt;
@@ -3957,18 +3971,27 @@ function sparkCard(se, years) {
 
   const W = 250, H = 100, px = 12, pt = 18, pb = 18;
   const nums = vals.filter((v) => v != null);
-  const maxV = Math.max(...nums, 0), minV = Math.min(...nums, 0), span = (maxV - minV) || 1;
+  // 기준선(부채비율 200·400%)은 값이 못 미쳐도 그린다 — '선을 넘었는지'가 이 그래프의 요점이다.
+  // 다만 최댓값보다 한참 위의 선까지 넣으면 추세가 바닥에 깔리므로 1.6배 안쪽만 넣는다.
+  const guides = (se.guides || []).filter(([gv]) => gv <= Math.max(...nums) * 1.6 || gv === (se.guides[0] || [])[0]);
+  const maxV = Math.max(...nums, 0, ...guides.map(([gv]) => gv * 1.06)), minV = Math.min(...nums, 0), span = (maxV - minV) || 1;
   const x = (i) => px + (W - 2 * px) * (vals.length > 1 ? i / (vals.length - 1) : 0.5);
   const y = (v) => pt + (H - pt - pb) * (1 - (v - minV) / span);
   let svg = `<svg viewBox="0 0 ${W} ${H}" class="spsvg">`;
   if (minV < 0 && maxV > 0) svg += `<line x1="${px}" y1="${y(0).toFixed(1)}" x2="${W - px}" y2="${y(0).toFixed(1)}" class="mini-base"/>`;
+  guides.forEach(([gv, gl, gc]) => {
+    const gy = y(gv).toFixed(1);
+    svg += `<line x1="${px}" y1="${gy}" x2="${W - px}" y2="${gy}" class="sp-guide ${gc}"/>`
+      + `<text x="${px + 2}" y="${(Number(gy) - 3).toFixed(1)}" text-anchor="start" class="sp-gl ${gc}">${gl} ${gv}%</text>`;
+  });
   const pts = vals.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean).join(' ');
-  svg += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="2"/>`;
+  svg += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="2" class="sp-line" pathLength="100"/>`;
   vals.forEach((v, i) => {
     const xi = x(i).toFixed(1);
     if (v != null) {
       const yi = y(v);
-      svg += `<circle cx="${xi}" cy="${yi.toFixed(1)}" r="2.8" fill="${se.color}"/>`;
+      const over = guides.length && v > guides[guides.length - 1][0] ? 'bad' : guides.length && v > guides[0][0] ? 'warn' : '';
+      svg += `<circle cx="${xi}" cy="${yi.toFixed(1)}" r="${over ? 3.6 : 2.8}" fill="${se.color}"${over ? ` class="sp-over ${over}"` : ''}/>`;
       svg += `<text x="${xi}" y="${(yi - 5).toFixed(1)}" class="spptv" text-anchor="middle" fill="${se.color}">${lbl(v)}</text>`;
     }
     svg += `<text x="${xi}" y="${H - 5}" class="spptx" text-anchor="middle">${String(years[i]).slice(2)}</text>`;
@@ -4016,7 +4039,7 @@ function financeBlock(report) {
         : '')));
     const grid = el('div', 'sparkgrid');
     FIN_SERIES.forEach((s) => {
-      grid.insertAdjacentHTML('beforeend', sparkCard({ name: s.name, unit: s.unit, color: s.color, invert: s.invert, vals: hist.map(s.g) }, years));
+      grid.insertAdjacentHTML('beforeend', sparkCard({ name: s.name, unit: s.unit, color: s.color, invert: s.invert, guides: s.guides, vals: hist.map(s.g) }, years));
     });
     w.appendChild(grid);
     b.appendChild(w);
@@ -4631,7 +4654,11 @@ function qualityGrade(report) {
   const ord = { A: 0, B: 1, C: 2, D: 3 };
   const gs = [...B, ...C, ...(report.finance || [])].filter((x) => !x.data_gap).map((x) => ord[x.grade]).filter((x) => x != null).sort((a, b) => a - b);
   const dataGrade = gs.length ? ['A', 'B', 'C', 'D'][gs[Math.floor(gs.length / 2)]] : 'D';
-  return { grade, why, checks, dataGrade };
+  // A까지 남은 조건 — 게이지 아래에 '무엇이 있으면 한 단계 오르는지'를 적는다
+  const caut = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회' : '', !isFullAddr(site) ? '공장 번지 확인' : '',
+    wfWarn ? '보험상 제조 인력' : '', airWarn ? '제조소 배출시설 가동' : ''].filter(Boolean);
+  const toA = grade === 'A' ? [] : grade === 'D' ? [why] : [...(grade === 'C' ? [why] : []), ...(cgmp ? [] : ['CGMP 적합']), ...caut];
+  return { grade, why, checks, dataGrade, toA };
 }
 window.qualityGrade = qualityGrade;
 function verdictReason(report) {
@@ -4662,6 +4689,264 @@ function distSub(v) {
     .replace(/(\d+)\s*분/, '$1m')
     .replace(/\s+/g, ' ');
 }
+// ── 시각화 도우미 ──
+// 종합판정 반원 게이지 — D(왼쪽 끝)에서 A(오른쪽 끝)까지 어디쯤인지
+function gaugeSvg(g) {
+  const pos = { D: 0.08, C: 0.38, B: 0.7, A: 1 }[g] ?? 0;
+  const L = Math.PI * 40;
+  return `<svg class="vd-gauge" viewBox="0 0 100 56" aria-hidden="true">`
+    + `<path d="M10 50 A40 40 0 0 1 90 50" class="gz-track"/>`
+    + `<path d="M10 50 A40 40 0 0 1 90 50" class="gz-val" style="--gz-len:${L.toFixed(1)};--gz-off:${(L * (1 - pos)).toFixed(1)}"/></svg>`;
+}
+// 문자열 안 첫 숫자를 카운트업 대상으로 감싼다('약 131km' → '약 <span data-cu=131>131</span>km')
+function cuWrap(text) {
+  const t = esc(text);
+  return t.replace(/(\d[\d,]*(?:\.\d+)?)/, (m) => {
+    const n = Number(m.replace(/,/g, ''));
+    return isFinite(n) && n > 0 ? `<span data-cu="${n}" data-cu-fmt="${m.includes(',') ? 'c' : m.includes('.') ? 'd' + (m.split('.')[1] || '').length : ''}">${m}</span>` : m;
+  });
+}
+// 화면에 들어올 때 한 번 0에서 올라간다. 움직임 줄이기·인쇄에서는 그대로 둔다.
+function countUpIn(root) {
+  if (!root || matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) return;
+  const els = [...root.querySelectorAll('[data-cu]')].filter((e) => !e.dataset.cuDone);
+  if (!els.length) return;
+  const fmt = (el, v) => {
+    const f = el.dataset.cuFmt || '';
+    if (f === 'c') return Math.round(v).toLocaleString();
+    if (f.startsWith('d')) return v.toFixed(Number(f.slice(1)) || 1);
+    return String(Math.round(v));
+  };
+  const run = (el) => {
+    el.dataset.cuDone = '1';
+    const to = Number(el.dataset.cu), t0 = performance.now(), dur = 650, keep = el.textContent;
+    const step = (t) => {
+      const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+      el.textContent = p < 1 ? fmt(el, to * e) : keep;
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+  const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { io.unobserve(e.target); run(e.target); } }), { threshold: 0.4 });
+  els.forEach((e) => io.observe(e));
+}
+// 자료 신뢰도 구성 — 공식·간접·추정·공백이 몇 개인지 막대 하나로
+function relMix(report) {
+  const all = [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])];
+  const c = { A: 0, B: 0, C: 0, D: 0 };
+  all.forEach((x) => { const g = (x.data_gap || x.value == null) ? 'D' : (c[x.grade] != null ? x.grade : 'D'); c[g]++; });
+  return { c, n: all.length };
+}
+function relMixHtml(report) {
+  const { c, n } = relMix(report);
+  if (!n) return '';
+  const seg = (g) => (c[g] ? `<i class="rm-${g}" style="flex:${c[g]}" title="${esc(GRADE_LABEL[g])} ${c[g]}개"></i>` : '');
+  return `<span class="relmix" role="img" aria-label="자료 신뢰도 — 공식 ${c.A}, 간접 ${c.B}, 추정 ${c.C}, 공백 ${c.D}">`
+    + `<span class="rm-bar">${seg('A')}${seg('B')}${seg('C')}${seg('D')}</span>`
+    + `<span class="rm-t">공식 <b>${c.A}</b> · 간접 ${c.B}${c.C ? ` · 추정 ${c.C}` : ''} · 공백 ${c.D}</span></span>`;
+}
+// 확인필요 진행 링(접힌 머리에 단다)
+function vcRingHtml(done, total, hiLeft) {
+  const r = 9, L = 2 * Math.PI * r, p = total ? done / total : 0;
+  return `<span class="vc-ring" data-vc-ring role="img" aria-label="확인 ${done}/${total}${hiLeft ? `, 필수 ${hiLeft}건 남음` : ''}">`
+    + `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="${r}" class="vr-tr"/>`
+    + `<circle cx="12" cy="12" r="${r}" class="vr-v${hiLeft ? '' : ' ok'}" style="stroke-dasharray:${L.toFixed(1)};stroke-dashoffset:${(L * (1 - p)).toFixed(1)}"/></svg>`
+    + `<b>${done}/${total}</b>${hiLeft ? `<em>필수 ${hiLeft} 남음</em>` : (total && done === total ? '<em class="ok">모두 확인</em>' : '')}</span>`;
+}
+
+// ── 업체 연혁 ── 허가일·설립일·보험 성립일·대기배출 설치일·회수일은 리포트에 흩어져 있다.
+// 한 줄에 모으면 '허가가 설립보다 앞섬', '부채가 는 해에 공장을 새로 엶' 같은 관계가 보인다.
+function bizEvents(report) {
+  const B = report.basic || [], M = report.meta || {};
+  const bv = (k) => { const x = B.find((y) => y.key === k); return x && x.value ? String(x.value) : ''; };
+  const dOf = (t) => { const m = String(t || '').match(/((?:19|20)\d{2})[-.](\d{2})(?:[-.](\d{2}))?/); return m ? `${m[1]}-${m[2]}` : null; };
+  const ev = [];
+  const push = (d, label, kind) => { if (d && !ev.some((e) => e.d === d && e.label === label)) ev.push({ d, label, kind }); };
+  push(dOf(bv('제조업 등록')), '제조업 허가', 'lic');
+  push(dOf(bv('설립일 / 등록일')), '법인 설립', 'corp');
+  push(dOf(bv('책임판매업 등록')), '책임판매업', 'sale');
+  const W = M.workforce;
+  (W && W.sites ? W.sites : []).filter((x) => x.atSite && x.est).forEach((x) => {
+    const gu = (String(x.addr).match(/([가-힣]+(?:구|군))\s/) || String(x.addr).match(/([가-힣]+시)\s/) || [])[1] || '';
+    push(dOf(x.est), `${gu} 제조소`.trim(), 'site');
+  });
+  const A = M.air;
+  (A && A.rows ? A.rows : []).filter((r) => r.atSite && r.permit).forEach((r) => push(dOf(r.permit), `대기배출 ${r.kind || ''}`.trim(), 'air'));
+  (report.recalls || []).slice(0, 3).forEach((r) => push(dOf(r.date), '회수·판매중지', 'recall'));
+  ev.sort((a, b) => a.d.localeCompare(b.d));
+  return ev.slice(-8);
+}
+function timelineSvg(ev, w = 640) {
+  if (ev.length < 2) return '';
+  const y0 = Number(ev[0].d.slice(0, 4)), y1 = Math.max(new Date().getFullYear(), Number(ev[ev.length - 1].d.slice(0, 4)));
+  const span = Math.max(1, (y1 + 1) - y0);
+  const pad = 26, H = 164, base = 76;
+  const x = (d) => pad + (w - 2 * pad) * ((Number(d.slice(0, 4)) + (Number(d.slice(5, 7)) - 1) / 12 - y0) / span);
+  const step = span > 12 ? 4 : span > 6 ? 2 : 1;
+  let g = `<svg class="bt-svg" viewBox="0 0 ${w} ${H}" role="img" aria-label="${esc(ev.map((e) => `${e.d} ${e.label}`).join(', '))}">`;
+  g += `<line x1="${pad}" y1="${base}" x2="${w - pad}" y2="${base}" class="bt-axis"/>`;
+  for (let y = y0; y <= y1 + 1; y += step) {
+    const xx = pad + (w - 2 * pad) * ((y - y0) / span);
+    g += `<text x="${xx.toFixed(1)}" y="${base + 15}" class="bt-yr" text-anchor="middle">${y}</text>`;
+  }
+  // 이름표 자리 네 곳(위 가까이·아래 가까이·위 멀리·아래 멀리) — 앞 이름표와 충분히 떨어진 첫 자리,
+  // 없으면 가장 멀리 떨어진 자리에 놓는다. 가까운 사건 두 개(예: 같은 해 11·12월)가 겹치지 않게.
+  const slots = [['up', 0], ['dn', 0], ['up', 1], ['dn', 1]];
+  const lastX = new Map(slots.map((sl) => [sl.join(), -999]));
+  const MIN = 100;
+  ev.forEach((e, i) => {
+    const xx = x(e.d);
+    const order = i % 2 ? [slots[1], slots[0], slots[3], slots[2]] : slots;
+    let pick = order.find((sl) => xx - lastX.get(sl.join()) >= MIN);
+    if (!pick) pick = order.reduce((a2, b2) => ((xx - lastX.get(b2.join())) > (xx - lastX.get(a2.join())) ? b2 : a2));
+    lastX.set(pick.join(), xx);
+    const [side, far] = pick;
+    const ly = side === 'up' ? base - 24 - far * 30 : base + 34 + far * 30;   // 이름 줄
+    const dy = side === 'up' ? ly - 12 : ly + 12;                             // 날짜 줄
+    const anchor = xx < 70 ? 'start' : xx > w - 70 ? 'end' : 'middle';
+    g += `<line x1="${xx.toFixed(1)}" y1="${base}" x2="${xx.toFixed(1)}" y2="${side === 'up' ? ly + 5 : ly - 13}" class="bt-stem"/>`;
+    g += `<circle cx="${xx.toFixed(1)}" cy="${base}" r="${e.kind === 'recall' ? 6 : 5}" class="bt-dot bt-${e.kind}" style="--i:${i}"/>`;
+    g += `<text x="${xx.toFixed(1)}" y="${ly}" class="bt-l" text-anchor="${anchor}">${esc(e.label)}</text>`;
+    g += `<text x="${xx.toFixed(1)}" y="${dy}" class="bt-d" text-anchor="${anchor}">${esc(e.d)}</text>`;
+  });
+  return g + '</svg>';
+}
+// 연혁에서 읽히는 이상 — 한 줄로
+function bizEventNote(ev) {
+  const lic = ev.find((e) => e.kind === 'lic'), corp = ev.find((e) => e.kind === 'corp');
+  if (lic && corp) {
+    const gap = Number(corp.d.slice(0, 4)) - Number(lic.d.slice(0, 4));
+    if (gap >= 1) return `제조업 허가(${lic.d})가 법인 설립(${corp.d})보다 ${gap}년 앞섭니다 — 개인사업자 시절 허가를 넘겨받았는지(허가 승계) 확인하세요.`;
+    if (gap <= -5) return `법인 설립 ${-gap}년 뒤에 화장품 제조업 허가를 받았습니다 — 다른 업종에서 들어온 경우라 화장품 생산 경력을 확인하세요.`;
+  }
+  const sites = ev.filter((e) => e.kind === 'site');
+  const recent = sites.filter((e) => new Date().getFullYear() - Number(e.d.slice(0, 4)) <= 2);
+  if (recent.length) return `${recent.map((e) => e.label).join('·')}가 최근 2년 안에 생겼습니다 — 신규 라인의 시생산·수율 이력을 확인하세요.`;
+  return '';
+}
+function bizTimelineBlock(report) {
+  const ev = bizEvents(report);
+  if (ev.length < 2) return null;
+  const b = el('div', 'block full cat-basic btl');
+  const note = bizEventNote(ev);
+  b.innerHTML = `<h3>업체 연혁<span class="cnt">허가·설립·제조소·배출시설·회수 ${ev.length}건</span></h3>`
+    + `<div class="bt-wrap">${timelineSvg(ev)}</div>`
+    + (note ? `<p class="bt-note">${esc(note)}</p>` : '');
+  return b;
+}
+
+// ── 인쇄 첫 장(시안 E · 연혁 스토리) ──
+// 화면에는 보이지 않고, 인쇄·PDF 저장 때 첫 장으로 나온다. 둘째 장부터는 지금 리포트 그대로.
+function printSummary(report) {
+  const m = report.meta || {}, Q = qualityGrade(report);
+  const B = report.basic || [], C = report.capacity || [];
+  const bv = (k) => { const x = B.find((y) => y.key === k); return x && x.value ? String(x.value) : ''; };
+  const cv = (k) => { const x = C.find((y) => y.key === k); return x && x.value ? String(x.value) : ''; };
+  const name = m.vendor_name || '';
+  const hist = (report.finance_history || []).filter((d) => d.revenue != null);
+  const off = hist.filter((d) => d.src !== 'ext');
+  const W = m.workforce, MP = m.manpower || {};
+  const ev = bizEvents(report);
+  const rng = (R) => (!R ? '' : R.one ? `${R.lo}명` : `${R.lo}~${R.hi}명`);
+  const curY = new Date().getFullYear();
+
+  // 한 문장 요약 — 자료에서 가장 눈에 띄는 변화 두 가지를 이어 붙인다
+  const last = String(name).replace(/[^가-힣]/g, '').slice(-1);
+  const josa = last ? (((last.charCodeAt(0) - 0xac00) % 28) ? '은' : '는') : '은(는)';
+  let c1 = '';
+  if (off.length >= 3) {
+    const f = off[0], l = off[off.length - 1], r = f.revenue ? l.revenue / f.revenue : 1, yrs = l.year - f.year;
+    c1 = r >= 2.8 ? `${yrs}년 사이 매출이 ${Math.round(r)}배로 늘었고`
+      : r >= 1.8 ? `${yrs}년 사이 매출이 두 배가 됐고`
+        : r <= 0.7 ? `${yrs}년 사이 매출이 ${Math.round((1 - r) * 100)}% 줄었고`
+          : `매출 ${l.revenue}억 규모로 ${r > 1.1 ? '완만하게 늘고 있고' : r < 0.9 ? '조금 줄었고' : '제자리이고'}`;
+  } else if (W && W.mfgSiteN) c1 = `제조소에서 ${rng(W.mfgR)}이 일하고`;
+  const newSite = ev.filter((e) => e.kind === 'site' && curY - Number(e.d.slice(0, 4)) <= 2).pop();
+  const rcN = (report.recalls || []).filter((r) => recentYears(r.date, 3)).length;
+  const fh = report.finance_health;
+  const c2 = newSite ? `${newSite.d.slice(0, 4)}년에 ${newSite.label}를 새로 열었습니다`
+    : rcN ? `최근 3년 회수·판매중지가 ${rcN}건 있습니다`
+      : bv('CGMP 적합업소') || cv('CGMP 적합업소') ? 'CGMP 적합 업체입니다'
+        : fh && fh.debtRatio > 200 ? `부채비율이 ${fh.debtRatio}%입니다`
+          : `종합판정은 ${Q.grade === 'D' ? '검토불가' : Q.grade}입니다`;
+  const head = `${name}${josa} ${c1 ? `${c1}, ${c2}` : c2}`;
+
+  // 매출 막대(최근 6개년, 외부 값은 점선)
+  const hs = hist.slice(-6);
+  let revSvg = '';
+  if (hs.length >= 2) {
+    const mx = Math.max(...hs.map((d) => d.revenue), 1), bw = 30, gap = 18, H = 100;
+    const T = 14;   // 가장 높은 막대 위 숫자 자리
+    revSvg = `<svg viewBox="0 0 ${hs.length * (bw + gap)} ${H + T + 26}" role="img" aria-label="연도별 매출">`
+      + hs.map((d, i) => {
+        const h = Math.max(2, (d.revenue / mx) * H), xx = i * (bw + gap), ext = d.src === 'ext';
+        return `<rect x="${xx}" y="${T + H - h}" width="${bw}" height="${h}" class="${ext ? 'ps-ext' : i === hs.length - 1 || (hs[i + 1] && hs[i + 1].src === 'ext' && !ext) ? 'ps-now' : 'ps-bar'}"/>`
+          + `<text x="${xx + bw / 2}" y="${T + H - h - 4}" text-anchor="middle" class="ps-v">${d.revenue}${ext ? '*' : ''}</text>`
+          + `<text x="${xx + bw / 2}" y="${T + H + 14}" text-anchor="middle" class="ps-x">${d.year}</text>`;
+      }).join('') + '</svg>';
+  }
+  // 오른쪽 그래프 — 국민연금 월별 인원, 없으면 부채비율 추세
+  let rightT = '', rightSvg = '';
+  const tr = (MP.trend || []).filter((t) => t.cnt != null);
+  if (tr.length >= 2 && MP.npsBasis !== 'ambiguous') {
+    const lo = Math.min(...tr.map((t) => t.cnt)), hi = Math.max(...tr.map((t) => t.cnt)), sp = Math.max(1, hi - lo);
+    const pts = tr.map((t, i) => `${(6 + (i / (tr.length - 1)) * 200).toFixed(1)},${(90 - ((t.cnt - lo) / sp) * 60).toFixed(1)}`).join(' ');
+    const ym = (v) => String(v).replace(/^(\d{2})(\d{2})(\d{2}).*$/, '$2.$3');
+    rightT = `국민연금 가입자 (최근 ${tr.length}개월)`;
+    rightSvg = `<svg viewBox="0 0 220 120" role="img" aria-label="${tr[0].cnt}명에서 ${tr[tr.length - 1].cnt}명">`
+      + `<line x1="0" y1="100" x2="220" y2="100" class="ps-axis"/><polyline points="${pts}" class="ps-line"/>`
+      + `<text x="2" y="96" class="ps-x">${tr[0].cnt}</text><text x="206" y="${(90 - ((tr[tr.length - 1].cnt - lo) / sp) * 60 - 6).toFixed(1)}" class="ps-v">${tr[tr.length - 1].cnt}</text>`
+      + `<text x="2" y="114" class="ps-x">${ym(tr[0].ym)}</text><text x="186" y="114" class="ps-x">${ym(tr[tr.length - 1].ym)}</text></svg>`;
+  } else if (off.length >= 2) {
+    const dr = off.map((d) => (d.assets != null && d.debt != null && d.assets - d.debt > 0 ? Math.round(d.debt / (d.assets - d.debt) * 100) : null));
+    const vs = dr.filter((v) => v != null);
+    if (vs.length >= 2) {
+      const mx = Math.max(...vs, 420);
+      const pts = dr.map((v, i) => (v == null ? null : `${(6 + (i / (dr.length - 1)) * 200).toFixed(1)},${(96 - (v / mx) * 80).toFixed(1)}`)).filter(Boolean).join(' ');
+      rightT = '부채비율 추세';
+      rightSvg = `<svg viewBox="0 0 220 120" role="img" aria-label="부채비율 추세"><line x1="0" y1="${(96 - (200 / mx) * 80).toFixed(1)}" x2="220" y2="${(96 - (200 / mx) * 80).toFixed(1)}" class="ps-guide"/>`
+        + `<line x1="0" y1="${(96 - (400 / mx) * 80).toFixed(1)}" x2="220" y2="${(96 - (400 / mx) * 80).toFixed(1)}" class="ps-guide bad"/><polyline points="${pts}" class="ps-line dark"/>`
+        + `<text x="2" y="114" class="ps-x">${off[0].year}</text><text x="190" y="114" class="ps-x">${off[off.length - 1].year}</text></svg>`;
+    }
+  }
+  // 사람 · 돈 · 공장
+  const people = W && W.mfgSiteN ? [rng(W.mfgR), `제조소 ${W.mfgSiteN}곳 상시근로자. 회사 전체 ${rng(W.allR)}.`]
+    : cv('제조소 추정 근무 인원') ? [cv('제조소 추정 근무 인원').split('·')[0].trim(), '공개 자료 기준 인원']
+      : ['—', '인원 자료를 찾지 못했습니다'];
+  const lastFin = off[off.length - 1];
+  const money = fh && fh.debtRatio != null
+    ? [`${fh.debtRatio}%`, `${fh.year} 부채비율 · ${fh.level}${lastFin ? ` · 매출 ${lastFin.revenue}억` : ''}`, fh.debtRatio > 400 ? 'bad' : fh.debtRatio > 200 ? 'warn' : '']
+    : lastFin ? [`${lastFin.revenue}억`, `${lastFin.year} 매출`, ''] : ['—', '공시 재무 없음', ''];
+  const arch = m.bld && m.bld.arch ? Math.round(m.bld.arch / 3.305785) : null;
+  const airC = m.air && m.air.rows ? m.air.rows.find((r) => r.atSite && !r.isClosed) : null;
+  const plant = [arch ? `${arch.toLocaleString()}평` : '—',
+    `${arch ? `건축면적 ${Math.round(m.bld.arch).toLocaleString()}㎡` : '면적 미확인'}${airC ? ` · 대기 ${airC.kind || ''}${airC.days ? `, 연 ${airC.days}일` : ''}` : ''}`];
+  const mix = relMix(report);
+  const cut = (t) => { const x2 = String(t).split(/ — |\. /)[0]; return x2.length > 46 ? `${x2.slice(0, 45)}…` : x2; };
+  const asks = buildVisitChecklist(report).filter((i) => i.pri === 'high').slice(0, 2).map((i) => cut(i.text));
+  const d = new Date(m.query_at || Date.now());
+  const sec = document.createElement('section');
+  sec.className = 'psum';
+  sec.setAttribute('aria-hidden', 'true');
+  sec.innerHTML = `<div class="ps-lbl">업체 연혁 · 사전검증 요약 · 종합판정 ${Q.grade === 'D' ? '검토불가' : esc(Q.grade)}</div>`
+    + `<h1 class="ps-h">${esc(head)}</h1>`
+    + `<p class="ps-sub">${[bv('제조업 등록') ? `제조업 허가 ${esc((bv('제조업 등록').match(/(19|20)\d{2}/) || [''])[0])}` : '', bv('설립일 / 등록일') ? `법인 설립 ${esc(bv('설립일 / 등록일').slice(0, 4))}` : '', W && W.mfgSiteN ? `제조소 ${W.mfgSiteN}곳` : '', bv('사업자등록번호') ? `사업자 ${esc(bv('사업자등록번호'))}` : ''].filter(Boolean).join(' · ')}</p>`
+    + (ev.length >= 2 ? `<div class="ps-tl">${timelineSvg(ev, 680)}</div>` : '')
+    + `<div class="ps-charts">`
+    + (revSvg ? `<div><h4>매출 (억 원)${hs.some((x) => x.src === 'ext') ? ' <small>· *는 외부 사이트 값</small>' : ''}</h4>${revSvg}</div>` : '')
+    + (rightSvg ? `<div><h4>${rightT}</h4>${rightSvg}</div>` : '')
+    + `</div>`
+    + `<div class="ps-row3">`
+    + `<div><h4>사람</h4><b>${esc(people[0])}</b><p>${esc(people[1])}</p></div>`
+    + `<div><h4>돈</h4><b class="${money[2]}">${esc(money[0])}</b><p>${esc(money[1])}</p></div>`
+    + `<div><h4>공장</h4><b>${esc(plant[0])}</b><p>${esc(plant[1])}</p></div>`
+    + `</div>`
+    + `<div class="ps-rel"><span>자료 신뢰도</span><span class="ps-relbar">${['A', 'B', 'C', 'D'].map((g) => (mix.c[g] ? `<i class="rm-${g}" style="flex:${mix.c[g]}"></i>` : '')).join('')}</span><small>공식 ${mix.c.A} · 간접 ${mix.c.B}${mix.c.C ? ` · 추정 ${mix.c.C}` : ''} · 공백 ${mix.c.D}</small></div>`
+    + (asks.length ? `<p class="ps-q">방문하면 먼저 물어볼 것 — ${asks.map(esc).join(' / ')}</p>` : '')
+    + `<div class="ps-foot"><span>조회 ${d.toLocaleDateString('ko-KR')} · 금융위·식약처·의약품안전나라·국세청·근로복지공단·국민연금·국토부 공개 자료</span><span>요약 · 상세는 다음 장부터</span></div>`;
+  return sec;
+}
+
 function renderVerdict(report) {
   const m = report.meta || {};
   const Q = qualityGrade(report);
@@ -4682,11 +4967,13 @@ function renderVerdict(report) {
 
   const box = el('div', 'verdict v-' + v.tone);
   let html = `<div class="vd-head">`
-    + `<button type="button" class="vd-badge badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기"><b>${g === 'D' ? '불가' : esc(g)}</b><span>종합판정 ⓘ</span></button>`
+    + `<button type="button" class="vd-badge vd-gz badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기">${gaugeSvg(g)}<b>${g === 'D' ? '불가' : esc(g)}</b><span>종합판정 ⓘ</span></button>`
     + `<div class="vd-title"><h2>${esc(m.vendor_name || '')}</h2>`
     + `<div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div>`
     + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
-    + `<div class="vd-side"><div class="vd-verd">${esc(v.label)}<small class="vd-qwhy">${esc(Q.why)}</small></div>`
+    + `<div class="vd-side"><div class="vd-verd">${esc(v.label)}<small class="vd-qwhy">${esc(Q.why)}</small>`
+    + (Q.toA && Q.toA.length && g !== 'D' ? `<small class="vd-toa">A까지 <b>${esc(Q.toA.slice(0, 3).join(' · '))}</b></small>` : '')
+    + `</div>`
     + (m.live ? `<button type="button" class="sv-btn" data-act="save-firm" data-sv-key="${esc(svKey(m.vendor_name || ''))}" data-sv-kind="report">☆ 저장</button>` : '')
     + '</div></div>';
   // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
@@ -4773,7 +5060,7 @@ function renderVerdict(report) {
       dist ? distSub(dist) : ''],
   ];
   html += `<div class="vd-chips">` + chips.map(([k, val, t, sub, href, act]) => {
-    const inner = `<i>${esc(k)}</i><b>${esc(val)}${sub ? `<small>${esc(sub)}</small>` : ''}</b>`;
+    const inner = `<i>${esc(k)}</i><b>${cuWrap(val)}${sub ? `<small>${esc(sub)}</small>` : ''}</b>`;
     // 회수 이력은 건수만 보여주고 끝내면 안 된다 — 무슨 일이 있었는지로 바로 갈 수 있어야 한다.
     if (act) return `<button type="button" class="vch vch-${t} vch-link vch-btn" data-act="${esc(act)}" aria-expanded="false" aria-controls="vdSites">${inner}</button>`;
     return href
@@ -5207,6 +5494,12 @@ function renderVisitChecklist(report) {
       const row = cb.closest('.vr');
       toggleChecked(vid, row.dataset.key, cb.checked);
       row.classList.toggle('vc-done', cb.checked);
+      const ring = document.querySelector('details.rsec[data-fold="check"] [data-vc-ring]');
+      if (ring) {
+        const all = [...box.querySelectorAll('.vc-tbl .vr-ck')];
+        const hiLeft = all.filter((c) => !c.checked && c.closest('.vr').querySelector('.vc-pri-high')).length;
+        ring.outerHTML = vcRingHtml(all.filter((c) => c.checked).length, all.length, hiLeft);
+      }
     });
   });
   // 메모 저장 — 입력하다 말고 다른 데를 눌러도 남아야 하므로 포커스가 빠질 때 저장한다.
@@ -6020,7 +6313,8 @@ function render(report, opts = {}) {
   root.appendChild(el('div', 'metaline',
     `조회 <b>${esc(qDate)}</b> · 스냅샷 v${m.version} · 출처 ${m.sources_used.length}종 · `
     + `수집 필드 ${allFields.length}${gapTotal ? ` · 공백 <b class="warn">${gapTotal}</b>` : ''}`
-    + `${report.risk_flags.length ? ` · 리스크 <b class="warn">${report.risk_flags.length}</b>` : ''}`));
+    + `${report.risk_flags.length ? ` · 리스크 <b class="warn">${report.risk_flags.length}</b>` : ''}`
+    + relMixHtml(report)));
   // 먼저 그린 리포트 — 아직 안 온 소스를 알리고, 도착하면 자동으로 다시 그린다
   if (report._late && report._pendingKeys && report._pendingKeys.length) {
     root.appendChild(el('div', 'pendbar',
@@ -6031,6 +6325,8 @@ function render(report, opts = {}) {
   // 기업 기본정보 · 생산역량 · 재무 — 대시보드 바로 아래, '방문 전 확인필요' 위에 둔다.
   // 확인사항을 읽기 전에 어떤 회사인지(규모·인원·재무)를 먼저 보게 하려는 것이다.
   const core = el('div', 'blocks core-blocks');
+  const btl = m.live ? bizTimelineBlock(report) : null;
+  if (btl) core.appendChild(btl);
   core.appendChild(block('기업 기본정보', '', visible(report.basic), 'basic'));
   // 공장 면적은 '공장 면적' 탭에서 자세히 본다(실데이터일 때). 리포트에는 칸을 두지 않는다.
   const areaTab = renderAreaTab(report);
@@ -6054,7 +6350,11 @@ function render(report, opts = {}) {
       vc.id = 'visitChecklist';
       const its = buildVisitChecklist(report);
       const hiN = its.filter((i) => i.pri === 'high').length;
-      root.appendChild(foldSec('check', '방문 전 확인필요', `확인사항 ${its.length}건${hiN ? ` · 필수 ${hiN}` : ''}`, vc));
+      // 펼치지 않고도 얼마나 확인했는지 보이게 — 접힌 머리에 진행 링을 단다
+      const cks = [...vc.querySelectorAll('.vc-tbl .vr-ck')];
+      const doneN = cks.filter((c) => c.checked).length;
+      const hiLeft = cks.filter((c) => !c.checked && c.closest('.vr').querySelector('.vc-pri-high')).length;
+      root.appendChild(foldSec('check', '방문 전 확인필요', `확인사항 ${its.length}건${hiN ? ` · 필수 ${hiN}` : ''} ${vcRingHtml(doneN, cks.length, hiLeft)}`, vc));
     }
   }
 
@@ -6252,7 +6552,10 @@ function render(report, opts = {}) {
   // 조회 리포트 저장 — 새로고침/재방문 시 복원용 (새 조회 전까지 유지)
   saveLastReport(report);
 
+  // 인쇄 첫 장 요약(화면에는 숨김)
+  if (m.live) { try { root.prepend(printSummary(report)); } catch { /* 요약을 못 만들어도 리포트는 그대로 인쇄된다 */ } }
   if (!opts.noScroll) root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  countUpIn(root);
   hookLateReport(report);
 }
 
