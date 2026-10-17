@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 199;
+const BUILD = 200;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4767,50 +4767,73 @@ function bizEvents(report) {
   push(dOf(bv('책임판매업 등록')), '책임판매업', 'sale');
   const W = M.workforce;
   (W && W.sites ? W.sites : []).filter((x) => x.atSite && x.est).forEach((x) => {
-    const gu = (String(x.addr).match(/([가-힣]+(?:구|군))\s/) || String(x.addr).match(/([가-힣]+시)\s/) || [])[1] || '';
+    const gu = (String(x.addr).match(/([가-힣]+(?:구|군))\s/) || String(x.addr).match(/([가-힣]+(?:읍|면))\s/) || String(x.addr).match(/([가-힣]+시)\s/) || [])[1] || '';
     push(dOf(x.est), `${gu} 제조소`.trim(), 'site');
   });
   const A = M.air;
   (A && A.rows ? A.rows : []).filter((r) => r.atSite && r.permit).forEach((r) => push(dOf(r.permit), `대기배출 ${r.kind || ''}`.trim(), 'air'));
   (report.recalls || []).slice(0, 3).forEach((r) => push(dOf(r.date), '회수·판매중지', 'recall'));
   ev.sort((a, b) => a.d.localeCompare(b.d));
-  return ev.slice(-8);
+  return ev;
 }
-function timelineSvg(ev, w = 640) {
+// 피쉬본 연혁 — 사건을 시간 비례가 아니라 '순서대로 같은 간격'으로 놓는다.
+// 시간 비례로 그리면 한 해에 몰린 사건(한국콜마: 2012년에 허가·설립·제조소 세 곳)이 한 점에 겹치고,
+// 몇십 년 전 기록 하나 때문에 나머지가 한쪽으로 쏠린다. 같은 달 사건은 한 가지에 묶고,
+// 간격이 2년 이상 벌어진 곳에는 '+N년'을 적어 건너뛴 시간을 알린다.
+function timelineSvg(ev, w0 = 640) {
   if (ev.length < 2) return '';
-  const y0 = Number(ev[0].d.slice(0, 4)), y1 = Math.max(new Date().getFullYear(), Number(ev[ev.length - 1].d.slice(0, 4)));
-  const span = Math.max(1, (y1 + 1) - y0);
-  const pad = 26, H = 164, base = 76;
-  const x = (d) => pad + (w - 2 * pad) * ((Number(d.slice(0, 4)) + (Number(d.slice(5, 7)) - 1) / 12 - y0) / span);
-  const step = span > 12 ? 4 : span > 6 ? 2 : 1;
-  let g = `<svg class="bt-svg" viewBox="0 0 ${w} ${H}" role="img" aria-label="${esc(ev.map((e) => `${e.d} ${e.label}`).join(', '))}">`;
-  g += `<line x1="${pad}" y1="${base}" x2="${w - pad}" y2="${base}" class="bt-axis"/>`;
-  for (let y = y0; y <= y1 + 1; y += step) {
-    const xx = pad + (w - 2 * pad) * ((y - y0) / span);
-    g += `<text x="${xx.toFixed(1)}" y="${base + 15}" class="bt-yr" text-anchor="middle">${y}</text>`;
-  }
-  // 이름표 자리 네 곳(위 가까이·아래 가까이·위 멀리·아래 멀리) — 앞 이름표와 충분히 떨어진 첫 자리,
-  // 없으면 가장 멀리 떨어진 자리에 놓는다. 가까운 사건 두 개(예: 같은 해 11·12월)가 겹치지 않게.
-  const slots = [['up', 0], ['dn', 0], ['up', 1], ['dn', 1]];
-  const lastX = new Map(slots.map((sl) => [sl.join(), -999]));
-  const MIN = 100;
-  ev.forEach((e, i) => {
-    const xx = x(e.d);
-    const order = i % 2 ? [slots[1], slots[0], slots[3], slots[2]] : slots;
-    let pick = order.find((sl) => xx - lastX.get(sl.join()) >= MIN);
-    if (!pick) pick = order.reduce((a2, b2) => ((xx - lastX.get(b2.join())) > (xx - lastX.get(a2.join())) ? b2 : a2));
-    lastX.set(pick.join(), xx);
-    const [side, far] = pick;
-    const ly = side === 'up' ? base - 24 - far * 30 : base + 34 + far * 30;   // 이름 줄
-    const dy = side === 'up' ? ly - 12 : ly + 12;                             // 날짜 줄
-    const anchor = xx < 70 ? 'start' : xx > w - 70 ? 'end' : 'middle';
-    g += `<line x1="${xx.toFixed(1)}" y1="${base}" x2="${xx.toFixed(1)}" y2="${side === 'up' ? ly + 5 : ly - 13}" class="bt-stem"/>`;
-    g += `<circle cx="${xx.toFixed(1)}" cy="${base}" r="${e.kind === 'recall' ? 6 : 5}" class="bt-dot bt-${e.kind}" style="--i:${i}"/>`;
-    g += `<text x="${xx.toFixed(1)}" y="${ly}" class="bt-l" text-anchor="${anchor}">${esc(e.label)}</text>`;
-    g += `<text x="${xx.toFixed(1)}" y="${dy}" class="bt-d" text-anchor="${anchor}">${esc(e.d)}</text>`;
+  const groups = [];
+  ev.forEach((e) => { const g = groups[groups.length - 1]; if (g && g.d === e.d) g.items.push(e); else groups.push({ d: e.d, items: [e] }); });
+  if (groups.length < 2 && groups[0].items.length < 2) return '';
+  const MAXG = 12;
+  const hidden = groups.length > MAXG ? groups.slice(0, groups.length - MAXG).reduce((n, g) => n + g.items.length, 0) : 0;
+  const gs = groups.slice(-MAXG);
+  const n = gs.length, STEP = 92, MAXL = 4;
+  const padL = hidden ? 96 : 62, padR = 44;   // 첫·끝 가지 이름표가 잘리지 않을 만큼
+  const w = Math.max(w0, padL + padR + (n - 1) * STEP + 20);
+  const step = n > 1 ? (w - padL - padR) / (n - 1) : 0;
+  const lines = Math.min(MAXL + 1, Math.max(...gs.map((g) => g.items.length)));
+  const BONE = 30, LH = 13;
+  const half = BONE + 14 + LH * lines + 6;
+  const H = half * 2 + 4, base = half + 2;
+  const cut = (t) => (t.length > 9 ? `${t.slice(0, 8)}…` : t);
+  // 좁은 화면에서 글자가 깨알처럼 줄지 않게 최소 폭을 둔다(넘치면 칸 안에서 가로로 민다)
+  let g = `<svg class="bt-svg bt-fish" viewBox="0 0 ${w} ${H}" style="min-width:${Math.round(w * 0.78)}px" role="img" aria-label="${esc(ev.map((e) => `${e.d} ${e.label}`).join(', '))}">`;
+  // 등뼈와 머리(오른쪽 = 지금)
+  g += `<line x1="${padL - 14}" y1="${base}" x2="${w - padR + 22}" y2="${base}" class="bt-axis"/>`;
+  g += `<path d="M${w - padR + 30} ${base} l-11 -6 v12 z" class="bt-head"/>`;
+  g += `<text x="${w - padR + 30}" y="${base + 16}" text-anchor="end" class="bt-yr">지금</text>`;
+  if (hidden) g += `<text x="${padL - 66}" y="${base - 6}" text-anchor="start" class="bt-yr">이전 ${hidden}건</text>`;
+  gs.forEach((grp, i) => {
+    const x = padL + i * step;
+    const up = i % 2 === 0;
+    const bx = x - 12, by = up ? base - BONE : base + BONE;   // 가지 끝(꼬리 쪽으로 비스듬히)
+    const kinds = [...new Set(grp.items.map((it) => it.kind))];
+    const kind = kinds.length === 1 ? kinds[0] : 'mix';
+    // 앞 사건과 2년 이상 떨어졌으면 등뼈 위에 건너뛴 시간을 적는다
+    if (i > 0) {
+      const gap = Number(grp.d.slice(0, 4)) - Number(gs[i - 1].d.slice(0, 4));
+      if (gap >= 2) {
+        const mx = x - step / 2;
+        g += `<path d="M${(mx - 4).toFixed(1)} ${base + 5} l4 -10 M${(mx + 1).toFixed(1)} ${base + 5} l4 -10" class="bt-brk"/>`;
+        g += `<text x="${mx.toFixed(1)}" y="${up ? base + 17 : base - 9}" text-anchor="middle" class="bt-gap">+${gap}년</text>`;
+      }
+    }
+    g += `<line x1="${x.toFixed(1)}" y1="${base}" x2="${bx.toFixed(1)}" y2="${by}" class="bt-bone"/>`;
+    g += `<circle cx="${x.toFixed(1)}" cy="${base}" r="5" class="bt-dot bt-${kind}" style="--i:${i}"/>`;
+    // 날짜 → 사건들(위쪽 가지는 아래에서 위로 쌓고, 아래쪽 가지는 위에서 아래로)
+    const shown = grp.items.slice(0, MAXL), more = grp.items.length - shown.length;
+    const rows = [`<tspan class="bt-d">${esc(grp.d)}</tspan>`, ...shown.map((it) => `<tspan class="bt-l bt-k-${it.kind}">${esc(cut(it.label))}</tspan>`)];
+    if (more) rows.push(`<tspan class="bt-d">외 ${more}건</tspan>`);
+    const ordered = up ? rows.slice().reverse() : rows;
+    const y0 = up ? by - 6 - (ordered.length - 1) * LH : by + 14;
+    g += `<text x="${bx.toFixed(1)}" text-anchor="middle">`
+      + ordered.map((r2, k) => r2.replace('<tspan ', `<tspan x="${bx.toFixed(1)}" y="${(y0 + k * LH).toFixed(1)}" `)).join('')
+      + '</text>';
   });
   return g + '</svg>';
 }
+
 // 연혁에서 읽히는 이상 — 한 줄로
 function bizEventNote(ev) {
   const lic = ev.find((e) => e.kind === 'lic'), corp = ev.find((e) => e.kind === 'corp');
@@ -4830,7 +4853,7 @@ function bizTimelineBlock(report) {
   const b = el('div', 'block full cat-basic btl');
   const note = bizEventNote(ev);
   b.innerHTML = `<h3>업체 연혁<span class="cnt">허가·설립·제조소·배출시설·회수 ${ev.length}건</span></h3>`
-    + `<div class="bt-wrap">${timelineSvg(ev)}</div>`
+    + `<div class="bt-wrap">${timelineSvg(ev)}</div><div class="bt-hint">← 옆으로 밀어 전체 보기 →</div>`
     + (note ? `<p class="bt-note">${esc(note)}</p>` : '');
   return b;
 }
