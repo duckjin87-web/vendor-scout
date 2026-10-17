@@ -1,0 +1,39 @@
+name: Diagnose raw API record
+
+# data.go.kr API 하나의 응답 레코드 모양(필드 이름·값)을 본다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      url: { description: '엔드포인트(serviceKey 제외)', required: true, type: string }
+      query: { description: '추가 파라미터(a=1&b=2)', required: false, type: string }
+      grep: { description: '이 글자를 품은 레코드만', required: false, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          URL: ${{ inputs.url }}
+          Q: ${{ inputs.query }}
+          G: ${{ inputs.grep }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3800));
+          const u = `${process.env.URL}?serviceKey=${encodeURIComponent(process.env.KEY)}&pageNo=1&numOfRows=500&type=json&resultType=json${process.env.Q ? '&' + process.env.Q : ''}`;
+          const t = await (await fetch(u, { signal: AbortSignal.timeout(30000) })).text();
+          let j; try { j = JSON.parse(t); } catch { n('JSON 아님: ' + t.slice(0, 300)); process.exit(0); }
+          const body = j.body || (j.response && j.response.body) || {};
+          let it = body.items; if (it && it.item) it = it.item; it = Array.isArray(it) ? it : (it ? [it] : []);
+          it = it.map((x) => x.item || x);
+          n(`total ${body.totalCount} · 받은 ${it.length} · 키: ${Object.keys(it[0] || {}).join(',')}`);
+          const hit = process.env.G ? it.filter((x) => JSON.stringify(x).includes(process.env.G)) : it;
+          hit.slice(0, 4).forEach((x, i) => n(`[${i + 1}] ` + Object.entries(x).map(([k, v]) => `${k}=${v}`).join(' | ')));
+          JS
+          node d.mjs
