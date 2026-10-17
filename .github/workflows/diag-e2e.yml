@@ -1,0 +1,83 @@
+name: Diagnose end-to-end lookup
+
+# 배포된 사이트에서 실제 브라우저로 업체를 조회해 본다 — 걸린 시간, 판정, 핵심 칸, 기관별 성공/실패, 화면 오류.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string }
+      names: { description: '업체명(쉼표 구분)', required: true, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Check
+        env:
+          SITE: ${{ inputs.site }}
+          NAMES: ${{ inputs.names }}
+        run: |
+          npm i -s playwright@1.56.1 >/dev/null 2>&1 && npx -y playwright@1.56.1 install --with-deps chromium >/dev/null 2>&1
+          cat > d.mjs <<'JS'
+          import { chromium } from 'playwright';
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3900));
+          const b = await chromium.launch();
+          const base = process.env.SITE.replace(/\/$/, '');
+          for (const nm of process.env.NAMES.split(',').map((s) => s.trim()).filter(Boolean)) {
+            const page = await b.newPage({ viewport: { width: 1280, height: 900 } });
+            const errs = [];
+            page.on('pageerror', (e) => errs.push('JS ' + e.message.slice(0, 120)));
+            page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 100)); });
+            try {
+              await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 60000 });
+              await page.evaluate((p) => localStorage.setItem('vs_proxy', p), `${base}/api/proxy`);
+              await page.reload({ waitUntil: 'domcontentloaded' });
+              await page.waitForTimeout(1500);
+              const r = await page.evaluate(async (nm) => {
+                const t0 = performance.now();
+                let x;
+                try { x = await liveLookup(nm); } catch (e) { return { err: String(e.message || e) }; }
+                const t1 = performance.now();
+                if (x.candidates) {
+                  const pick = x.candidates.find((c) => c.mfds) || x.candidates[0];
+                  const rep = await (pick.mfds ? finishLiveMfds(nm, pick) : finishLive(nm, pick));
+                  x = { report: rep, cands: x.candidates.length, picked: `${pick.corpNm} ${pick.addr || ''}`.slice(0, 50) };
+                }
+                const first = performance.now();
+                let rep = x.report;
+                if (rep && rep._late) { const fin = await rep._late; if (fin) rep = fin; }
+                const full = performance.now();
+                render(rep, { noScroll: true });
+                const B = rep.basic || [], C = rep.capacity || [];
+                const v = (arr, k) => { const f = arr.find((y) => y.key === k); return f ? (f.value == null ? '—' : String(f.value).slice(0, 60)) : '(없음)'; };
+                const st = (rep.meta.src_status || []).filter(Boolean);
+                const ev = typeof bizEvents === 'function' ? bizEvents(rep) : [];
+                return {
+                  sec: `${((t1 - t0) / 1000).toFixed(1)}s 후보 · ${((first - t0) / 1000).toFixed(1)}s 첫화면 · ${((full - t0) / 1000).toFixed(1)}s 완료`,
+                  cands: x.cands, picked: x.picked, grade: qualityGrade(rep).grade, why: qualityGrade(rep).why,
+                  f: ['제조업 등록', '사업자등록번호', '공장/제조소 소재지'].map((k) => `${k}=${v(B, k)}`).join(' ‖ ')
+                    + ' ‖ ' + ['제조소 추정 근무 인원', '대기 배출시설 신고', 'CGMP 적합업소', '공장 건축면적 (건평)', '방문 이동거리'].map((k) => `${k}=${v(C, k)}`).join(' ‖ '),
+                  ok: st.filter((s) => s.ok).map((s) => s.name).join(','),
+                  fail: st.filter((s) => !s.ok).map((s) => `${s.name}(${String(s.detail || '').slice(0, 40)})`).join(' / '),
+                  ev: ev.map((e) => `${e.d} ${e.label}`).join(' | ').slice(0, 600),
+                  checks: (typeof buildVisitChecklist === 'function' ? buildVisitChecklist(rep) : []).length,
+                };
+              }, nm);
+              n(`[${nm}] ${r.err ? '실패 ' + r.err : `${r.sec}${r.cands ? ` · 후보 ${r.cands}건 → ${r.picked}` : ''} · 판정 ${r.grade} (${r.why})`}`);
+              if (!r.err) {
+                n(`[${nm}] 칸: ${r.f}`);
+                n(`[${nm}] 성공: ${r.ok}`);
+                n(`[${nm}] 실패/없음: ${r.fail || '없음'} · 확인필요 ${r.checks}건`);
+                n(`[${nm}] 연혁: ${r.ev}`);
+              }
+              if (errs.length) n(`[${nm}] 화면 오류: ${[...new Set(errs)].slice(0, 5).join(' | ')}`);
+            } catch (e) { n(`[${nm}] 실행 실패 ${e.message}`); }
+            await page.close();
+          }
+          await b.close();
+          JS
+          node d.mjs
