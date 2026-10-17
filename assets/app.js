@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 200;
+const BUILD = 201;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4761,7 +4761,7 @@ function bizEvents(report) {
   const bv = (k) => { const x = B.find((y) => y.key === k); return x && x.value ? String(x.value) : ''; };
   const dOf = (t) => { const m = String(t || '').match(/((?:19|20)\d{2})[-.](\d{2})(?:[-.](\d{2}))?/); return m ? `${m[1]}-${m[2]}` : null; };
   const ev = [];
-  const push = (d, label, kind) => { if (d && !ev.some((e) => e.d === d && e.label === label)) ev.push({ d, label, kind }); };
+  const push = (d, label, kind, extra) => { if (d && !ev.some((e) => e.d === d && e.label === label)) ev.push({ d, label, kind, ...(extra || {}) }); };
   push(dOf(bv('제조업 등록')), '제조업 허가', 'lic');
   push(dOf(bv('설립일 / 등록일')), '법인 설립', 'corp');
   push(dOf(bv('책임판매업 등록')), '책임판매업', 'sale');
@@ -4772,10 +4772,89 @@ function bizEvents(report) {
   });
   const A = M.air;
   (A && A.rows ? A.rows : []).filter((r) => r.atSite && r.permit).forEach((r) => push(dOf(r.permit), `대기배출 ${r.kind || ''}`.trim(), 'air'));
-  (report.recalls || []).slice(0, 3).forEach((r) => push(dOf(r.date), '회수·판매중지', 'recall'));
+  (report.recalls || []).slice(0, 3).forEach((r) => push(dOf(r.date), '회수·판매중지', 'recall', { why: [r.product, r.reason].filter(Boolean).join(' · ') }));
+  // 지금 제조소 주소의 배출시설이 문을 닫았으면 그 날짜에
+  // 같은 주소에 영업 중인 배출시설이 남아 있으면 설비 일부를 정리한 이력일 뿐이다 — 위험으로 세지 않는다
+  const airRows = A && A.rows ? A.rows : [];
+  const rkey = (r) => (typeof roadKeyOf === 'function' ? roadKeyOf(r.addr) : '') || String(r.addr || '').replace(/\s/g, '');
+  airRows.filter((r) => r.atSite && r.isClosed && r.closed).forEach((r) => {
+    const alive = airRows.some((o) => o !== r && o.atSite && !o.isClosed && rkey(o) === rkey(r));
+    push(dOf(r.closed), alive ? '배출시설 일부 폐업' : '배출시설 폐업', alive ? 'air' : 'risk',
+      { why: `${r.addr}${alive ? ' — 같은 주소의 다른 배출시설은 영업 중' : ' — 이 주소에 영업 중인 배출시설이 없습니다'}` });
+  });
+  // 공장등록(산단공) — 등록·변경 시점
+  const MP = M.manpower || {};
+  push(dOf(MP.fctRegDe), '공장등록', 'site');
+
+  // ── 이슈 분석 ── 연혁에는 '생긴 일'뿐 아니라 '나빠진(좋아진) 때'도 있어야 한다
+  const qd = dOf(M.query_at) || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  // ① CGMP — 공개 API에는 판정일이 없다. 기사에 CGMP 획득이 나오면 그 날짜, 아니면 '조회 시점 확인'으로 둔다
+  const C = report.capacity || [];
+  const cgmpOn = C.some((x) => x.key === 'CGMP 적합업소' && x.value);
+  const tl = (report.insights && report.insights.timeline) || [];
+  const cgNews = tl.filter((t) => /CGMP/i.test(`${t.title || ''} ${t.desc || ''}`) && dOf(t.date)).sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
+  if (cgNews) push(dOf(cgNews.date), 'CGMP 기사', 'cgmp', { why: String(cgNews.title || '').slice(0, 60) });
+  else if (cgmpOn) push(qd, 'CGMP 적합', 'cgmp', { dl: `${qd} 확인`, why: '식약처 CGMP 적합업소 명단 등재(판정일은 공개되지 않음)' });
+
+  // ② 재무 — 해마다 찍지 않고 '선을 넘은 해'만. 결산 기준이라 그해 12월에 둔다
+  const fin = (report.finance_history || []).filter((d) => d.src !== 'ext' && d.year);
+  let prevDr = null, prevOp = null, prevRev = null, warned = false, danger = false, impaired = false;
+  fin.forEach((d) => {
+    const at = `${d.year}-12`;
+    const eq = d.assets != null && d.debt != null ? d.assets - d.debt : null;
+    if (eq != null && eq <= 0 && !impaired) { impaired = true; push(at, '자본잠식', 'risk', { why: `자본총계 ${eq}억 — 부채가 자산보다 많습니다` }); }
+    const dr = eq != null && eq > 0 ? Math.round((d.debt / eq) * 100) : null;
+    if (dr != null) {
+      if (dr > 400 && !danger && (prevDr == null || prevDr <= 400)) { danger = true; push(at, `부채비율 ${dr}%`, 'risk', { why: '400% 초과(위험)' }); }
+      else if (dr > 200 && !warned && !danger && (prevDr == null || prevDr <= 200)) { warned = true; push(at, `부채비율 ${dr}%`, 'warn', { why: '200% 초과(주의)' }); }
+      prevDr = dr;
+    }
+    if (d.operatingProfit != null) {
+      if (prevOp != null && prevOp >= 0 && d.operatingProfit < 0) push(at, '영업적자 전환', 'risk', { why: `영업이익 ${prevOp}억 → ${d.operatingProfit}억` });
+      if (prevOp != null && prevOp < 0 && d.operatingProfit >= 0) push(at, '흑자 전환', 'good', { why: `영업이익 ${prevOp}억 → ${d.operatingProfit}억` });
+      prevOp = d.operatingProfit;
+    }
+    if (d.revenue != null && prevRev) {
+      const yoy = Math.round(((d.revenue - prevRev) / prevRev) * 100);
+      if (yoy <= -30) push(at, `매출 ${yoy}%`, 'risk', { why: `${prevRev}억 → ${d.revenue}억` });
+      else if (yoy >= 50) push(at, `매출 +${yoy}%`, 'good', { why: `${prevRev}억 → ${d.revenue}억` });
+    }
+    if (d.revenue != null) prevRev = d.revenue;
+  });
+
+  // ③ 인원 급변 — 국민연금 월별(이 회사 사업장으로 확인된 경우만)
+  const tr = (MP.trend || []).filter((t) => t.cnt != null);
+  if (tr.length >= 2 && MP.npsBasis !== 'ambiguous') {
+    const ymd = (v) => String(v).replace(/^(\d{4})(\d{2}).*$/, '$1-$2');
+    let spot = false;
+    for (let i = 1; i < tr.length; i++) {
+      const a = tr[i - 1].cnt, b2 = tr[i].cnt, dlt = b2 - a;
+      if (dlt <= -Math.max(3, Math.ceil(a * 0.15))) { spot = true; push(ymd(tr[i].ym), `인원 급감 ${dlt}명`, 'risk', { why: `국민연금 가입자 ${a} → ${b2}명(한 달)` }); }
+      else if (dlt >= Math.max(3, Math.ceil(a * 0.2))) { spot = true; push(ymd(tr[i].ym), `인원 급증 +${dlt}명`, 'good', { why: `국민연금 가입자 ${a} → ${b2}명(한 달)` }); }
+    }
+    const f0 = tr[0].cnt, f1 = tr[tr.length - 1].cnt;
+    if (!spot && f0 && (f1 - f0) / f0 <= -0.2) push(ymd(tr[tr.length - 1].ym), `1년 새 ${f1 - f0}명`, 'risk', { why: `국민연금 가입자 ${f0} → ${f1}명` });
+  }
+
+  // ④ 기사 — 나쁜 소식(회수·제재)은 모두, 좋은 소식은 증설·투자·인증만. 같은 달·같은 꼬리표는 하나로
+  const seenNews = new Set();
+  tl.filter((t) => dOf(t.date)).forEach((t) => {
+    const bad = t.tone === 'down';
+    if (!bad && !/증설|투자|인증/.test(t.tag || '')) return;
+    const k = `${dOf(t.date)}|${t.tag}`;
+    if (seenNews.has(k)) return;
+    seenNews.add(k);
+    push(dOf(t.date), `기사·${String(t.tag || '').split('·')[0]}`, bad ? 'risk' : 'news', { why: String(t.title || '').slice(0, 60) });
+  });
+
+  // ⑤ 사업자 상태 — 휴업·폐업이면 조회 시점에
+  const stt = bv('사업자 상태');
+  if (/휴업|폐업/.test(stt)) push(qd, `${stt.match(/휴업|폐업/)[0]} 확인`, 'risk', { dl: `${qd} 국세청`, why: stt });
+
   ev.sort((a, b) => a.d.localeCompare(b.d));
   return ev;
 }
+const BIZ_ISSUE = new Set(['risk', 'warn', 'recall']);
 // 피쉬본 연혁 — 사건을 시간 비례가 아니라 '순서대로 같은 간격'으로 놓는다.
 // 시간 비례로 그리면 한 해에 몰린 사건(한국콜마: 2012년에 허가·설립·제조소 세 곳)이 한 점에 겹치고,
 // 몇십 년 전 기록 하나 때문에 나머지가 한쪽으로 쏠린다. 같은 달 사건은 한 가지에 묶고,
@@ -4809,7 +4888,7 @@ function timelineSvg(ev, w0 = 640) {
     const up = i % 2 === 0;
     const bx = x - 12, by = up ? base - BONE : base + BONE;   // 가지 끝(꼬리 쪽으로 비스듬히)
     const kinds = [...new Set(grp.items.map((it) => it.kind))];
-    const kind = kinds.length === 1 ? kinds[0] : 'mix';
+    const kind = kinds.includes('risk') || kinds.includes('recall') ? 'risk' : kinds.includes('warn') ? 'warn' : kinds.length === 1 ? kinds[0] : 'mix';
     // 앞 사건과 2년 이상 떨어졌으면 등뼈 위에 건너뛴 시간을 적는다
     if (i > 0) {
       const gap = Number(grp.d.slice(0, 4)) - Number(gs[i - 1].d.slice(0, 4));
@@ -4819,11 +4898,12 @@ function timelineSvg(ev, w0 = 640) {
         g += `<text x="${mx.toFixed(1)}" y="${up ? base + 17 : base - 9}" text-anchor="middle" class="bt-gap">+${gap}년</text>`;
       }
     }
-    g += `<line x1="${x.toFixed(1)}" y1="${base}" x2="${bx.toFixed(1)}" y2="${by}" class="bt-bone"/>`;
+    g += `<line x1="${x.toFixed(1)}" y1="${base}" x2="${bx.toFixed(1)}" y2="${by}" class="bt-bone${kind === 'risk' ? ' risk' : kind === 'warn' ? ' warn' : ''}"/>`;
     g += `<circle cx="${x.toFixed(1)}" cy="${base}" r="5" class="bt-dot bt-${kind}" style="--i:${i}"/>`;
     // 날짜 → 사건들(위쪽 가지는 아래에서 위로 쌓고, 아래쪽 가지는 위에서 아래로)
     const shown = grp.items.slice(0, MAXL), more = grp.items.length - shown.length;
-    const rows = [`<tspan class="bt-d">${esc(grp.d)}</tspan>`, ...shown.map((it) => `<tspan class="bt-l bt-k-${it.kind}">${esc(cut(it.label))}</tspan>`)];
+    const dl = grp.items.find((it) => it.dl);
+    const rows = [`<tspan class="bt-d">${esc(dl ? dl.dl : grp.d)}</tspan>`, ...shown.map((it) => `<tspan class="bt-l bt-k-${it.kind}">${esc(cut(it.label))}</tspan>`)];
     if (more) rows.push(`<tspan class="bt-d">외 ${more}건</tspan>`);
     const ordered = up ? rows.slice().reverse() : rows;
     const y0 = up ? by - 6 - (ordered.length - 1) * LH : by + 14;
@@ -4847,13 +4927,25 @@ function bizEventNote(ev) {
   if (recent.length) return `${recent.map((e) => e.label).join('·')}가 최근 2년 안에 생겼습니다 — 신규 라인의 시생산·수율 이력을 확인하세요.`;
   return '';
 }
+function bizIssueList(ev) {
+  const issues = ev.filter((e) => BIZ_ISSUE.has(e.kind)).slice(-6).reverse();
+  const goods = ev.filter((e) => e.kind === 'good' || e.kind === 'cgmp' || e.kind === 'news').slice(-3).reverse();
+  if (!issues.length && !goods.length) return '';
+  const li = (e, cls) => `<li class="${cls}"><span class="bi-d">${esc(e.dl || e.d)}</span><b>${esc(e.label)}</b>${e.why ? `<span class="bi-w">${esc(e.why)}</span>` : ''}</li>`;
+  return '<div class="bt-issues">'
+    + (issues.length ? `<div><h4>이슈 <small>${issues.length}건 · 최근 순</small></h4><ul>${issues.map((e) => li(e, e.kind === 'warn' ? 'warn' : 'risk')).join('')}</ul></div>` : '')
+    + (goods.length ? `<div><h4>좋은 신호</h4><ul>${goods.map((e) => li(e, 'good')).join('')}</ul></div>` : '')
+    + '</div>';
+}
 function bizTimelineBlock(report) {
   const ev = bizEvents(report);
   if (ev.length < 2) return null;
   const b = el('div', 'block full cat-basic btl');
   const note = bizEventNote(ev);
-  b.innerHTML = `<h3>업체 연혁<span class="cnt">허가·설립·제조소·배출시설·회수 ${ev.length}건</span></h3>`
+  const issueN = ev.filter((e) => BIZ_ISSUE.has(e.kind)).length;
+  b.innerHTML = `<h3>업체 연혁<span class="cnt">${ev.length}건${issueN ? ` · <b class="bt-iss">이슈 ${issueN}</b>` : ''} · 허가·제조소·CGMP·재무·인원·기사</span></h3>`
     + `<div class="bt-wrap">${timelineSvg(ev)}</div><div class="bt-hint">← 옆으로 밀어 전체 보기 →</div>`
+    + bizIssueList(ev)
     + (note ? `<p class="bt-note">${esc(note)}</p>` : '');
   return b;
 }

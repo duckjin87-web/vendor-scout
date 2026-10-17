@@ -2223,3 +2223,22 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .bt-hint { display: none; text-align: center; font-size: 11px; color: var(--faint); margin: -4px 0 8px; }
 @media (max-width: 720px) { .bt-hint { display: block; } }
 @media print { .bt-hint { display: none !important; } }
+
+/* 연혁 이슈 — 위험·주의·좋은 신호 */
+.bt-risk { fill: var(--risk); } .bt-warn { fill: var(--gC); } .bt-good { fill: var(--gA); } .bt-cgmp { fill: var(--gA); } .bt-news { fill: #7c5cc4; }
+.bt-fish .bt-bone.risk { stroke: var(--risk); stroke-width: 1.8; }
+.bt-fish .bt-bone.warn { stroke: var(--gC); stroke-width: 1.6; }
+.bt-fish .bt-k-risk { fill: var(--risk); } .bt-fish .bt-k-warn { fill: var(--gC); }
+.bt-fish .bt-k-good, .bt-fish .bt-k-cgmp { fill: var(--gA); }
+.bt-iss { color: var(--risk); font-weight: 700; }
+.bt-issues { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px 24px; padding: 2px 16px 10px; }
+.bt-issues h4 { margin: 0 0 4px; font-size: 12.5px; font-weight: 700; }
+.bt-issues h4 small { font-weight: 500; color: var(--faint); margin-left: 4px; }
+.bt-issues ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.bt-issues li { display: grid; grid-template-columns: 78px auto minmax(0, 1fr); gap: 8px; align-items: baseline; font-size: 12.5px; padding: 3px 0 3px 8px; border-left: 3px solid var(--border); }
+.bt-issues li.risk { border-left-color: var(--risk); } .bt-issues li.warn { border-left-color: var(--gC); } .bt-issues li.good { border-left-color: var(--gA); }
+.bt-issues li.risk b { color: var(--risk); } .bt-issues li.warn b { color: var(--gC); } .bt-issues li.good b { color: var(--gA); }
+.bi-d { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.bi-w { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 720px) { .bt-issues { grid-template-columns: 1fr; } .bt-issues li { grid-template-columns: 64px minmax(0, 1fr); } .bi-w { grid-column: 2; } }
+@media print { .psum .bt-fish .bt-bone.risk { stroke: #c2410c; } .psum .bt-risk, .psum .bt-fish .bt-k-risk { fill: #c2410c; } }
