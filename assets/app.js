@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 201;
+const BUILD = 202;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2053,9 +2053,29 @@ function regionKeyOf(addr) {
 // 금융위 법인 후보를 보여 줄 때는 식약처 화장품제조업 등록업체를 반드시 함께 올린다.
 // 예전에는 금융위에 동명 법인이 둘 이상이면 식약처를 아예 묻지 않아, 금융위에 없는 제조사는
 // 고를 방법이 없었다((주)에이텍: 금융위 4곳 모두 다른 회사, 실제 제조사는 대전 — 조회 불가).
+// 주간 수집 명단(제조업 전체, 정적 파일)에서 바로 후보를 만든다 — 공개 API를 수십 쪽 넘기는 것보다
+// 훨씬 빠르다(후보 단계 9초 → 1초 안팎). 명단을 못 읽으면 null → 예전 방식으로.
+async function ledgerCandidates(name) {
+  if (typeof nbLedger !== 'function') return null;
+  const led = await nbLedger().catch(() => null);
+  if (!led || !led.length) return null;
+  const key = nbNorm(name);
+  if (key.length < 2) return [];
+  const seen = new Set(), out = [];
+  led.forEach((r) => {
+    const k = nbNorm(r.n);
+    if (!(k === key || (key.length >= 3 && k.includes(key)))) return;
+    const dk = r.bz ? `bz|${r.bz}` : `${k}|${String(r.ad || r.a || '').replace(/\s/g, '').slice(0, 12)}`;
+    if (seen.has(dk)) return;
+    seen.add(dk);
+    out.push({ corpNm: r.n, addr: r.ad || r.a || '', bzno: r.bz || null,
+      pdate: fmtDate(String(r.p || '').replace(/\D/g, '')) || null, mfds: true, ledger: true, _exact: k === key });
+  });
+  return out.sort((a, b) => (b._exact ? 1 : 0) - (a._exact ? 1 : 0)).slice(0, 12);
+}
 async function withMfdsCands(fsc, name) {
   let mf = [];
-  try { mf = await mfdsCandidates(name); } catch { return fsc; }
+  try { mf = (await ledgerCandidates(name)) || await mfdsCandidates(name); } catch { return fsc; }
   if (!mf.length) return fsc;
   const nk = (v) => stripCorp(v || '').replace(/\s/g, '');
   const bz = (v) => String(v || '').replace(/\D/g, '');
@@ -2087,7 +2107,8 @@ async function mfdsCandidates(name) {
     const key = stripCorp(nm).replace(/\s/g, '');
     const addr0 = pickByKey(r, /ADDR|SITE|LOCP|소재지|주소/i);
     // 같은 상호라도 주소가 다르면 다른 회사다 — 상호만으로 묶으면 대전 업체가 판교 업체에 먹힌다
-    const dk = `${key}|${String(addr0 || '').replace(/\s/g, '').slice(0, 12)}`;
+    const bz0 = String(findBznoIn(r) || '').replace(/\D/g, '');
+    const dk = bz0.length === 10 ? `bz|${bz0}` : `${key}|${String(addr0 || '').replace(/\s/g, '').slice(0, 12)}`;
     if (key.length < 2 || seen.has(dk)) continue;
     seen.add(dk);
     out.push({
@@ -2192,9 +2213,15 @@ async function liveLookup(name) {
 
   // 이름이 그대로 맞는 법인이 하나면 바로 조회 — 여럿이면 고르게 한다
   if (exact.length === 1) {
-    // 이름이 하나뿐이어도 식약처에 같은 이름의 다른 제조사가 있으면 고르게 한다
+    // 이름이 하나뿐이어도 식약처에 같은 이름의 '다른 사업자' 제조사가 있으면 고르게 한다.
+    // 같은 회사의 제조소 기록(사업자번호가 같거나, 번호가 없는데 상호가 같은 것)은 후보로 세지 않는다.
     const withM = await withMfdsCands(exact, name);
-    if (withM.length === 1) return { report: await finishLive(name, withM[0]) };
+    const fbz = String(exact[0].bzno || '').replace(/\D/g, '');
+    const nk = (v) => stripCorp(v || '').replace(/\s/g, '');
+    const others = withM.filter((c) => c !== exact[0] && c.mfds && !(c.crno && c.crno === exact[0].crno)
+      && String(c.bzno || '').replace(/\D/g, '').length === 10 && String(c.bzno).replace(/\D/g, '') !== fbz
+      && nk(c.corpNm) === nk(exact[0].corpNm));
+    if (!others.length) return { report: await finishLive(name, withM.find((c) => c.crno === exact[0].crno) || exact[0]) };
     return { candidates: withM, name, source: 'fsc' };
   }
   if (exact.length >= 2) return { candidates: await withMfdsCands(exact, name), name, source: 'fsc' };
@@ -4629,7 +4656,8 @@ function qualityGrade(report) {
   // 고용·산재보험·대기배출 — 있으면 근거를 더하고, 이상 신호일 때만 주의. 자료가 없다는 이유로는 낮추지 않는다.
   const W = report.meta && report.meta.workforce, AIR = report.meta && report.meta.air;
   const wfWarn = !!(W && W.noMfg);
-  if (W) add('제조 인력', wfWarn ? null : true, wfWarn ? '보험상 화장품 제조 사업장 없음 — 직접 제조 여부 확인' : `보험상 화장품 제조 사업장 ${W.mfg}명${W.mfgNames && W.mfgNames.length ? ` (${W.mfgNames.slice(0, 2).join(', ')})` : ''}`, 'plus');
+  if (W) add('제조 인력', wfWarn ? null : true, wfWarn ? '보험상 화장품 제조 사업장 없음 — 직접 제조 여부 확인'
+    : `제조소 보험 사업장 ${W.mfg}명${W.mfgNames && W.mfgNames.length ? ` (${W.mfgNames.slice(0, 2).join(', ')})` : ''}${W.indOdd ? ' · 보험 업종명은 화장품 제조가 아님(판정에 쓰지 않음)' : ''}`, 'plus');
   const airCur = AIR ? (AIR.rows || []).filter((r) => r.atSite) : [];
   const airWarn = airCur.length > 0 && airCur.every((r) => r.isClosed);
   const wfAt = !!(W && W.matched);

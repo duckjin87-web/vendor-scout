@@ -1088,7 +1088,9 @@ function assembleLiveReport(name, corp, res) {
     const short = (x) => { const m = String(x.addr).match(/([가-힣]+(?:구|군|시))\s+(?:[가-힣]+(?:읍|면|동)\s+)?([가-힣A-Za-z0-9]+(?:로|길)\s*\d+(?:-\d+)?)/); return m ? `${m[1]} ${m[2]}` : x.name; };
     return { sites, total, gyTotal: insD.gyTotal, sjTotal: insD.sjTotal, mfg, mfgR, allR, npsSplit: sites.some((x) => x.npsCnt != null && !x.npsUnsplit), mfgNames: mfgSites.map((x) => x.name), mfgSites: mfgSites.map((x) => ({ name: x.name, short: short(x), cnt: x.cnt, npsCnt: x.npsUnsplit ? null : x.npsCnt })), mfgNps, mfgSiteN: mfgSites.length, matched: atS.length > 0,
       other: other.reduce((a, x) => a + x.cnt, 0), otherInd: other.map((x) => (x.gy && x.gy.ind) || (x.sj && x.sj.ind)).filter(Boolean)[0] || null,
-      noMfg: !mfgSites.length || sites.every((x) => !x.cosm), nps: empVal != null ? Number(empVal) : null, npsAddr: npsAddr || null, npsBasis };
+      // 제조소 주소에 보험 사업장이 있으면 업종 이름이 '화학제품'이어도 그곳이 공장이다(에이텍: 112명인데
+      // 업종명만 보고 '제조 인력 없음'으로 A→B 강등됐다). 인력이 없다는 건 제조 사업장 자체가 없을 때뿐.
+      noMfg: !mfgSites.length, indOdd: mfgSites.length > 0 && mfgSites.every((x) => !x.cosm), nps: empVal != null ? Number(empVal) : null, npsAddr: npsAddr || null, npsBasis };
   })() : null;
 
   // ── 대기오염물질 배출시설 신고 — 공장이 실제로 설비를 돌리고 있다는 근거 ──
