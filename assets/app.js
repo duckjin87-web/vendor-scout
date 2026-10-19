@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 202;
+const BUILD = 203;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1976,7 +1976,8 @@ async function nedrugMakerRaw(name) {
   const rows = nedrugListRows(lr && lr.text);
   const nk = (s) => stripCorp(s).replace(/\s/g, '');
   const exact = rows.filter((r) => nk(r.name) === key);
-  const hit = exact[0] || (rows.length === 1 && nk(rows[0].name).includes(key) ? rows[0] : null);
+  // 예전에는 결과가 한 줄이면 이름이 달라도(화인글로벌 → 화인글로벌랩) 그 업체로 봤다 — 같은 상호만
+  const hit = exact[0] || null;
   if (!hit) return { found: false, rows: rows.map((r) => r.name), url: listUrl };
   let det = { permitNo: null, factories: [] };
   try { const d = await proxyOnlyGet('fetchPage', { url: `${NEDRUG}${hit.href}` }); det = nedrugDetail(d && d.text); } catch { /* 목록 주소로 */ }
@@ -2064,14 +2065,24 @@ async function ledgerCandidates(name) {
   const seen = new Set(), out = [];
   led.forEach((r) => {
     const k = nbNorm(r.n);
-    if (!(k === key || (key.length >= 3 && k.includes(key)))) return;
+    if (!k) return;
+    let score = 0, why = '';
+    if (k === key) { score = 1; why = '입력한 이름과 같음'; }
+    else if (k.includes(key)) { score = 0.9 - Math.min(0.2, (k.length - key.length) * 0.03); why = `입력한 「${stripCorp(name).trim()}」을 이름에 포함`; }
+    else if (key.length >= 3 && k.length >= 2 && key.includes(k)) { score = 0.75; why = '입력한 이름의 일부와 같음'; }
+    else {
+      const sim = nameSimilarity(key, k);
+      if (sim >= 0.66) { score = sim * 0.85; why = `표기 유사 ${Math.round(sim * 100)}%`; }
+    }
+    if (!score) return;
     const dk = r.bz ? `bz|${r.bz}` : `${k}|${String(r.ad || r.a || '').replace(/\s/g, '').slice(0, 12)}`;
     if (seen.has(dk)) return;
     seen.add(dk);
     out.push({ corpNm: r.n, addr: r.ad || r.a || '', bzno: r.bz || null,
-      pdate: fmtDate(String(r.p || '').replace(/\D/g, '')) || null, mfds: true, ledger: true, _exact: k === key });
+      pdate: fmtDate(String(r.p || '').replace(/\D/g, '')) || null, mfds: true, ledger: true,
+      _exact: score === 1, _score: score, _why: why });
   });
-  return out.sort((a, b) => (b._exact ? 1 : 0) - (a._exact ? 1 : 0)).slice(0, 12);
+  return out.sort((a2, b2) => b2._score - a2._score).slice(0, 12);
 }
 async function withMfdsCands(fsc, name) {
   let mf = [];
@@ -2147,10 +2158,10 @@ async function finishLiveMfds(name, cand) {
     const pick = (bz ? mine.find((x) => String(x.bzno || '').replace(/\D/g, '') === bz) : null)
       || (regionKeyOf(cand.addr) ? mine.find((x) => regionKeyOf(x.addr) === regionKeyOf(cand.addr)) : null)
       || (mine.length === 1 ? mine[0] : null);
-    if (pick) return await finishLive(cand.corpNm, { ...pick, bzno: pick.bzno || bz || null });
+    if (pick) return await finishLive(cand.corpNm, { ...pick, bzno: pick.bzno || bz || null, _lookup: cand._lookup || null });
   } catch { /* 금융위 재조회 실패 → 상호·사업자번호 기반 */ }
   // 금융위에 없거나 특정 못 해도, 식약처가 준 사업자번호가 있으면 국세청·국민연금·보험까지 간다
-  return await finishLive(cand.corpNm, { corpNm: cand.corpNm, bzno: bz || null, addr: cand.addr || null });
+  return await finishLive(cand.corpNm, { corpNm: cand.corpNm, bzno: bz || null, addr: cand.addr || null, _lookup: cand._lookup || null });
 }
 
 // 1단계: 기준정보(동명업체 후보) 조회 → {candidates} 또는 {report}
@@ -2210,6 +2221,32 @@ async function liveLookup(name) {
   };
   let cands = [...pool.values()].map((c) => ({ ...c, _sim: simOf(c) })).sort((a2, b2) => b2._sim - a2._sim);
   const exact = cands.filter((c) => c._sim >= 0.995);
+
+  // ★ 찾는 대상은 화장품 제조업 허가 업체다 — 금융위 법인 목록이 아니라 식약처 제조업 명단을 기준으로 고른다.
+  //   예전에는 금융위에 같은 이름 법인이 하나 있으면 그대로 조회해, '(주)화인글로벌'(평택·폐업·제조업 허가 없음)이
+  //   나오고 정작 제조업체 '(주)화인글로벌랩'은 추천조차 안 됐다.
+  const dg = (v) => String(v || '').replace(/\D/g, '');
+  const ledC = await ledgerCandidates(name).catch(() => null);
+  if (ledC) {
+    const exactL = ledC.filter((c) => c._exact);
+    const fscOf = (l) => cands.find((c) => dg(c.bzno).length === 10 && dg(c.bzno) === dg(l.bzno));
+    // 명단에 없는 금융위 법인 — 같은 이름이어도 화장품 제조업 허가가 없다. 참고로만 아래에 둔다
+    const noLic = cands.filter((c) => c._sim >= 0.62 && !ledC.some((l) => dg(l.bzno).length === 10 && dg(l.bzno) === dg(c.bzno)))
+      .map((c) => ({ ...c, noLicense: true }));
+    if (exactL.length === 1) {
+      const one = exactL[0];
+      const alts = ledC.filter((c) => c !== one).slice(0, 5).map((c) => c.corpNm);
+      const lookup = { typed: name, via: 'ledger', matched: one.corpNm, bzno: one.bzno, why: one._why,
+        basis: `식약처 화장품 제조업 허가 명단의 「${one.corpNm}」${one.bzno ? `(사업자 ${one.bzno})` : ''}${one.pdate ? ` · ${one.pdate} 허가` : ''}`, alts };
+      const f = fscOf(one);
+      return { report: await finishLive(one.corpNm, f ? { ...f, _lookup: lookup } : { corpNm: one.corpNm, bzno: one.bzno, addr: one.addr, _lookup: lookup }) };
+    }
+    if (ledC.length) return { candidates: [...ledC, ...noLic], name, source: 'ledger', similar: !exactL.length };
+    // 명단에 비슷한 이름도 없다 — 최근 허가일 수 있어 식약처·의약품안전나라를 한 번 더 본다
+    const mf = await mfdsCandidates(name).catch(() => []);
+    if (mf.length) return { candidates: [...mf.map((c) => ({ ...c, _why: '의약품안전나라 화장품 제조업 검색' })), ...noLic], name, source: 'ledger', similar: true };
+    return { candidates: noLic, name, source: 'none', similar: true };
+  }
 
   // 이름이 그대로 맞는 법인이 하나면 바로 조회 — 여럿이면 고르게 한다
   if (exact.length === 1) {
@@ -2323,14 +2360,29 @@ function stripCorp(s) {
 function matchByNameApp(name, list) {
   const key = stripCorp(name).replace(/\s/g, '');
   if (key.length < 2 || !Array.isArray(list)) return null;
-  return list.find((it) => Object.values(it).some((v) => {
+  // 예전에는 '값이 검색어를 품으면' 같은 회사로 봤다. 그래서 '(주)화인글로벌'(평택, 폐업) 리포트에
+  // '(주)화인글로벌랩'(인천)의 제조업 허가·CGMP·공장이 붙었다. 이제 법인격·공백을 뗀 상호가 같거나,
+  // 뒤에 지점 표기 괄호만 붙은 경우('인코스(인천지점)')만 같은 회사로 본다.
+  const same = (v) => {
     const gn = stripCorp(String(v == null ? '' : v)).replace(/\s/g, '');
-    // 종전 조건은 gn.length >= 3 이었다. 그런데 '주식회사 셀랩'에서 법인격을 떼면 '셀랩'
-    // 두 글자라, 두 글자 상호는 자기 레코드에도 영영 걸리지 못했다(제조업 등록이 통째로 빈 채로).
-    // 값이 검색어보다 짧을 수 없다는 조건이면 충분하고, 그건 includes가 이미 보장한다.
-    return gn.length >= key.length && gn.includes(key);
-  })) || null;
+    return gn === key || (gn.startsWith(key) && /^\([^)]*\)$/.test(gn.slice(key.length)));
+  };
+  return list.find((it) => it && Object.values(it).some(same)) || null;
 }
+// 사업자번호를 아는 회사면 레코드의 사업자번호가 다를 때 버린다 — 상호가 같아도 남의 회사다
+function matchFirm(name, bzno, list) {
+  if (!Array.isArray(list)) return null;
+  const bz = String(bzno || '').replace(/\D/g, '');
+  const bzOf = (r) => String(findBznoIn(r) || '').replace(/\D/g, '');
+  if (bz.length === 10) {
+    const byBz = list.find((r) => r && bzOf(r) === bz);
+    if (byBz) return byBz;
+  }
+  const hit = matchByNameApp(name, list);
+  if (hit && bz.length === 10) { const hb = bzOf(hit); if (hb.length === 10 && hb !== bz) return null; }
+  return hit;
+}
+window.matchFirm = matchFirm;
 
 // NPS(B552015) 응답 파서 — resultType=json이면 서버가 500 크래시 → XML로 받아 파싱.
 // (혹시 JSON이면 그대로 파싱) 반환: item 객체 배열.
@@ -3556,11 +3608,11 @@ async function liveBackfill(res, corp, name, nm) {
 // 방문지 후보 주소 — 산단공 공장 · 식약처 제조소 · 연금 사업장. sig가 바뀌면 방문지 단계를 다시 돈다.
 function liveSiteInputs(res, corp, name) {
   const fList = res.factory && res.factory.ok ? listOf(factoryProd(res.factory.data), ['response.body.items.item', 'body.items', 'items']) : [];
-  const fHit = matchByNameApp(name, fList) || (fList.length === 1 ? fList[0] : null); // 상호 일치 건만(단건이면 그대로)
+  const fHit = matchFirm(name, corp && corp.bzno, fList);   // 같은 회사만(한 건뿐이라고 남의 공장을 쓰지 않는다)
   const fAddr = fHit ? (fHit.rnAdres ?? fHit.lnmAdres ?? fHit.lotNoAddr ?? fHit.roadNmAddr ?? fHit.adres ?? fHit.ADRES ?? fHit.fctryAddr ?? null) : null;
   const mList = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
-  const mkHit = matchByNameApp(name, mList); // 상호 일치 건만(남의 회사 주소 오염 방지)
+  const mkHit = matchFirm(name, corp && corp.bzno, mList); // 같은 회사만(남의 회사 주소 오염 방지)
   const mAddr = mkHit ? (joinAddrFields(mkHit) || Object.values(mkHit).find(looksAddr) || null) : null;
   // 제조소가 여러 곳이면 공개 API에 곳마다 한 건씩 온다 — 같은 회사(사업자번호·상호) 건을 모두 모은다
   const sameCo = mkHit ? mList.filter((r) => r === mkHit || (mkHit.BIZRNO && r.BIZRNO === mkHit.BIZRNO) || (mkHit.ENTP_NAME && r.ENTP_NAME === mkHit.ENTP_NAME)) : [];
@@ -3607,9 +3659,18 @@ function renderCandidates(name, cands, source, similar) {
   const root = $('#report');
   root.classList.remove('hidden');
   root.innerHTML = '';
-  const isMfds = source === 'mfds';
+  const isMfds = source === 'mfds' || source === 'ledger';
   const mixed = !isMfds && cands.some((c) => c.mfds);
   const box = el('div', 'candbox');
+  const lic = cands.filter((c) => !c.noLicense), noLic = cands.filter((c) => c.noLicense);
+  if (source === 'ledger' || source === 'none') {
+    // 화장품 제조업 허가 명단 기준 — 허가 업체를 위에, 허가가 없는 동명 법인은 접어서 참고로
+    box.appendChild(el('div', 'candhead', source === 'none'
+      ? `「${esc(name)}」와 비슷한 <b>화장품 제조업 허가 업체를 찾지 못했습니다</b>`
+        + `<span class="candsub">식약처 화장품 제조업 명단(4천여 곳)과 의약품안전나라에서 찾았습니다. 아래는 제조업 허가가 없는 법인이라 참고로만 보세요</span>`
+      : `「${esc(name)}」${similar ? '와 <b>비슷한 이름의 화장품 제조업체</b>' : ' 화장품 제조업체'} <b>${lic.length}곳</b> — 조회할 업체를 고르세요`
+        + `<span class="candsub">식약처 화장품 제조업 허가 명단 기준 · 업체마다 후보가 된 이유를 적었습니다</span>`));
+  } else {
   const headSrc = isMfds ? '식약처 화장품제조업 등록업체 기준'
     : mixed ? '금융위 법인 + 식약처 화장품제조업 등록업체 · 제조업 허가가 확인된 업체를 위에 올렸습니다'
       : '금융위 법인 기준';
@@ -3620,7 +3681,8 @@ function renderCandidates(name, cands, source, similar) {
         + `<span class="candsub">${esc(headSrc)} · 한글 표기 차이(ㅐ↔ㅔ, 된소리, 띄어쓰기)를 감안해 골랐습니다. 대표자·주소로 같은 회사인지 확인하세요</span>`
       : `「${esc(name)}」 ${isMfds ? '식약처 등록업체' : '동명·유사 업체'} <b>${cands.length}건</b> — 조회할 업체를 선택하세요`
         + `<span class="candsub">${esc(headSrc)}${isMfds ? ' · 금융위 법인 미검색이라 식약처 등록명으로 추천' : ''}</span>`));
-  cands.forEach((c) => {
+  }
+  const card0 = (c) => {
     const card = el('button', 'cand');
     const meta = [
       c.rep ? '대표 ' + esc(c.rep) : '',
@@ -3629,18 +3691,36 @@ function renderCandidates(name, cands, source, similar) {
       c.pdate ? esc(c.pdate) + ' 허가' : '',
       c.addr ? esc(c.addr) : '',
     ].filter(Boolean).join(' · ');
-    const tag = (c.mfds ? '<span class="cand-tag">식약처 등록</span>' : '')
-      + (c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
+    const tag = (c.mfds ? '<span class="cand-tag">화장품 제조업 허가</span>' : '')
+      + (c.noLicense ? '<span class="cand-nolic">제조업 허가 없음</span>' : '')
+      + (c._why ? `<span class="cand-sim">${esc(c._why)}</span>` : c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
     card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;
+    // 이 업체를 왜 조회하는지 — 리포트 맨 위에 그대로 적는다
+    c._lookup = c._lookup || {
+      typed: name, via: c.mfds ? 'ledger' : 'fsc', matched: c.corpNm, bzno: c.bzno || null, why: c._why || null,
+      basis: c.mfds ? `식약처 화장품 제조업 허가 명단의 「${c.corpNm}」${c.bzno ? `(사업자 ${c.bzno})` : ''}${c.pdate ? ` · ${c.pdate} 허가` : ''}`
+        : `금융위 법인 「${c.corpNm}」${c.noLicense ? ' — 화장품 제조업 허가 명단에는 없음' : ''}`,
+      alts: cands.filter((x) => x !== c && x.mfds).slice(0, 5).map((x) => x.corpNm),
+    };
     card.addEventListener('click', async () => {
       liveProgReset();
       root.innerHTML = loadingHtml(`「${esc(c.corpNm || name)}」 나머지 카테고리 조회 중…`);
       mountTrend(root);
-      try { render(await (c.mfds ? finishLiveMfds(name, c) : finishLive(name, c))); }
+      try { render(await (c.mfds ? finishLiveMfds(name, c) : finishLive(name, { ...c, _lookup: c._lookup }))); }
       catch (e) { root.innerHTML = `<div class="empty">조회 실패: ${esc(e.message)}</div>`; }
     });
-    box.appendChild(card);
-  });
+    return card;
+  };
+  if (source === 'ledger' || source === 'none') {
+    lic.forEach((c) => box.appendChild(card0(c)));
+    if (noLic.length) {
+      const d = el('details', 'cand-nolic-box');
+      d.open = source === 'none';
+      d.innerHTML = `<summary>화장품 제조업 허가 명단에 없는 동명·유사 법인 ${noLic.length}곳 <small>금융위 법인 · 참고용</small></summary>`;
+      noLic.forEach((c) => d.appendChild(card0(c)));
+      box.appendChild(d);
+    }
+  } else cands.forEach((c) => box.appendChild(card0(c)));
   root.appendChild(box);
   root.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -5090,6 +5170,29 @@ function printSummary(report) {
   return sec;
 }
 
+// 조회 근거 — 무엇을 입력해 어떤 기록으로 이 업체를 골랐는지, 화장품 제조업 허가가 있는지
+function lookupBasisHtml(m, bv) {
+  const L = m.lookup;
+  const lic = String(bv('제조업 등록') || '');
+  const licOk = /^등록/.test(lic);
+  if (!m.live) return '';
+  const typed = L && L.typed && stripCorp(L.typed).replace(/\s/g, '') !== stripCorp(m.vendor_name || '').replace(/\s/g, '') ? `입력 「${esc(L.typed)}」 → ` : '';
+  const basis = L && L.basis ? esc(L.basis) : (licOk ? '식약처 화장품 제조업 허가 확인' : '금융위 법인 기준');
+  const alts = L && L.alts && L.alts.length
+    ? ` · 비슷한 이름의 제조업체 ${L.alts.map((a) => `<button type="button" class="vd-alt" data-alt="${esc(a)}">${esc(a)}</button>`).join('')}` : '';
+  return `<div class="vd-basis${licOk ? '' : ' nolic'}"><i>조회 근거</i>${typed}${basis}${L && L.why && L.why !== '입력한 이름과 같음' ? ` <small>(${esc(L.why)})</small>` : ''}`
+    + (licOk ? '' : ' · <b>화장품 제조업 허가 명단에 없음</b>') + alts + '</div>';
+}
+// '비슷한 이름의 제조업체'를 누르면 그 이름으로 다시 조회한다
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('.vd-alt[data-alt]');
+  if (!b) return;
+  const q = document.getElementById('q'), bn = document.getElementById('bno');
+  if (q) q.value = b.dataset.alt;
+  if (bn) bn.value = '';
+  lookup(b.dataset.alt, '');
+});
+
 function renderVerdict(report) {
   const m = report.meta || {};
   const Q = qualityGrade(report);
@@ -5113,6 +5216,7 @@ function renderVerdict(report) {
     + `<button type="button" class="vd-badge vd-gz badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기">${gaugeSvg(g)}<b>${g === 'D' ? '불가' : esc(g)}</b><span>종합판정 ⓘ</span></button>`
     + `<div class="vd-title"><h2>${esc(m.vendor_name || '')}</h2>`
     + `<div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div>`
+    + lookupBasisHtml(m, bv)
     + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
     + `<div class="vd-side"><div class="vd-verd">${esc(v.label)}<small class="vd-qwhy">${esc(Q.why)}</small>`
     + (Q.toA && Q.toA.length && g !== 'D' ? `<small class="vd-toa">A까지 <b>${esc(Q.toA.slice(0, 3).join(' · '))}</b></small>` : '')

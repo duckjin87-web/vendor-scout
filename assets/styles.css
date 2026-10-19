@@ -2242,3 +2242,17 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .bi-w { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 720px) { .bt-issues { grid-template-columns: 1fr; } .bt-issues li { grid-template-columns: 64px minmax(0, 1fr); } .bi-w { grid-column: 2; } }
 @media print { .psum .bt-fish .bt-bone.risk { stroke: #c2410c; } .psum .bt-risk, .psum .bt-fish .bt-k-risk { fill: #c2410c; } }
+
+/* 조회 근거 — 무엇을 근거로 이 업체를 골랐는지 */
+.vd-basis { margin-top: 4px; font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+.vd-basis > i { font-style: normal; font-weight: 700; color: var(--text); margin-right: 6px; font-size: 10.5px; letter-spacing: .04em; }
+.vd-basis.nolic b { color: var(--risk); }
+.vd-alt { font: inherit; font-size: 11.5px; margin-left: 4px; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); color: var(--accent); cursor: pointer; }
+.vd-alt:hover, .vd-alt:focus-visible { border-color: var(--accent); outline: none; }
+@media print { .vd-alt { border: 0; padding: 0; color: inherit; } }
+/* 후보 — 제조업 허가 없는 법인은 접어서 참고로 */
+.cand-nolic { display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 4px; background: var(--risk-bg, #fde8df); color: var(--risk); }
+.cand-nolic-box { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.cand-nolic-box > summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--muted); padding: 6px 0; }
+.cand-nolic-box > summary small { font-weight: 500; color: var(--faint); margin-left: 6px; }
+.cand-nolic-box .cand { opacity: .85; }

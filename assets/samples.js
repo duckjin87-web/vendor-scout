@@ -181,6 +181,9 @@ const findBzno = (rec) => findBznoIn(rec);
 // 있으면 한쪽만 고쳐져 조용히 갈라진다 — 실제로 상호 대조 규칙은 여러 번 손봤다.
 // 구현은 app.js 하나로 두고 여기서는 그걸 부른다(둘 다 로드된 뒤에만 호출된다).
 const matchByName = (name, list) => matchByNameApp(name, list);
+// 이 리포트의 회사 사업자번호로 걸러 대조 — 상호가 같아도 번호가 다르면 남의 회사
+let _matchBz = null;
+const matchMine = (name, list) => (typeof matchFirm === 'function' ? matchFirm(name, _matchBz, list) : matchByName(name, list));
 
 
 // ── 방문 이동거리 추정 (한국콜마 세종 기준점) ──
@@ -790,6 +793,7 @@ const savedNote = (d) => {
   return ` · 실시간 조회가 늦거나 실패해 ${t.getMonth() + 1}월 ${t.getDate()}일 ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')} 저장본 사용`;
 };
 function assembleLiveReport(name, corp, res) {
+  _matchBz = corp && corp.bzno ? String(corp.bzno).replace(/\D/g, '') : null;
   const today = '2026-07-07';
   const R = res || {};
   // 장황한 상류 오류를 짧은 사유로 정규화 — "조회불가"/"자료 미제출" 등 간략 표기(사용자 요청)
@@ -814,7 +818,7 @@ function assembleLiveReport(name, corp, res) {
   // 식약처 제조업 등록 (maker) — 상호가 실제로 일치하는 건만 채택.
   // ★ mkList[0] 폴백 금지: maker API가 상호 필터링을 안 해 첫 레코드가 '남의 회사'일 수 있음(할루시네이션 방지)
   const mkList = R.maker && R.maker.ok ? listOf(R.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const mk = matchByName(name, mkList);
+  const mk = matchMine(name, mkList);
   const mkReg = R.maker && R.maker.ok && R.maker.data ? R.maker.data.register : null;   // 명단 전체 재검색 여부
   // 의약품안전나라 업체정보 — 번지까지 있는 제조소 주소(곳별)·업허가번호. 공개 API는 시·군까지만 준다.
   const ned = R.nedrug && R.nedrug.ok && R.nedrug.data && R.nedrug.data.found ? R.nedrug.data : null;
@@ -840,7 +844,8 @@ function assembleLiveReport(name, corp, res) {
   const fctList = fctProd ? listOf(fctProd, ['response.body.items.item', 'body.items', 'items']) : [];
   // ★ fctList[0] 폴백 금지: 산단공 공장 API도 상호 필터링이 불완전 → 첫 레코드가 '남의 공장'일 수 있음.
   //   단건이면 그대로(회사명 검색이 1건만 준 경우), 여러 건이면 상호 일치 건만 채택.
-  const fctHit = matchByName(name, fctList) || (fctList.length === 1 ? fctList[0] : null);
+  // 공장등록 — 예전엔 결과가 한 건이면 상호가 달라도 썼다(화인글로벌 → 화인글로벌랩 공장 96명). 같은 회사만
+  const fctHit = matchMine(name, fctList);
   // 주소 필드명이 API마다 달라 명시 후보 → 실패 시 값 스캔(한글 주소 패턴)
   const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
   const fctAddr = fctHit ? (
@@ -856,7 +861,8 @@ function assembleLiveReport(name, corp, res) {
   const fctFax = fctHit ? (fctHit.cmpnyFxnum ?? null) : null;
   const fctOrg = fctHit ? (fctHit.irsttNm ?? fctHit.cvplChrgOrgnztNm ?? null) : null;
   // 홈페이지는 여러 공장 레코드 중 등재된 것을 채택(첫 매칭에 없을 수 있음)
-  const fctHmpadr = (fctList.find((it) => /^https?:\/\//i.test(String(it.hmpadr || ''))) || {}).hmpadr || null;
+  // 같은 회사 레코드에서만(다른 회사 공장의 홈페이지를 붙이지 않게)
+  const fctHmpadr = (fctList.filter((it) => it === fctHit || matchMine(name, [it])).find((it) => /^https?:\/\//i.test(String(it.hmpadr || ''))) || {}).hmpadr || null;
   const fctRegDe = fctHit ? fmtDate(fctHit.frstFctryRegistDe) : null;
   // 생산정보에 면적이 없으므로 용지·시설·기본 오퍼레이션 응답에서 같은 업체 레코드를 찾아 합친다
   const fctDetail = (fctRaw && Array.isArray(fctRaw.detail) ? fctRaw.detail : []) || [];
@@ -1112,7 +1118,7 @@ function assembleLiveReport(name, corp, res) {
   // 식약처 GMP 적합업소 (CGMP 등록여부) — 적합업체 전체목록에서 상호로 필터
   // 업체명 필드 키가 API마다 달라(BSSH_NM/CMPNY_NM/…) 모든 필드값을 훑어 상호 포함 여부로 매칭
   const gmpList = R.gmp && R.gmp.ok ? listOf(R.gmp.data, ['response.body.items.item', 'body.items', 'items']) : [];
-  const gmpHit = matchByName(name, gmpList);
+  const gmpHit = matchMine(name, gmpList);
   const hasCgmp = !!gmpHit;
 
   // 카카오 이동거리 {km, min, method} — navi=모빌리티 실측 / coord=카카오맵 좌표추정
@@ -1712,6 +1718,7 @@ function assembleLiveReport(name, corp, res) {
       bld: R.bld ? (R.bld.ok ? R.bld.data : { err: R.bld.err, queried: R.bld.queried }) : null,
       site: R.site && R.site.ok ? R.site.data : null,          // 실제 공장 소재지 선정 결과(후보·근거)
       mfds_sites: nedSites.length ? nedSites : null,            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
+      lookup: (corp && corp._lookup) || null,                   // 어떤 입력으로, 무엇을 근거로 이 업체를 조회했는지
       workforce,                                                // 고용·산재보험 사업장별 인원·역할
       // 인력 표에 함께 싣는 참고값 — 국민연금 월별 추이, 공장등록 신고 종업원수
       manpower: {
