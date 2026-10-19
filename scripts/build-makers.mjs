@@ -15,7 +15,9 @@ const DAY = 864e5;
 const NED_MAX = 40;                    // 대시보드에 띄울 신규 업체 중 번지 주소를 받아 올 수
 // 근처 업체 지도는 명단 전체의 번지 주소가 필요하다(공개 API는 시·군까지만 준다).
 // 한 번에 다 받으면 오래 걸리므로 매 실행 이만큼씩 채워 몇 주에 걸쳐 명단을 메운다.
-const NED_BACKFILL = 400;
+const NED_BACKFILL = Number(process.env.NED_BACKFILL) || 400;   // 주간 makers.yml은 더 크게(1500)
+// 제조소 주소를 전부(ads) 받도록 바꾼 판 — 이 값이 아닌 업체는 다시 받는다(예전엔 첫 곳만, 목록 주소만 봤다)
+const AD_V = 2;
 const log = (...a) => console.log('[makers]', ...a);
 const notice = (t) => console.log(`::notice::${String(t).replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 4000)}`);
 const nk = (s) => String(s || '').replace(/\(주\)|㈜|주식회사|유한회사|\(유\)|농업회사법인|\s/g, '').toLowerCase();
@@ -80,20 +82,49 @@ async function gmpNames() {
   return { names, n: all.length };
 }
 
-async function nedrugAddr(name) {
+// 한 줄에 여러 제조소가 이어진 주소를 곳별로 나눈다 — app.js splitSiteAddrs와 같은 규칙
+function splitSites(str) {
+  const SIDO = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주)/;
+  const out = [];
+  String(str || '').split(/\s*,\s*/).map((x) => x.trim()).filter(Boolean).forEach((tok) => {
+    const prev = out[out.length - 1];
+    if (SIDO.test(tok) || !prev) { out.push(tok); return; }
+    const road = prev.match(/^(.*?\s)([가-힣A-Za-z0-9]+?)(\d+)(번?길)\s*\d/);
+    if (/^\d+번?길\s*\d/.test(tok) && road) { out.push(`${road[1]}${road[2]}${tok}`); return; }
+    const region = prev.match(/^(.*?(?:읍|면|동|가)\s)/) || prev.match(/^(.*?(?:시|군|구)\s)/);
+    if (/^[가-힣A-Za-z0-9]+(?:로|길)\s*\d/.test(tok) && region) out.push(`${region[1]}${tok}`);
+  });
+  // 도로명 번호 뒤의 동·층은 떼어 낸다(좌표는 번호까지로 찾는다)
+  return out.map((b) => { const t = b.replace(/\s+/g, ' ').trim(); const m = t.match(/^(.*?(?:로|길)\s*\d+(?:-\d+)?)(?:\s|$)/); return (m ? m[1] : t).slice(0, 120); });
+}
+
+// 의약품안전나라에서 제조소 주소를 전부 받는다. 목록의 주소 칸이 빈 업체가 많아(콜마스크 등 절반쯤)
+// 상세 화면의 「공장정보」 표를 먼저 보고, 없으면 목록 주소를 쓴다.
+const NEDRUG = 'https://nedrug.mfds.go.kr';
+async function nedrugAddrs(name) {
   const nm = String(name || '').replace(/\(주\)|㈜|주식회사/g, '').trim();
-  const url = `https://nedrug.mfds.go.kr/pbp/CCBBA01/getList?searchYn=true&page=1&limit=50&cobCode=V&entpName=${encodeURIComponent(nm)}`;
-  const html = await (await fetchOk(url, { headers: { 'User-Agent': 'Mozilla/5.0 vendor-scout' } }, 2)).text();
+  const url = `${NEDRUG}/pbp/CCBBA01/getList?searchYn=true&page=1&limit=50&cobCode=V&entpName=${encodeURIComponent(nm)}`;
+  const UA = { headers: { 'User-Agent': 'Mozilla/5.0 vendor-scout' } };
+  const html = await (await fetchOk(url, UA, 2)).text();
   const txt = (h) => String(h || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
   const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => {
-    if (!/getItem/.test(m[1])) return null;
+    const href = (m[1].match(/href=["']([^"']*getItem[^"']*)["']/i) || [])[1];
+    if (!href) return null;
     const tds = [...m[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((x) => txt(x[1]));
-    return { name: tds[1] || '', addr: tds[4] || '' };
+    return { href: href.replace(/&amp;/g, '&'), name: tds[1] || '', addr: tds[4] || '' };
   }).filter(Boolean);
   const hit = rows.find((r) => nk(r.name) === nk(name));
-  if (!hit || !hit.addr) return null;
-  // 한 줄에 제조소가 여럿 이어지면 첫 곳만(목록 표시용) — 전부는 사전검증 리포트에서 본다
-  return hit.addr.split(/\s*,\s*(?=(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주))/)[0].slice(0, 120);
+  if (!hit) return [];
+  let fac = [];
+  try {
+    const h = await (await fetchOk(`${NEDRUG}${hit.href.startsWith('/') ? '' : '/'}${hit.href}`, UA, 2)).text();
+    const at = h.search(/공장정보/);
+    const seg = at >= 0 ? h.slice(at, at + 20000) : '';
+    fac = [...seg.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => [...m[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((x) => txt(x[1])))
+      .filter((tds) => tds.length >= 2 && /(시|군|구|도)\s/.test(tds[1])).map((tds) => tds[1]);
+  } catch { /* 목록 주소로 */ }
+  const src = fac.length ? fac : (hit.addr ? [hit.addr] : []);
+  return [...new Set(src.flatMap(splitSites))].filter((a) => /\d/.test(a)).slice(0, 8);
 }
 
 export async function main() {
@@ -146,20 +177,25 @@ export async function main() {
   const showIds = new Set([...addedReal, ...live.filter(([, r]) => r.p >= since(90)).map(([id]) => id)]);
 
   // 번지 주소 보강(의약품안전나라) — 아직 없는 것만, 최근 허가 순으로 최대 NED_MAX곳
-  const need = [...showIds].filter((id) => firms[id] && !firms[id].ad && !firms[id].adTry).sort((a, b) => firms[b].p.localeCompare(firms[a].p)).slice(0, NED_MAX);
+  const need = [...showIds].filter((id) => firms[id] && firms[id].adV !== AD_V).sort((a, b) => firms[b].p.localeCompare(firms[a].p)).slice(0, NED_MAX);
   // 그 밖의 업체도 조금씩 채운다 — 근처 업체 지도가 번지 주소를 쓰기 때문(허가 최신 순)
   const backfill = live.map(([id]) => id)
-    .filter((id) => !showIds.has(id) && firms[id] && !firms[id].ad && !firms[id].adTry)
+    .filter((id) => !showIds.has(id) && firms[id] && firms[id].adV !== AD_V)
     .sort((a, b) => firms[b].p.localeCompare(firms[a].p)).slice(0, NED_BACKFILL);
   let nedOk = 0, nedErr = '', stop = false;
   const fill = async (id) => {
     if (stop) return;
-    try { const ad = await nedrugAddr(firms[id].n); firms[id].adTry = today; if (ad) { firms[id].ad = ad; nedOk++; } }
+    try {
+      const ads = await nedrugAddrs(firms[id].n);
+      firms[id].adTry = today; firms[id].adV = AD_V;
+      if (ads.length) { firms[id].ad = ads[0]; nedOk++; }
+      if (ads.length > 1) firms[id].ads = ads; else delete firms[id].ads;
+    }
     catch (e) { nedErr = e.message; stop = true; }      // 사이트가 막히면 더 두드리지 않는다
   };
   for (const id of need) await fill(id);
-  for (let i = 0; i < backfill.length && !stop; i += 4) {
-    await Promise.all(backfill.slice(i, i + 4).map(fill));
+  for (let i = 0; i < backfill.length && !stop; i += 6) {
+    await Promise.all(backfill.slice(i, i + 6).map(fill));
   }
   const adN = live.filter(([, r]) => r.ad).length;
 
@@ -184,7 +220,7 @@ export async function main() {
     const other = (byBz.get(r.bz) || []).filter((o) => o.seq !== id);
     const nps = npsBy.get(`${r.bz.slice(0, 6)}|${nk(r.n)}`);
     return {
-      id, n: r.n, a: r.a, ad: r.ad || null, p: iso8(r.p), f: r.f,
+      id, n: r.n, a: r.a, ad: r.ad || null, ads: r.ads || null, p: iso8(r.p), f: r.f,
       add: addedReal.includes(id) || undefined,
       on: r.rn === today ? r.on : undefined,
       // 같은 사업자번호의 더 이른 책임판매업 기록 → 브랜드사가 제조로 진입 / 더 이른 제조 기록 → 기존 제조사의 새 제조소

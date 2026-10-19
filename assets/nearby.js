@@ -29,7 +29,7 @@ const NB = {
   GEO_BATCH: 30,          // 먼 단계(같은 시·도 이상) 업체 좌표 변환 — 한 번에 이만큼
   NEAR_CAP: 150,          // 같은 시·군 이내는 자동으로 전부 확인하되 안전 상한
   NAME_RETRY: 12,         // 번지가 안 맞은 가까운 업체를 이름으로 다시 찾는 수
-  NED_CAP: 14,            // 같은 시·군 업체 중 번지 주소를 의약품안전나라에서 받아 볼 수
+  NED_CAP: 40,            // 같은 시·군 업체 중 번지 주소를 의약품안전나라에서 받아 볼 수(남동구처럼 200곳 넘는 곳도 있다)
   SGG_CAP: 40,            // 한 번에 중심 좌표를 구할 시·군 수(결과는 저장돼 다음부터 요청 없음)
   MFDS_PAGE: 500,
   MFDS_MAX_PAGES: 12,
@@ -259,6 +259,19 @@ function nbMfdsAll() {
     // 명단에만 있던 업체에도 번지 주소가 있으면 API 쪽 레코드에 얹는다
     const ledAd = new Map((led || []).filter((r) => r.ad).map((r) => [nbNorm(r.n), r.ad]));
     list.forEach((x) => { if (!isFullAddr(x.addr) && ledAd.has(x.key)) { x.addr = ledAd.get(x.key); x.parts = nbAddrParts(x.addr); } });
+    // 제조소가 여럿인 업체(콜마스크: 인천 서구 1공장 · 남동구 2공장)는 공개 명단에 한 줄(첫 시·군)만 있다.
+    // 주간 집계가 받아 둔 제조소 주소 전부(ads)로 펼쳐 공장마다 한 줄씩 올린다.
+    const ledAds = new Map((led || []).filter((r) => Array.isArray(r.ads) && r.ads.length > 1).map((r) => [nbNorm(r.n), r.ads]));
+    if (ledAds.size) {
+      const out = []; const done = new Set();
+      list.forEach((x) => {
+        const ads = ledAds.get(x.key);
+        if (!ads) { out.push(x); return; }
+        if (done.has(x.key)) return; done.add(x.key);
+        ads.forEach((addr, i) => out.push({ ...x, addr, parts: nbAddrParts(addr), site: i + 1, sites: ads.length }));
+      });
+      list.length = 0; list.push(...out);
+    }
     const full = (!failed && (total != null ? raw.length >= total * 0.98 : raw.length < NB.MFDS_PAGE)) || !!(led && led.length);
     _nbMfds = { list, total, full, failed, ledger: led ? led.length : 0, added };
     return _nbMfds;
@@ -342,11 +355,13 @@ function nbSeed(st) {
     // 같은 시·군 안에서는 '에이디인터내셔날 제2공장'처럼 접두까지 보고, 그 밖에서는 이름이 똑같을 때만 —
     // '코스맥스'로 조회했다고 먼 곳의 '코스맥스엔비티'까지 지우면 안 된다.
     if (st.vendorKey && (r.key === st.vendorKey || (tier <= 1 && nbNameHit(r.key, st.vendorKey)))) return;
-    st.items.push({ id: `m${i}`, name: r.nm, key: r.key, addr: r.addr, parts: { ...r.parts }, tier,
+    st.items.push({ id: `m${i}`, name: r.nm, key: r.key, addr: r.addr, parts: { ...r.parts }, tier, site: r.site || 0, sites: r.sites || 0,
       lat: null, lng: null, km: null, geo: 'pending', phone: '', url: '', lcns: r.lcns, pdate: r.pdate, rep: r.rep,
       cgmp: st.gmp ? st.gmp.has(r.key) : false });
   });
 }
+// 공장이 여럿인 업체는 이름 뒤에 몇 번째 제조소인지 붙인다(같은 이름 핀이 두 개 뜨므로)
+const nbLabel = (v) => (v.sites > 1 ? `${v.name} · 제조소 ${v.site}/${v.sites}` : v.name);
 function nbApplyGeo(st, v, g) {
   if (g && g.status === 'exact') {
     v.lat = g.lat; v.lng = g.lng; v.km = haversineKm(st.center.lat, st.center.lng, g.lat, g.lng); v.geo = 'exact';
@@ -408,16 +423,17 @@ function nbNedCache(key) {
   try { const o = JSON.parse(localStorage.getItem(NB_NED_KEY + key) || 'null'); if (o && Date.now() - o.at < 30 * 864e5) return o; } catch { /* 없음 */ }
   return null;
 }
-async function nbNedAddr(name, key) {
+// 제조소가 여럿이면 전부 돌려준다(첫 곳만 쓰면 다른 공장은 근처 업체에 영영 안 나온다)
+async function nbNedAddrs(name, key) {
   const c = nbNedCache(key);
-  if (c) return c.addr || null;
-  let addr = null;
+  if (c && Array.isArray(c.addrs)) return c.addrs;
+  let addrs = [];
   try {
     const r = typeof nedrugMaker === 'function' ? await nedrugMaker(name) : null;
-    if (r && r.found && r.sites && r.sites.length) addr = r.sites[0].addr || null;
+    if (r && r.found && r.sites) addrs = r.sites.map((x) => x.addr).filter((a) => a && isFullAddr(a));
   } catch { /* 실패도 기록해 두 번 묻지 않는다 */ }
-  try { localStorage.setItem(NB_NED_KEY + key, JSON.stringify({ at: Date.now(), addr })); } catch { /* 저장 못 해도 동작 */ }
-  return addr;
+  try { localStorage.setItem(NB_NED_KEY + key, JSON.stringify({ at: Date.now(), addrs })); } catch { /* 저장 못 해도 동작 */ }
+  return addrs;
 }
 async function nbNedRound(st) {
   if (!getProxy()) return;
@@ -425,13 +441,27 @@ async function nbNedRound(st) {
   if (!need.length) return;
   st.phase = `제조소 번지 주소를 의약품안전나라에서 확인하는 중 (${need.length}곳)`;
   nbPaint(st);
-  await mapLimit(need, 2, async (v) => {
+  await mapLimit(need, 3, async (v) => {
     v.nedTried = true;
-    const addr = await nbNedAddr(v.name, v.key);
-    if (!addr || !isFullAddr(addr)) return;
-    v.addr = addr; v.parts = nbAddrParts(addr); v.tier = nbTier(st.loc, v.parts); v.nedAddr = true;
-    const g = await nbGeocode(addr, { sido: v.parts.sido, sgg: v.parts.sgg }).catch(() => null);
-    if (g) nbApplyGeo(st, v, g);
+    const addrs = await nbNedAddrs(v.name, v.key);
+    if (!addrs.length) return;
+    // 이미 다른 줄로 올라와 있는 제조소는 빼고, 나머지를 이 줄과 새 줄들에 나눠 담는다
+    const sq = (a) => String(a || '').replace(/\s/g, '');
+    const have = new Set(st.items.filter((x) => x !== v && x.key === v.key).map((x) => sq(x.addr)));
+    const todo = addrs.filter((a) => !have.has(sq(a)));
+    if (!todo.length) return;
+    const n = addrs.length;
+    const rows = todo.map((addr, k) => {
+      const x = k === 0 ? v : { ...v, id: `${v.id}s${k}`, parts: { ...v.parts }, lat: null, lng: null, km: null, geo: 'pending' };
+      x.addr = addr; x.parts = nbAddrParts(addr); x.tier = nbTier(st.loc, x.parts); x.nedAddr = true;
+      if (n > 1) { x.site = addrs.indexOf(addr) + 1; x.sites = n; }
+      if (k) st.items.push(x);
+      return x;
+    });
+    for (const x of rows) {
+      const g = await nbGeocode(x.addr, { sido: x.parts.sido, sgg: x.parts.sgg }).catch(() => null);
+      if (g) nbApplyGeo(st, x, g);
+    }
   });
 }
 
@@ -590,7 +620,7 @@ function nbRowHtml(st, v) {
   return `<div class="nb-row${open ? ' open' : ''}${st.sel === v.id ? ' sel' : ''}${pl ? '' : ' unplaced'}" data-row="${esc(v.id)}">`
     + `<button type="button" class="nb-rowbtn" data-act="pick" data-id="${esc(v.id)}" aria-expanded="${open}">`
     + `<span class="nb-d">${dist}</span>`
-    + `<span class="nb-main"><span class="nb-nm"><span class="nb-mark ${nbCls(v)}"></span>${esc(v.name)}</span>`
+    + `<span class="nb-main"><span class="nb-nm"><span class="nb-mark ${nbCls(v)}"></span>${esc(v.name)}${v.sites > 1 ? `<span class="nb-site">제조소 ${v.site}/${v.sites}</span>` : ''}</span>`
     + `<span class="nb-sub">${esc(v.addr || nbRegionText(v.parts))}</span>`
     + (drive ? `<span class="nb-time">${esc(drive)}${driveSub ? `<em>${esc(driveSub)}</em>` : ''}</span>` : '')
     + `</span>`
@@ -847,7 +877,7 @@ function nbDrawKakao(st, box) {
   vis.slice().sort((a, b) => (b.id === st.sel) - (a.id === st.sel) || a.km - b.km).forEach((v) => {
     const p = pt(v.lat, v.lng);
     for (const left of [false, true]) {
-      const bx = boxOf(p, v.name, left);
+      const bx = boxOf(p, nbLabel(v), left);
       if (!hit(bx)) { boxes.push(bx); labelSide.set(v.id, left ? 'left' : 'right'); return; }
     }
     if (v.id === st.sel) labelSide.set(v.id, 'left');
@@ -855,9 +885,9 @@ function nbDrawKakao(st, box) {
   vis.forEach((v) => {
     const on = v.id === st.sel;
     const side = labelSide.get(v.id);
-    const label = side ? `<span class="nb-plabel${on ? ' strong' : ''}${side === 'left' ? ' left' : ''}">${esc(v.name)}</span>` : '';
+    const label = side ? `<span class="nb-plabel${on ? ' strong' : ''}${side === 'left' ? ' left' : ''}">${esc(nbLabel(v))}</span>` : '';
     const el2 = node('nb-pinwrap', `<span class="nb-pin ${nbCls(v)}${on ? ' on' : ''}${fresh ? ' pop' : ''}" style="--d:${nbPopDelay(st, v)}ms"></span>${label}`, 32, 32);
-    el2.title = v.name; el2.style.cursor = 'pointer';
+    el2.title = nbLabel(v); el2.style.cursor = 'pointer';
     el2.addEventListener('click', (e) => { e.stopPropagation(); nbSelect(st, v.id, { fromMap: true }); });
     overlay(new K.LatLng(v.lat, v.lng), el2, on ? 900 : 10);
   });
@@ -948,7 +978,7 @@ function nbDrawMap(st) {
   order.forEach((v) => {
     const pt = map.latLngToContainerPoint([v.lat, v.lng]);
     for (const left of [false, true]) {
-      const bx = boxOf(pt, v.name, left);
+      const bx = boxOf(pt, nbLabel(v), left);
       if (!hit(bx)) { boxes.push(bx); labelSide.set(v.id, left ? 'left' : 'right'); return; }
     }
     if (v.id === st.sel) labelSide.set(v.id, 'left');   // 둘 다 막혀도 고른 것은 붙인다
@@ -956,9 +986,9 @@ function nbDrawMap(st) {
   vis.forEach((v) => {
     const on = v.id === st.sel;
     const side = labelSide.get(v.id);
-    const label = side ? `<span class="nb-plabel${on ? ' strong' : ''}${side === 'left' ? ' left' : ''}">${esc(v.name)}</span>` : '';
+    const label = side ? `<span class="nb-plabel${on ? ' strong' : ''}${side === 'left' ? ' left' : ''}">${esc(nbLabel(v))}</span>` : '';
     const m = L.marker([v.lat, v.lng], {
-      title: v.name, alt: v.name, riseOnHover: true, zIndexOffset: on ? 900 : 0,
+      title: nbLabel(v), alt: nbLabel(v), riseOnHover: true, zIndexOffset: on ? 900 : 0,
       icon: L.divIcon({ className: 'nb-pinwrap', html: `<span class="nb-pin ${nbCls(v)}${on ? ' on' : ''}${fresh ? ' pop' : ''}" style="--d:${nbPopDelay(st, v)}ms"></span>${label}`, iconSize: [32, 32], iconAnchor: [16, 16] }),
     }).addTo(st.layer);
     m.on('click', () => nbSelect(st, v.id, { fromMap: true }));

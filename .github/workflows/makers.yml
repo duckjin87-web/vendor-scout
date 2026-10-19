@@ -28,6 +28,7 @@ jobs:
       - name: Build
         env:
           DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          NED_BACKFILL: '1500'
         run: node scripts/build-makers.mjs
       - name: Commit
         run: |

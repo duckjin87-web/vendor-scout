@@ -1201,6 +1201,7 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 .nb-d i { font-style: normal; font-size: 11px; color: var(--muted); }
 .nb-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .nb-nm { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600; min-width: 0; }
+.nb-site { flex: none; font-size: 11px; font-weight: 600; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
 .nb-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nb-chip { flex-shrink: 0; font-size: 10.5px; font-weight: 700; padding: 3px 6px; border-radius: 6px; background: var(--gA-bg); color: var(--gA); }
 .nb-chip.off { background: none; color: var(--faint); }
