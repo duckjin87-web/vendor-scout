@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 203;
+const BUILD = 204;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2149,6 +2149,11 @@ async function mfdsCandidates(name) {
 // 식약처 후보 선택 시: 정확한 등록업체명으로 금융위 재조회(법인 매칭되면 법인/재무 확보) → 없으면 상호명 조회
 async function finishLiveMfds(name, cand) {
   const nk = (s) => stripCorp(s || '').replace(/\s/g, '');
+  // 후보 화면을 거치지 않고 불려도(다시 조회·자동 선택) 조회 근거가 비지 않게
+  if (!cand._lookup) {
+    cand._lookup = { typed: name, via: 'ledger', matched: cand.corpNm, bzno: cand.bzno || null, why: cand._why || null,
+      basis: `식약처 화장품 제조업 허가 명단의 「${cand.corpNm}」${cand.bzno ? `(사업자 ${cand.bzno})` : ''}${cand.pdate ? ` · ${cand.pdate} 허가` : ''}` };
+  }
   const bz = String(cand.bzno || '').replace(/\D/g, '');
   try {
     const cc = window.mapCorpCandidates(await proxyGet('corp', { name: cand.corpNm }));
