@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 206;
+const BUILD = 207;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4682,6 +4682,30 @@ function renderSiteDeepInto(box, state) {
 }
 
 // 방문지 주소 선택 — 제조소(식약처) > 본점(금융위) > 사업장(연금) 순
+// 공유용 기본정보 글 + 다시 조회 링크
+const SHARE_KEYS = ['대표자', '사업자등록번호', '법인등록번호', '사업자 상태', '설립일 / 등록일', '업종', '본점주소', '제조업 등록', '공장/제조소 소재지', 'CGMP 적합업소', '공장 연락처'];
+function shareBasicText(report) {
+  const M = report.meta || {};
+  const all = [...(report.basic || []), ...(report.capacity || [])];
+  const val = (k) => { const f = all.find((x) => x.key === k); return f && f.value != null && f.value !== '' ? String(f.value).replace(/\s+/g, ' ').trim() : null; };
+  const name = M.vendor_name || '';
+  const bz = String(val('사업자등록번호') || '').replace(/\D/g, '');
+  const url = `${location.origin}${location.pathname}?q=${encodeURIComponent(name)}${bz.length === 10 ? `&bno=${bz}` : ''}`;
+  const lines = SHARE_KEYS.map((k) => [k, val(k)]).filter(([, v]) => v).map(([k, v]) => `· ${k}: ${v.length > 160 ? `${v.slice(0, 157)}…` : v}`);
+  const day = String(M.query_at || new Date().toISOString()).slice(0, 10);
+  return { title: `${name} 기본정보`, url,
+    text: [`[화장품 제조업체 기본정보] ${name}`, ...lines, `(조회일 ${day} · 공공데이터 기준)`, `다시 조회: ${url}`].join('\n') };
+}
+async function shareBasic(report, btn) {
+  const S = shareBasicText(report);
+  const done = (t) => { const o = btn.textContent; btn.textContent = t; setTimeout(() => { btn.textContent = o; }, 1800); };
+  // 휴대폰은 공유 시트(카톡·문자 등), 그 밖에는 클립보드로 복사한다
+  if (navigator.share) {
+    try { await navigator.share({ title: S.title, text: S.text }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(S.text); done('✓ 복사했습니다'); }
+  catch { window.prompt('아래 내용을 복사해 공유하세요', S.text); }
+}
 function visitAddress(report) {
   const fields = [...(report.basic || []), ...(report.capacity || [])];
   const val = (k) => { const f = fields.find((x) => x.key === k); return f && f.value ? f.value : null; };
@@ -6166,6 +6190,24 @@ function renderRoadview(addr, name) {
   return box;
 }
 
+// 화물차 입차 대략 추정. 마당 = 대지 − 건축면적, 그중 60%만 차가 쓴다고 본다(주차·조경·통로).
+// 필요 넓이는 정차 + 하역 작업 + 돌려 나가기(회차) 공간을 차 길이·회전반경으로 어림한 값이다.
+const TRUCKS = [
+  { name: '40피트 컨테이너(트레일러)', len: '약 16.7m', need: 750 },
+  { name: '18톤 장축', len: '약 12m', need: 400 },
+  { name: '11톤', len: '약 10.5m', need: 260 },
+  { name: '5톤', len: '약 8.5m', need: 140 },
+  { name: '2.5~3.5톤', len: '약 6.5m', need: 70 },
+  { name: '1톤', len: '약 5m', need: 40 },
+];
+function truckAccess(plat, arch, collective) {
+  if (!plat || !arch) return null;
+  if (collective) return { collective: true };
+  const yard = Math.max(0, plat - arch), usable = yard * 0.6;
+  const rows = TRUCKS.map((t) => ({ ...t, st: usable >= t.need * 1.5 ? 'ok' : usable >= t.need ? 'tight' : 'hard' }));
+  const top = rows.find((r) => r.st !== 'hard');
+  return { yard, usable, rows, max: top ? top.name : null };
+}
 function renderAreaTab(report) {
   const M = report.meta || {};
   if (!M.live) return null;
@@ -6227,6 +6269,22 @@ function renderAreaTab(report) {
       + stat('대지면적', B.plat, '부지')
       + stat('공장 용도 건축면적', B.factoryArch, `공장 ${B.factoryCount || 0}동 / 전체 ${B.bldgCount || 0}동`)
       + '</div></div>';
+  };
+  // 화물차 입차 예상 — 대지면적에서 건축면적(건평)을 뺀 마당 넓이로만 대략 가늠한다
+  const truckHtml = () => {
+    if (!B) return '';
+    const T = truckAccess(B.plat, B.arch, B.collective || parts.some((p) => p.collective));
+    if (!T) return '';
+    const ST = { ok: '여유', tight: '빠듯', hard: '어려움' };
+    const lead = T.collective
+      ? '<p class="tk-lead">지식산업센터 등 <b>집합건물</b>이라 대지·마당이 건물 전체 몫입니다 — 차량은 <b>공용 하역장·화물 엘리베이터</b> 기준으로 관리사무소에 확인하세요.</p>'
+      : `<p class="tk-lead">마당(대지 − 건평) <b>약 ${py(T.yard)}평</b> (${m2(T.yard)}) · 실제로 차가 쓸 수 있는 넓이는 주차·조경을 빼고 약 ${m2(T.usable)}로 봤습니다.`
+        + ` <b>${T.max ? `${esc(T.max)}까지 입차 예상` : '1톤도 마당 안 정차가 어렵습니다 — 도로변 하역 예상'}</b></p>`;
+    const rows = T.collective ? '' : `<div class="at-tw"><table class="at-tbl tk-tbl"><thead><tr><th>차종 (길이)</th><th class="n">필요 마당</th><th>예상</th></tr></thead><tbody>`
+      + T.rows.map((r) => `<tr><td>${esc(r.name)} <small>${esc(r.len)}</small></td><td class="n">${m2(r.need)}</td><td><span class="tk-st ${r.st}">${ST[r.st]}</span>${r.st === 'hard' ? ' <small>도로 정차·하역</small>' : r.st === 'tight' ? ' <small>후진 진입·회차 확인</small>' : ''}</td></tr>`).join('')
+      + '</tbody></table></div>';
+    return `<div class="at-sec tk"><h4>화물차 입차 예상 <small>대지면적 − 건축면적 기준 대략치</small></h4>${lead}${rows}`
+      + '<p class="tk-note">실제 입차는 진입 도로 폭(6m 미만이면 11톤 이상 곤란)·정문 폭과 높이·경사·주차 차량에 따라 달라집니다. 방문 때 정문과 하역장 위치를 함께 확인하세요.</p></div>';
   };
   const lotsHtml = () => {
     if (!B) return '';
@@ -6318,7 +6376,7 @@ function renderAreaTab(report) {
   };
 
   const paint = () => {
-    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${sumHtml()}${lotsHtml()}${bldgHtml()}${airSecHtml(M)}${noteHtml()}`;
+    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${sumHtml()}${truckHtml()}${lotsHtml()}${bldgHtml()}${airSecHtml(M)}${noteHtml()}`;
     ui.painted = true;
     const cmp = renderAreaCompare(report);
     if (cmp) wrap.appendChild(cmp);
@@ -6512,6 +6570,10 @@ function render(report, opts = {}) {
   dlBtn.addEventListener('click', downloadJSON);
   const printBtn = el('button', 'act primary', '🖨 인쇄 / PDF로 저장');
   printBtn.addEventListener('click', () => window.print());
+  // 기본정보만 공유 — 받은 사람이 링크를 열면 같은 업체를 새로 조회한다(리포트 전체를 보내지 않는다)
+  const shareBtn = el('button', 'act', '🔗 기본정보 공유');
+  shareBtn.title = '업체 기본정보(대표·사업자번호·주소·제조업 허가 등)와 다시 조회 링크를 공유합니다';
+  shareBtn.addEventListener('click', () => shareBasic(report, shareBtn));
   actions.appendChild(el('span', 'act-hint', '방문 전 리포트로 저장 →'));
   // 🗺 카카오맵에서 공장 위치 보기 (제조소 주소 우선) — 별도 키 불필요, 새 탭에서 로드맵 표시
   const visitAddr = visitAddress(report);
@@ -6547,6 +6609,7 @@ function render(report, opts = {}) {
   }
   actions.appendChild(dlBtn);
   actions.appendChild(printBtn);
+  actions.appendChild(shareBtn);
   root.appendChild(actions);
   const allFields = [...report.basic, ...report.capacity, ...report.finance].filter(included);
   const gapTotal = allFields.filter((f) => f.data_gap).length;

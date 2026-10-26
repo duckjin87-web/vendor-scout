@@ -2257,3 +2257,14 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .cand-nolic-box > summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--muted); padding: 6px 0; }
 .cand-nolic-box > summary small { font-weight: 500; color: var(--faint); margin-left: 6px; }
 .cand-nolic-box .cand { opacity: .85; }
+
+/* 화물차 입차 예상 */
+.tk-lead { margin: 0 0 8px; font-size: 13px; line-height: 1.6; color: var(--text); }
+.tk-note { margin: 8px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.tk-tbl small { color: var(--muted); font-size: 11.5px; }
+.at-tbl.tk-tbl { min-width: 0; }
+
+.tk-st { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid currentColor; }
+.tk-st.ok { color: var(--gA); background: var(--gA-bg); }
+.tk-st.tight { color: var(--gC); background: var(--gC-bg); }
+.tk-st.hard { color: var(--risk); background: var(--risk-bg); }
