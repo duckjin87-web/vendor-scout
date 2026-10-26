@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 208;
+const BUILD = 209;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -6193,7 +6193,7 @@ function renderRoadview(addr, name) {
 // 화물차 입차 대략 추정. 마당 = 대지 − 건축면적, 그중 60%만 차가 쓴다고 본다(주차·조경·통로).
 // 필요 넓이는 정차 + 하역 작업 + 돌려 나가기(회차) 공간을 차 길이·회전반경으로 어림한 값이다.
 // 적재 PLT는 표준 팔레트 T11(1.1m × 1.1m) 한 단 기준, 흔한 적재함 안쪽 치수로 어림했다
-// (예: 5톤 6.2m × 2.35m → 길이 5장 × 폭 2장 = 10). m: 차 전체 길이(그림 길이에 쓴다)
+// (예: 5톤 6.2m × 2.35m → 길이 5장 × 폭 2장 = 10)
 const TRUCKS = [
   { name: '1톤', m: 5, len: '약 5m', plt: '2PLT', need: 40 },
   { name: '2.5톤', m: 6.3, len: '약 6.3m', plt: '3~4PLT', need: 70 },
@@ -6201,26 +6201,8 @@ const TRUCKS = [
   { name: '5톤', m: 8.5, len: '약 8.5m', plt: '10PLT', need: 140 },
   { name: '11톤', m: 10.5, len: '약 10.5m', plt: '16PLT', need: 260 },
   { name: '18톤 장축', m: 12, len: '약 12m', plt: '18PLT', need: 400 },
-  { name: '40피트 컨테이너', m: 16.7, len: '약 16.7m', plt: '20PLT', need: 750, trailer: true },
+  { name: '40ft 컨테이너', m: 16.7, len: '약 16.7m', plt: '20PLT', need: 750, trailer: true },
 ];
-// 옆에서 본 트럭 그림 — 실제 길이에 비례해 길어진다. 동그란 바퀴·둥근 모서리로 귀엽게
-function truckSvg(t) {
-  const L = Math.round(46 + (t.m / 16.7) * 70), x0 = Math.round((124 - L) / 2);
-  const cabW = t.trailer ? 20 : Math.max(16, Math.round(L * 0.27));
-  const boxW = L - cabW - 2, boxH = t.m < 6 ? 15 : t.m < 9 ? 19 : 23, top = 38 - boxH;
-  const cx = x0 + boxW + 2, cabH = t.m < 9 ? 16 : 19, cy = 38 - cabH;
-  const wheel = (x) => `<circle class="tk-wh" cx="${x}" cy="40" r="4.6"/><circle class="tk-hub" cx="${x}" cy="40" r="1.7"/>`;
-  const rearN = t.trailer ? 3 : t.m >= 10 ? 2 : 1;
-  const rear = Array.from({ length: rearN }, (_, k) => wheel(Math.round(x0 + 9 + k * 10.5))).join('');
-  const ribs = t.trailer ? Array.from({ length: 7 }, (_, k) => `<line class="tk-rib" x1="${x0 + 8 + k * 11}" y1="${top + 3}" x2="${x0 + 8 + k * 11}" y2="${top + boxH - 3}"/>`).join('') : '';
-  return `<svg class="tk-svg" viewBox="0 0 124 48" aria-hidden="true">`
-    + `<line class="tk-ground" x1="4" y1="45" x2="120" y2="45"/>`
-    + `<rect class="tk-box${t.trailer ? ' ctn' : ''}" x="${x0}" y="${top}" width="${boxW}" height="${boxH}" rx="3"/>${ribs}`
-    + `<path class="tk-cab" d="M${cx} ${38} V${cy + 3} Q${cx} ${cy} ${cx + 3} ${cy} H${cx + cabW - 7} Q${cx + cabW - 2} ${cy} ${cx + cabW} ${cy + 7} V38 Z"/>`
-    + `<rect class="tk-win" x="${cx + cabW * 0.45}" y="${cy + 2.5}" width="${cabW * 0.4}" height="${cabH * 0.36}" rx="1.8"/>`
-    + `<circle class="tk-lamp" cx="${cx + cabW - 1.6}" cy="${36 - cabH * 0.2}" r="1.3"/>`
-    + `${rear}${wheel(Math.round(cx + cabW * 0.55))}</svg>`;
-}
 function truckAccess(plat, arch, collective) {
   if (!plat || !arch) return null;
   if (collective) return { collective: true };
@@ -6301,12 +6283,11 @@ function renderAreaTab(report) {
       ? '<p class="tk-lead">지식산업센터 등 <b>집합건물</b>이라 대지·마당이 건물 전체 몫입니다 — 차량은 <b>공용 하역장·화물 엘리베이터</b> 기준으로 관리사무소에 확인하세요.</p>'
       : `<p class="tk-lead">마당(대지 − 건평) <b>약 ${py(T.yard)}평</b> (${m2(T.yard)}) · 실제로 차가 쓸 수 있는 넓이는 주차·조경을 빼고 약 ${m2(T.usable)}로 봤습니다.`
         + ` <b>${T.max ? `${esc(T.max)}까지 입차 예상` : '1톤도 마당 안 정차가 어렵습니다 — 도로변 하역 예상'}</b></p>`;
-    const rows = T.collective ? '' : '<div class="tk-grid">'
-      + T.rows.map((r) => `<div class="tk-card ${r.st}">${truckSvg(r)}<b class="tk-nm">${esc(r.name)}</b>`
-        + `<span class="tk-spec">${esc(r.len)} <em>(${esc(r.plt)})</em></span>`
-        + `<span class="tk-foot"><small>필요 마당 ${m2(r.need)}</small><span class="tk-st ${r.st}">${ST[r.st]}</span></span>`
-        + (r.st === 'hard' ? '<small class="tk-why">도로 정차·하역</small>' : r.st === 'tight' ? '<small class="tk-why">후진 진입·회차 확인</small>' : '')
-        + '</div>').join('')
+    // 한 줄에 한 차종 — 차종·길이·PLT·필요 마당·판정을 같은 칸 너비로 맞춰 2열로 촘촘히
+    const WHY = { tight: '후진 진입·회차 확인', hard: '도로 정차·하역 예상' };
+    const rows = T.collective ? '' : '<div class="tk-list">'
+      + T.rows.map((r) => `<div class="tk-row"${WHY[r.st] ? ` title="${WHY[r.st]}"` : ''}><b>${esc(r.name)}</b><span>${esc(r.len)}</span><em>(${esc(r.plt)})</em>`
+        + `<small><i>필요 마당 </i>${m2(r.need)}</small><span class="tk-st ${r.st}">${ST[r.st]}</span></div>`).join('')
       + '</div><p class="tk-note">PLT: 표준 팔레트(1.1m × 1.1m) 한 단 기준 대략치 — 적재함 폭·윙바디 여부에 따라 달라집니다.</p>';
     return `<div class="at-sec tk"><h4>화물차 입차 예상 <small>대지면적 − 건축면적 기준 대략치</small></h4>${lead}${rows}`
       + '<p class="tk-note">실제 입차는 진입 도로 폭(6m 미만이면 11톤 이상 곤란)·정문 폭과 높이·경사·주차 차량에 따라 달라집니다. 방문 때 정문과 하역장 위치를 함께 확인하세요.</p></div>';

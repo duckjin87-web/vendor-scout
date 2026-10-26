@@ -2262,27 +2262,20 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .tk-lead { margin: 0 0 8px; font-size: 13px; line-height: 1.6; color: var(--text); }
 .tk-note { margin: 8px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
 
-.tk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.tk-card { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; border: 1px solid var(--rule); border-radius: 8px; min-width: 0; }
-.tk-card.hard { background: var(--risk-bg); border-color: transparent; }
-.tk-card.hard .tk-svg { opacity: .55; }
-.tk-svg { width: 100%; height: 46px; margin-bottom: 2px; }
-.tk-ground { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 3; }
-.tk-box { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
-.tk-box.ctn { fill: var(--gC-bg); stroke: var(--gC); }
-.tk-rib { stroke: var(--gC); stroke-width: 1; opacity: .6; }
-.tk-cab { fill: var(--accent); }
-.tk-win { fill: #fff; opacity: .85; }
-.tk-lamp { fill: #ffd34d; }
-.tk-wh { fill: var(--text); }
-.tk-hub { fill: var(--faint); }
-.tk-nm { font-size: 14px; font-weight: 800; color: var(--text); }
-.tk-spec { font-size: 12.5px; color: var(--text); font-variant-numeric: tabular-nums; }
-.tk-spec em { font-style: normal; font-weight: 700; color: var(--accent); }
-.tk-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
-.tk-foot small, .tk-why { font-size: 11.5px; color: var(--muted); }
+.tk-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; row-gap: 2px; }
+.tk-row { display: grid; grid-template-columns: 7.4em 4.6em 6.2em 1fr auto; align-items: baseline; gap: 6px; padding: 3px 0; font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tk-row b { font-size: 14px; font-weight: 800; color: var(--text); }
+.tk-row em { font-style: normal; font-weight: 700; color: var(--accent); }
+.tk-row small { font-size: 12px; color: var(--muted); }
+.tk-row small i { font-style: normal; }
+@media (max-width: 760px) {
+  .tk-list { grid-template-columns: minmax(0, 1fr); }
+  .tk-row { grid-template-columns: 6.4em 4.6em 5.8em 1fr auto; gap: 4px; font-size: 12.5px; }
+  .tk-row b { font-size: 13px; }
+  .tk-row small i { display: none; }     /* 좁은 화면은 '필요 마당' 글자를 빼고 넓이만 */
+}
 
-.tk-st { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid currentColor; }
-.tk-st.ok { color: var(--gA); background: var(--gA-bg); }
-.tk-st.tight { color: var(--gC); background: var(--gC-bg); }
-.tk-st.hard { color: var(--risk); background: var(--risk-bg); }
+.tk-st { font-size: 13px; font-weight: 800; text-align: right; }
+.tk-st.ok { color: var(--gA); }
+.tk-st.tight { color: var(--gC); }
+.tk-st.hard { color: var(--risk); }
