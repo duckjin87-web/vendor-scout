@@ -2262,12 +2262,14 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .tk-lead { margin: 0 0 8px; font-size: 13px; line-height: 1.6; color: var(--text); }
 .tk-note { margin: 8px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
 
-.tk-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; row-gap: 2px; }
-.tk-row { display: grid; grid-template-columns: 7.4em 4.6em 6.2em 1fr auto; align-items: baseline; gap: 6px; padding: 3px 0; font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tk-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; row-gap: 0; border-top: 1px solid var(--border); }
+.tk-row { display: grid; grid-template-columns: 7.4em 4.6em 6.2em 1fr auto; align-items: baseline; gap: 6px; padding: 7px 8px; border-bottom: 1px solid var(--rule); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tk-row b { font-size: 14px; font-weight: 800; color: var(--text); }
 .tk-row em { font-style: normal; font-weight: 700; color: var(--accent); }
 .tk-row small { font-size: 12px; color: var(--muted); }
 .tk-row small i { font-style: normal; }
+/* 어려움 — 줄 전체를 옅은 노랑으로(밝은·어두운 배색 모두 반투명으로 얹는다) */
+.tk-row.hard { background: rgba(250, 204, 21, .16); }
 @media (max-width: 760px) {
   .tk-list { grid-template-columns: minmax(0, 1fr); }
   .tk-row { grid-template-columns: 6.4em 4.6em 5.8em 1fr auto; gap: 4px; font-size: 12.5px; }

@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 209;
+const BUILD = 210;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -6286,7 +6286,7 @@ function renderAreaTab(report) {
     // 한 줄에 한 차종 — 차종·길이·PLT·필요 마당·판정을 같은 칸 너비로 맞춰 2열로 촘촘히
     const WHY = { tight: '후진 진입·회차 확인', hard: '도로 정차·하역 예상' };
     const rows = T.collective ? '' : '<div class="tk-list">'
-      + T.rows.map((r) => `<div class="tk-row"${WHY[r.st] ? ` title="${WHY[r.st]}"` : ''}><b>${esc(r.name)}</b><span>${esc(r.len)}</span><em>(${esc(r.plt)})</em>`
+      + T.rows.map((r) => `<div class="tk-row ${r.st}"${WHY[r.st] ? ` title="${WHY[r.st]}"` : ''}><b>${esc(r.name)}</b><span>${esc(r.len)}</span><em>(${esc(r.plt)})</em>`
         + `<small><i>필요 마당 </i>${m2(r.need)}</small><span class="tk-st ${r.st}">${ST[r.st]}</span></div>`).join('')
       + '</div><p class="tk-note">PLT: 표준 팔레트(1.1m × 1.1m) 한 단 기준 대략치 — 적재함 폭·윙바디 여부에 따라 달라집니다.</p>';
     return `<div class="at-sec tk"><h4>화물차 입차 예상 <small>대지면적 − 건축면적 기준 대략치</small></h4>${lead}${rows}`
