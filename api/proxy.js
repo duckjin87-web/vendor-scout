@@ -368,7 +368,8 @@ async function growthLastRun(env) {
 async function handleGrowth(env, op) {
   const actionsUrl = `https://github.com/${env.GH_REPO || GH_REPO_DEFAULT}/actions/workflows/growth.yml`;
   const last = await growthLastRun(env).catch((e) => ({ err: String(e && e.message || e) }));
-  if (op === 'status') return jsonRes({ ok: true, last, actionsUrl });
+  // canRun: 버튼으로 바로 돌릴 수 있는가(토큰 유무만 알린다 — 토큰 값은 내려 주지 않는다)
+  if (op === 'status') return jsonRes({ ok: true, last, actionsUrl, canRun: !!env.GH_DISPATCH_TOKEN });
   if (!env.GH_DISPATCH_TOKEN) return jsonRes({ error: 'GH_DISPATCH_TOKEN 미설정 — GitHub Actions 화면에서 직접 실행하세요', actionsUrl, last }, 501);
   if (last && (last.status === 'queued' || last.status === 'in_progress')) return jsonRes({ ok: true, started: false, reason: '이미 집계 중입니다', last, actionsUrl });
   if (last && last.createdAt && Date.now() - Date.parse(last.createdAt) < 30 * 60 * 1000) return jsonRes({ ok: true, started: false, reason: '30분 안에 이미 요청됐습니다', last, actionsUrl });

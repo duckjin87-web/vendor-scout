@@ -26,10 +26,16 @@ const grWhen = (iso) => { if (!iso) return ''; const t = new Date(iso); return `
 function grReqHtml(st, meta) {
   const d = st.data || {}, q = st.req || {};
   const fd = d.fileDate ? d.fileDate.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') : '';
-  return `<div class="gr-req"><button type="button" class="nb-btn sm${q.busy ? '' : ' dark'}" data-gr-req${q.busy ? ' disabled' : ''}>${q.busy ? '집계 중…' : '최신 자료 조회 요청'}</button>`
+  // 프록시에 실행 토큰이 없으면(canRun false) 버튼 대신 GitHub 실행 화면으로 보낸다 — 빨간 오류 대신 할 일을 안내
+  const btn = q.busy ? '<button type="button" class="nb-btn sm" disabled>집계 중…</button>'
+    : st.canRun === false ? `<a class="nb-btn sm dark" href="${esc(GR_ACTIONS)}" target="_blank" rel="noopener" data-gr-gh>최신 자료 조회 (GitHub) ↗</a>`
+    : '<button type="button" class="nb-btn sm dark" data-gr-req>최신 자료 조회 요청</button>';
+  const hint = !q.busy && !q.msg && st.canRun === false
+    ? '<p class="gr-reqmsg" role="note">GitHub 화면에서 「Run workflow」를 누르면 집계됩니다. 이 화면을 열어 두면 끝난 뒤 자동으로 새 자료로 바뀝니다.</p>' : '';
+  return `<div class="gr-req">${btn}`
     + `<small>${meta != null ? esc(meta) : `마지막 집계 ${esc(grWhen(d.builtAt) || '—')}${fd ? ` · 국민연금 파일 ${esc(fd)}` : ''} · 다음 공개 ${esc(d.nextUpdate || '미정')}`}</small>`
-    + (q.msg ? `<p class="gr-reqmsg${q.err ? ' err' : ''}" role="status">${esc(q.msg)}${q.link ? ` <a href="${esc(q.link)}" target="_blank" rel="noopener">GitHub에서 직접 실행 ↗</a>` : ''}</p>` : '')
-    + '</div>';
+    + (q.msg ? `<p class="gr-reqmsg${q.err ? ' err' : ''}" role="status">${esc(q.msg)}${q.link ? ` <a href="${esc(q.link)}" target="_blank" rel="noopener">GitHub 화면 ↗</a>` : ''}</p>` : '')
+    + hint + '</div>';
 }
 
 const grPer = (id) => GR.PERIODS.find((p) => p.id === id) || GR.PERIODS[0];
@@ -395,6 +401,7 @@ function mountGrowth() {
     const g = e.target.closest('[data-gr-go]');
     if (g) { const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = ''; lookup(g.dataset.grGo, ''); return; }
     if (e.target.closest('[data-gr-req]')) { grRequest(paint); return; }
+    if (e.target.closest('[data-gr-gh]')) { grWatchGh(); return; }
     const row = e.target.closest('[data-gr-row]');
     if (row) { growthState.open = growthState.open === row.dataset.grRow ? null : row.dataset.grRow; paint(); }
   });
@@ -408,6 +415,7 @@ function mountGrowth() {
   });
   grBindHover(box);
   paint();
+  grProbe();
   grLoad().then(paint).catch((e) => { growthState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
 }
 const grLoad = (bust) => {
@@ -428,10 +436,17 @@ async function grRequest(paint) {
   set({ busy: true, msg: '집계 요청 중…', err: false, link: null });
   let r;
   try { r = await proxyOnlyGet('growthRefresh', {}); } catch (e) {
+    // 실행 토큰이 없는 배포 — 오류가 아니라 GitHub 화면에서 돌리는 방식으로 바꿔 보여 준다
+    if (/GH_DISPATCH_TOKEN/.test(e.message || '')) { growthState.canRun = false; set({ busy: false, msg: null, err: false, link: null }); return; }
     set({ busy: false, msg: e.message || '요청 실패', err: true, link: GR_ACTIONS }); return;
   }
   if (!r.started) { set({ msg: `${r.reason || '지금은 새로 돌리지 않았습니다'} — 끝나면 자동으로 새 자료를 불러옵니다.`, link: r.actionsUrl }); }
   else set({ msg: '집계를 시작했습니다. 새 달 자료가 있으면 내려받아 대조합니다(몇 분 + 사이트 반영 1~2분). 이 화면을 열어 두면 자동으로 바뀝니다.' });
+  await grWatch(set, r.started ? Date.now() : (Date.parse(r.last && r.last.createdAt) || Date.now()));
+}
+// 집계 작업이 끝나길 기다렸다가 새 집계 파일을 다시 읽는다. since: 이 시각 뒤에 시작된 작업만 기다린다
+// (GitHub 화면에서 직접 돌린 경우 — 사용자가 Run workflow를 누를 때까지 기다린다)
+async function grWatch(set, since) {
   const before = growthState.data && growthState.data.builtAt;
   const t0 = Date.now();
   // 작업이 끝날 때까지 20초마다 확인(최대 25분) → 끝나면 사이트 반영을 기다리며 새 집계 파일을 다시 읽는다
@@ -440,7 +455,9 @@ async function grRequest(paint) {
     let st = null;
     try { st = await proxyOnlyGet('growthStatus', {}); } catch { continue; }
     const last = st && st.last;
-    if (!last || last.status !== 'completed') continue;
+    if (!last || !last.createdAt || Date.parse(last.createdAt) < since - 60000) continue;    // 아직 새 작업이 없다
+    if (!growthState.req || !growthState.req.busy) set({ busy: true, msg: '집계 중입니다 — 끝나면 자동으로 새 자료로 바뀝니다.', err: false, link: last.url });
+    if (last.status !== 'completed') continue;
     if (last.conclusion !== 'success') { set({ busy: false, msg: `집계 작업이 실패했습니다(${last.conclusion}).`, err: true, link: last.url }); return; }
     for (let k = 0; k < 9; k++) {
       mkLoad(Date.now()).then(() => mkState.repaint && mkState.repaint()).catch(() => {});
@@ -451,6 +468,27 @@ async function grRequest(paint) {
     return;
   }
   set({ busy: false, msg: '아직 끝나지 않았습니다 — 잠시 뒤 새로고침해 주세요.', link: GR_ACTIONS });
+}
+// 처음 열 때 한 번: 버튼으로 바로 돌릴 수 있는지, 지금 집계가 돌고 있는지 본다
+let _grProbed = false;
+async function grProbe() {
+  if (_grProbed || !getProxy()) return; _grProbed = true;
+  const set = (o) => { growthState.req = { ...(growthState.req || {}), ...o }; if (growthState.repaint) growthState.repaint(); if (typeof mkState !== 'undefined' && mkState.repaint) mkState.repaint(); };
+  let st = null;
+  try { st = await proxyOnlyGet('growthStatus', {}); } catch { return; }
+  if (st && typeof st.canRun === 'boolean') growthState.canRun = st.canRun;
+  const last = st && st.last;
+  if (last && (last.status === 'queued' || last.status === 'in_progress')) {
+    set({ busy: true, msg: '집계 중입니다 — 끝나면 자동으로 새 자료로 바뀝니다.', err: false, link: last.url });
+    grWatch(set, Date.parse(last.createdAt) || Date.now());
+  } else set({});
+}
+// GitHub 화면으로 보낸 뒤에는 거기서 시작된 작업을 지켜본다
+function grWatchGh() {
+  if (growthState.req && growthState.req.busy) return;
+  const set = (o) => { growthState.req = { ...(growthState.req || {}), ...o }; if (growthState.repaint) growthState.repaint(); if (typeof mkState !== 'undefined' && mkState.repaint) mkState.repaint(); };
+  set({ busy: false, msg: 'GitHub 화면에서 「Run workflow」를 눌러 주세요. 시작되면 이 화면이 알아서 따라갑니다.', err: false, link: null });
+  grWatch(set, Date.now());
 }
 
 // ═══ 화장품 제조업 명단 변동 — data/growth/makers.json(scripts/build-makers.mjs, 매주 + 조회 요청 때) ═══
@@ -567,6 +605,7 @@ function mountMakers() {
     const g = e.target.closest('[data-gr-go]');
     if (g) { const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = ''; lookup(g.dataset.grGo, ''); return; }
     if (e.target.closest('[data-gr-req]')) { grRequest(() => { if (growthState.repaint) growthState.repaint(); }); }
+    if (e.target.closest('[data-gr-gh]')) grWatchGh();
   });
   paint();
   mkLoad().then(() => { paint(); dashTabsPaint(); if (growthState.repaint) growthState.repaint(); }).catch((e) => { mkState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
