@@ -94,11 +94,13 @@ async function relay(target, label, init) {
 const BLD = {
   bldTitle: ['https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo', 'https://apis.data.go.kr/1613000/BldRgstService_v2/getBrTitleInfo'],
   bldRecap: ['https://apis.data.go.kr/1613000/BldRgstHubService/getBrRecapTitleInfo', 'https://apis.data.go.kr/1613000/BldRgstService_v2/getBrRecapTitleInfo'],
+  // 전유부(호실별 전유·공용 면적) — 지식산업센터 입주사는 건물 전체가 아니라 자기 호실 면적을 봐야 한다
+  bldExpos: ['https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo', 'https://apis.data.go.kr/1613000/BldRgstService_v2/getBrExposPubuseAreaInfo'],
 };
 async function handleBld(url, service, env) {
   if (!env.DATA_GO_KR_API_KEY) return jsonRes({ error: 'DATA_GO_KR_API_KEY 미설정' }, 500);
   const q = new URLSearchParams();
-  for (const k of ['sigunguCd', 'bjdongCd', 'platGbCd', 'bun', 'ji', 'numOfRows', 'pageNo']) {
+  for (const k of ['sigunguCd', 'bjdongCd', 'platGbCd', 'bun', 'ji', 'dongNm', 'hoNm', 'numOfRows', 'pageNo']) {
     const v = url.searchParams.get(k); if (v) q.set(k, v);
   }
   if (!/^\d{5}$/.test(q.get('sigunguCd') || '') || !/^\d{5}$/.test(q.get('bjdongCd') || '')) return jsonRes({ error: '시군구코드·법정동코드(각 5자리) 필요' }, 400);

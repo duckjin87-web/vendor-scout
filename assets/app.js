@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 210;
+const BUILD = 211;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -195,6 +195,7 @@ const PARAM_MAP = {
   // 건축물대장 — 법정동코드(시군구 5 + 법정동 5)와 지번(본번·부번 4자리)으로 찾는다
   bldTitle: { sigunguCd: 'sigunguCd', bjdongCd: 'bjdongCd', platGbCd: 'platGbCd', bun: 'bun', ji: 'ji', rows: 'numOfRows' },
   bldRecap: { sigunguCd: 'sigunguCd', bjdongCd: 'bjdongCd', platGbCd: 'platGbCd', bun: 'bun', ji: 'ji', rows: 'numOfRows' },
+  bldExpos: { sigunguCd: 'sigunguCd', bjdongCd: 'bjdongCd', platGbCd: 'platGbCd', bun: 'bun', ji: 'ji', hoNm: 'hoNm', dongNm: 'dongNm', rows: 'numOfRows', page: 'pageNo' },
   factoryBass:  { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
   factoryLand:  { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
   factoryFclty: { name: 'cmpnyNm', manageNo: 'fctryManageNo', rows: 'numOfRows' },
@@ -1602,6 +1603,59 @@ function bldItemMatches(x, k, name) {
   const key = bldCompact(stripCorp(name || ''));
   return key.length >= 2 && bldCompact(`${x.bldNm || ''}${x.dongNm || ''}`).includes(key);
 }
+// ── 오피스형 건물 입주 호실 면적(전유부) ──
+// 지식산업센터 입주사는 건물 전체 면적이 업체 크기가 아니다. 주소의 호수로 전유부를 불러 호실 면적을 더한다.
+// 호 이름은 건물마다 형식이 달라(블루텍: '공존618') 첫 쪽에서 앞글자를 배운 뒤 정확한 이름으로 다시 부른다.
+async function bldUnitArea(B, units) {
+  const P = (B.parts && B.parts[0]) || B;
+  const m = String(P.key || '').match(/^(\d{5})(\d{5})-(\d)-(\d{4})(?:-(\d{4}))?$/);
+  if (!m) throw new Error('건축물대장 지번 키 없음');
+  const base = { sigunguCd: m[1], bjdongCd: m[2], platGbCd: m[3], bun: m[4], ...(m[5] ? { ji: m[5] } : {}) };
+  const items = (d) => listOf(d, ['response.body.items.item', 'body.items.item', 'body.items']).filter((x) => x && typeof x === 'object');
+  const first = items(await proxyGet('bldExpos', { ...base, rows: '100' }));
+  if (!first.length) throw new Error('이 지번에 전유부(호실 대장)가 없습니다');
+  const tail = (h) => (String(h || '').match(/(\d{2,5})\s*호?$/) || [])[1] || '';
+  const prefixes = [...new Set(first.map((x) => String(x.hoNm || '').replace(/\d{2,5}\s*호?$/, '')).filter(Boolean))].slice(0, 3);
+  const rows = [], missing = [];
+  await mapLimit(units, 2, async (u) => {
+    let hit = first.filter((x) => tail(x.hoNm) === u);
+    for (const nm of [...prefixes.map((p) => `${p}${u}`), `${u}호`, ...prefixes.map((p) => `${p}${u}호`)]) {
+      if (hit.length) break;
+      try { hit = items(await proxyGet('bldExpos', { ...base, hoNm: nm, rows: '100' })).filter((x) => tail(x.hoNm) === u); } catch { /* 다음 이름 */ }
+    }
+    if (!hit.length) { missing.push(u); return; }
+    const sum = (gb) => hit.filter((x) => String(x.exposPubuseGbCdNm || '') === gb).reduce((a, x) => a + (bldNum(x.area) || 0), 0);
+    const ex = hit.find((x) => x.exposPubuseGbCdNm === '전유') || hit[0];
+    rows.push({ ho: `${u}호`, name: ex.hoNm, flr: ex.flrNoNm || '', purpose: ex.etcPurps || ex.mainPurpsCdNm || '', excl: sum('전유'), common: sum('공용') });
+  });
+  if (!rows.length) throw new Error(`전유부에서 ${units.join('·')}호를 찾지 못했습니다`);
+  rows.sort((a, b) => units.indexOf(a.ho.replace('호', '')) - units.indexOf(b.ho.replace('호', '')));
+  return { rows, missing, excl: rows.reduce((a, r) => a + r.excl, 0), common: rows.reduce((a, r) => a + r.common, 0) };
+}
+// 같은 건물(도로명+건물번호)을 가리키는 주소 글만 — 본점이 다른 빌딩의 호실이어도 공장 몫으로 섞지 않는다
+const bldRoadKey = (s) => { const m = String(s || '').match(/([가-힣A-Za-z0-9]+(?:로|길))\s*(\d+(?:-\d+)?)/); return m ? `${m[1]}${m[2]}` : ''; };
+function unitTextsFor(siteAddr, texts) {
+  const k = bldRoadKey(siteAddr);
+  return texts.filter(Boolean).filter((t) => !k || bldRoadKey(t) === k);
+}
+async function bldAttachUnit(B, siteAddr, texts) {
+  if (!B || !B.arch || typeof unitTenantOf !== 'function') return B;
+  const U = unitTenantOf(unitTextsFor(siteAddr, texts), B);
+  if (U && U.units.length) {
+    try { U.area = await bldUnitArea(B, U.units); } catch (e) { U.area = { err: e.message }; }
+  }
+  B.unit = U || null;
+  return B;
+}
+// 저장된 리포트 등 — 리포트에 남은 주소 글로 다시 판단(호실 면적은 다시 부르지 않는다)
+function reportUnitTexts(report) {
+  const M = report.meta || {};
+  const all = [...(report.basic || []), ...(report.capacity || [])];
+  const v = (k) => { const x = all.find((y) => y.key === k); return x && x.value; };
+  return [...(M.mfds_sites || []).map((x) => `${x.addr} ${x.detail || ''}`), ...((M.site && M.site.cands) || []).map((c) => c.addr),
+    v('공장/제조소 소재지'), ...(((M.workforce && M.workforce.sites) || []).map((x) => x.addr))];
+}
+
 // 주소 → 건축물대장. 열쇠는 법정동코드(b_code 10자리) + 산 여부 + 본번·부번.
 // 도로명주소가 가리키는 대표 지번에 건물이 안 걸린 경우가 있다(셀랩: 윤보선로 291 → 신남리 731-20엔
 // 대장 없음). 공장 건물은 같은 본번의 다른 부번에 등재돼 있는 일이 흔하므로, 1차가 비면
@@ -1669,7 +1723,8 @@ async function bldAreaLookup(addr, opts = {}) {
     factoryArch: sum(fac, 'arch'), factoryTot: sum(fac, 'tot'),
     bldgCount: titles.length, factoryCount: fac.length,
     purposes: [...new Set(titles.map((x) => x.purpose).filter(Boolean))],
-    collective: titles.some((x) => /집합/.test(x.regKind)),      // 지식산업센터 등 — 면적이 건물 전체다
+    // 지식산업센터 등 — 면적이 건물 전체다. 일반/집합 구분은 regstrGbCdNm(예전엔 표제부 종류를 잘못 봤다)
+    collective: rawT.concat(rawR).some((x) => /집합/.test(`${x.regstrGbCdNm || ''}`)) || titles.some((x) => /지식산업센터|아파트형/.test(`${x.purpose} ${x.etc}`)),
     firstApr: aprs[0] || null,
     bldgs: titles.slice(0, 40),
     src: recap ? '총괄표제부+표제부' : '표제부',
@@ -3655,6 +3710,12 @@ async function liveSiteStage(res, corp, name) {
   res.bld = bldR.status === 'fulfilled'
     ? { ok: true, data: { queried: bldQueried, ...bldR.value } }
     : { ok: false, err: bldR.reason && bldR.reason.message ? bldR.reason.message : String(bldR.reason), queried: bldQueried };
+  // 오피스형 건물 입주(주소에 호수 · 지식산업센터)면 건물 전체 대신 호실 면적을 붙인다
+  if (res.bld.ok) {
+    const nedS = res.nedrug && res.nedrug.ok && res.nedrug.data && res.nedrug.data.found ? res.nedrug.data.sites : [];
+    await bldAttachUnit(res.bld.data, bldQueried, [fAddr, ...mAddrs, ...nedS.map((x) => `${x.addr} ${x.detail || ''}`),
+      ...((site && site.cands) || []).map((c) => c.addr), (res.nedrug && res.nedrug.data && res.nedrug.data.addrLine) || '']).catch(() => {});
+  }
 
   return sig;
 }
@@ -5169,10 +5230,13 @@ function printSummary(report) {
   const money = fh && fh.debtRatio != null
     ? [`${fh.debtRatio}%`, `${fh.year} 부채비율 · ${fh.level}${lastFin ? ` · 매출 ${lastFin.revenue}억` : ''}`, fh.debtRatio > 400 ? 'bad' : fh.debtRatio > 200 ? 'warn' : '']
     : lastFin ? [`${lastFin.revenue}억`, `${lastFin.year} 매출`, ''] : ['—', '공시 재무 없음', ''];
-  const arch = m.bld && m.bld.arch ? Math.round(m.bld.arch / 3.305785) : null;
+  // 오피스형 건물 입주사는 건물 전체가 아니라 호실 전용면적(없으면 '확인 필요')
+  const uEx = m.bld && m.bld.unit ? (m.bld.unit.area && m.bld.unit.area.excl) || null : undefined;
+  const archM2 = uEx !== undefined ? uEx : (m.bld && m.bld.arch) || null;
+  const arch = archM2 ? Math.round(archM2 / 3.305785) : null;
   const airC = m.air && m.air.rows ? m.air.rows.find((r) => r.atSite && !r.isClosed) : null;
-  const plant = [arch ? `${arch.toLocaleString()}평` : '—',
-    `${arch ? `건축면적 ${Math.round(m.bld.arch).toLocaleString()}㎡` : '면적 미확인'}${airC ? ` · 대기 ${airC.kind || ''}${airC.days ? `, 연 ${airC.days}일` : ''}` : ''}`];
+  const plant = [arch ? `${arch.toLocaleString()}평` : uEx === null ? '호실 확인' : '—',
+    `${arch ? `${uEx !== undefined ? '입주 호실 전용' : '건축면적'} ${Math.round(archM2).toLocaleString()}㎡` : uEx === null ? '오피스형 건물 입주 — 건물 전체 면적 아님' : '면적 미확인'}${airC ? ` · 대기 ${airC.kind || ''}${airC.days ? `, 연 ${airC.days}일` : ''}` : ''}`];
   const mix = relMix(report);
   const cut = (t) => { const x2 = String(t).split(/ — |\. /)[0]; return x2.length > 46 ? `${x2.slice(0, 45)}…` : x2; };
   const asks = buildVisitChecklist(report).filter((i) => i.pri === 'high').slice(0, 2).map((i) => cut(i.text));
@@ -5525,7 +5589,13 @@ function buildVisitChecklist(report) {
   // 공장이 작으면 물류가 먼저 걸린다. 발주량을 정하기 전에 확인해야 하는 것들이라
   // 확인사항으로 자동으로 올린다.
   const areaF = (report.capacity || []).find((x) => x.key === '공장 건축면적 (건평)' && x.value);
-  if (areaF) {
+  const unitB = report.meta && report.meta.bld && report.meta.bld.unit;
+  if (unitB) {
+    add('high', '설비', `오피스형 건물${unitB.kic ? '(지식산업센터)' : ''} 입주 사업장입니다 — 실제로 쓰는 호실·전용면적, 추가 창고 임차 여부, 공용 하역장·화물 엘리베이터 사용 조건을 확인하세요`,
+      `주소에 ${unitB.units.length ? `${unitB.units.join('·')}호` : '호실'} 명시${unitB.bname ? ` · ${unitB.bname}` : ''}`,
+      '건물 전체 면적을 업체 크기로 오해하기 쉽고, 공용 시설은 입고 시간·차량 크기가 제한될 수 있습니다', '기준정보');
+  }
+  if (areaF && !(unitB && !(unitB.area && unitB.area.excl))) {
     const py = Number((String(areaF.value).match(/약\s*([\d,]+)\s*평/) || [])[1]?.replace(/,/g, ''));
     if (isFinite(py) && py < 300) {
       add(py < 100 ? 'high' : 'mid', '설비',
@@ -5990,7 +6060,18 @@ function renderAreaCompare(report) {
         + (R ? `<div class="ac-foot">${refFoot(R)}</div>` : '');
       return;
     }
-    // ③ 비교
+    // ③ 비교 — 오피스형 건물 입주사는 건물 전체와 견주면 크기를 크게 오해한다. 호실 전용면적만 견준다
+    if (B.unit && !B.manual) {
+      const U = B.unit, ex = U.area && U.area.excl;
+      const r = ex && R && R.arch ? ex / R.arch : null;
+      body.innerHTML = `<div class="ac-head">${ex
+        ? `<b>${nm}</b>의 호실 전용면적은 약 <em>${toPy(ex).toLocaleString()}평</em>${r ? ` — 한국콜마 세종 건축면적의 <em>약 ${r < 0.01 ? (r * 100).toFixed(2) : (r * 100).toFixed(1)}%</em>` : ''}입니다`
+        : `<b>${nm}</b>은(는) ${U.bname ? `「${esc(U.bname)}」 ` : ''}입주 사업장이라 건물 전체 면적으로 비교하지 않습니다`}</div>`
+        + `<div class="ac-foot">⚠ 주소에 ${U.units.length ? `${esc(U.units.join('·'))}호` : '호실'}가 적힌 오피스형 건물 입주입니다. 건물 전체(건축면적 약 ${toPy(B.arch).toLocaleString()}평)는 여러 회사가 나눠 씁니다`
+        + `${ex ? ' — 위 값은 건축물대장 전유부의 호실 면적입니다' : ' — 호실 면적은 방문 때 확인하세요'}. ${refFoot(R)}.</div>`;
+      box.classList.remove('go', 'manual', 'still');
+      return;
+    }
     const me = { arch: B.arch, tot: B.tot, plat: B.plat };
     const rf = R ? { arch: R.arch, tot: R.tot, plat: R.plat } : null;
     let head = '', scene = '', bars = '';
@@ -6266,21 +6347,37 @@ function renderAreaTab(report) {
         + allSitesHtml() + '</div>';
     }
     const stat = (lab, v, sub) => `<div class="at-stat"><span>${lab}</span><b>${v ? `약 ${py(v)}평` : '—'}</b><small>${[v ? m2(v) : '', sub].filter(Boolean).join(' · ')}</small></div>`;
-    return `<div class="at-sec"><h4>합계 <small>${parts.length > 1 ? `${parts.length}개 필지 합산 · ` : ''}국토부 건축물대장 (${esc(B.src || '표제부')})</small></h4><div class="at-stats">`
+    return unitHtml() + `<div class="at-sec"><h4>${B.unit ? '건물 전체 (참고)' : '합계'} <small>${parts.length > 1 ? `${parts.length}개 필지 합산 · ` : ''}국토부 건축물대장 (${esc(B.src || '표제부')})</small></h4><div class="at-stats">`
       + stat('건축면적 (건평)', B.arch, '바닥에 닿은 면적')
       + stat('연면적', B.tot, '모든 층 합계')
       + stat('대지면적', B.plat, '부지')
       + stat('공장 용도 건축면적', B.factoryArch, `공장 ${B.factoryCount || 0}동 / 전체 ${B.bldgCount || 0}동`)
       + '</div></div>';
   };
+  // 오피스형 건물 입주 — 건물 전체 면적 위에 호실 면적과 경고를 먼저 보인다
+  const unitHtml = () => {
+    const U = B && B.unit;
+    if (!U) return '';
+    const A = U.area;
+    const where = `${U.bname ? `「${esc(U.bname)}」 ` : ''}${U.kic ? '지식산업센터 ' : ''}${U.units.length ? `<b>${esc(U.units.join('·'))}호</b>` : '일부 호실'}`;
+    const rows = A && A.rows ? '<div class="at-tw"><table class="at-tbl"><thead><tr><th>호실</th><th>층</th><th>용도</th><th class="n">전용면적</th><th class="n">공용 포함</th></tr></thead><tbody>'
+      + A.rows.map((r) => `<tr><td>${esc(r.ho)}<small>대장 ${esc(r.name)}</small></td><td>${esc(r.flr)}</td><td>${esc(r.purpose)}</td><td class="n">${py(r.excl)}평<small>${m2(r.excl)}</small></td><td class="n">${py(r.excl + r.common)}평<small>${m2(r.excl + r.common)}</small></td></tr>`).join('')
+      + (A.rows.length > 1 ? `<tr class="fac"><td colspan="3"><b>합계</b></td><td class="n"><b>${py(A.excl)}평</b><small>${m2(A.excl)}</small></td><td class="n">${py(A.excl + A.common)}평<small>${m2(A.excl + A.common)}</small></td></tr>` : '')
+      + '</tbody></table></div>' : '';
+    return `<div class="at-sec at-unit"><h4>⚠ 오피스형 건물 입주 <small>주소에 호수가 적힌 사업장</small></h4>`
+      + `<p class="at-unit-lead">${where} 입주로 보입니다. 아래 「건물 전체」 면적은 여러 회사가 함께 쓰는 건물 값이라 <b>이 업체의 크기가 아닙니다</b>.`
+      + `${A && A.excl ? ` 주소에 적힌 호실의 건축물대장 전유부 면적은 <b>전용 약 ${py(A.excl)}평</b> (${m2(A.excl)})입니다.` : ' 호실 전용면적은 건축물대장 전유부나 임대차계약서로 확인하세요.'}`
+      + `${A && A.missing && A.missing.length ? ` 대장에서 못 찾은 호실: ${esc(A.missing.join('·'))}호.` : ''}${A && A.err ? ` <small>(전유부 조회: ${esc(A.err)})</small>` : ''}</p>${rows}`
+      + '<p class="tk-note">창고 임차·추가 호실·공용 하역장 사용 여부는 방문 때 확인하세요.</p></div>';
+  };
   // 화물차 입차 예상 — 대지면적에서 건축면적(건평)을 뺀 마당 넓이로만 대략 가늠한다
   const truckHtml = () => {
     if (!B) return '';
-    const T = truckAccess(B.plat, B.arch, B.collective || parts.some((p) => p.collective));
+    const T = truckAccess(B.plat, B.arch, B.collective || !!B.unit || parts.some((p) => p.collective));
     if (!T) return '';
     const ST = { ok: '여유', tight: '빠듯', hard: '어려움' };
     const lead = T.collective
-      ? '<p class="tk-lead">지식산업센터 등 <b>집합건물</b>이라 대지·마당이 건물 전체 몫입니다 — 차량은 <b>공용 하역장·화물 엘리베이터</b> 기준으로 관리사무소에 확인하세요.</p>'
+      ? '<p class="tk-lead">지식산업센터 등 <b>여러 회사가 입주한 건물</b>이라 대지·마당이 건물 전체 몫입니다 — 차량은 <b>공용 하역장·화물 엘리베이터</b> 기준으로 관리사무소에 확인하세요.</p>'
       : `<p class="tk-lead">마당(대지 − 건평) <b>약 ${py(T.yard)}평</b> (${m2(T.yard)}) · 실제로 차가 쓸 수 있는 넓이는 주차·조경을 빼고 약 ${m2(T.usable)}로 봤습니다.`
         + ` <b>${T.max ? `${esc(T.max)}까지 입차 예상` : '1톤도 마당 안 정차가 어렵습니다 — 도로변 하역 예상'}</b></p>`;
     // 한 줄에 한 차종 — 차종·길이·PLT·필요 마당·판정을 같은 칸 너비로 맞춰 2열로 촘촘히
@@ -6374,7 +6471,7 @@ function renderAreaTab(report) {
   const noteHtml = () => {
     if (!B) return '';
     const n = [];
-    if (B.collective) n.push('⚠ 집합건물(지식산업센터 등)입니다 — 표의 면적은 건물 전체이고 업체가 쓰는 호실은 훨씬 작습니다. 전용면적을 따로 물어보세요.');
+    if (B.collective || B.unit) n.push('⚠ 집합건물(지식산업센터 등)입니다 — 표의 면적은 건물 전체이고 업체가 쓰는 호실은 훨씬 작습니다. 전용면적을 따로 물어보세요.');
     if (!B.factoryCount) n.push(`대장상 '공장' 용도 건물이 없습니다(용도: ${esc((B.purposes || []).join('·') || '미상')}). 창고·근린생활시설을 공장으로 쓰는지 방문 시 확인하세요.`);
     if (parts.some((p) => p.matchedBy && p.matchedBy !== 'lot')) n.push('도로명주소의 대표지번에는 대장이 없어 같은 본번의 다른 필지로 연결했습니다. 표의 필지가 실제 공장 건물인지 카카오맵 로드뷰로 한 번 대조하세요.');
     n.push('대장 면적은 사용승인 당시 신고값입니다 — 무단 증축·가설 건물은 빠져 있을 수 있습니다.');
@@ -6393,7 +6490,9 @@ function renderAreaTab(report) {
     if (ui.editing) { const i = wrap.querySelector('#atAddrIn'); if (i) { i.focus(); i.select(); } }
   };
   // 면적이 바뀌면 리포트의 면적·소재지 칸도 같은 값으로 고친 뒤 전부 다시 그린다(탭은 그대로 유지)
-  const commit = (bld) => {
+  const commit = async (bld) => {
+    // 고친 주소도 오피스형 건물 호실이면 호실 면적을 다시 붙인다
+    if (bld && bld.arch) await bldAttachUnit(bld, bld.queried, [bld.queried, ...reportUnitTexts(report)]).catch(() => {});
     M.bld = bld;
     M.bldUser = true;          // 늦게 온 자료로 리포트를 다시 그려도 사용자가 고친 면적은 지킨다
     const cap = report.capacity || [];
@@ -6553,6 +6652,12 @@ function render(report, opts = {}) {
   root.classList.remove('hidden');
 
   const m = report.meta;
+  // 예전에 저장한 리포트 — 오피스형 건물 입주 판단이 없으면 남은 주소 글로 다시 판단하고 면적 칸도 고친다
+  if (m && m.live && m.bld && m.bld.arch && m.bld.unit === undefined && typeof unitTenantOf === 'function') {
+    m.bld.unit = unitTenantOf(unitTextsFor(m.bld.queried || m.visit_addr, [m.bld.queried, ...reportUnitTexts(report)]), m.bld);
+    const cap = report.capacity || [], i = cap.findIndex((x) => x.key === '공장 건축면적 (건평)');
+    if (m.bld.unit && i >= 0 && window.areaFieldFromBld) cap[i] = window.areaFieldFromBld({ ok: true, data: m.bld }, null, null, cap[i].as_of || new Date().toISOString().slice(0, 10));
+  }
   // 저장업체에서 연 '당시 결과' — 지금 조회한 것이 아님을 맨 위에 밝힌다(다시 그려도 유지되게 리포트에 표시해 둔다)
   if (opts.savedAt) Object.defineProperty(report, '_savedAt', { configurable: true, value: opts.savedAt });
   if (report._savedAt) {

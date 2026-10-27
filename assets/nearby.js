@@ -1120,7 +1120,10 @@ function mountReportTabs(root, report, actions, areaEl) {
   const vid = (report.meta && report.meta.vendor_id) || 'x';
   const B = report.meta && report.meta.bld && report.meta.bld.arch ? report.meta.bld : null;
   const tabs = [{ id: 'report', label: '사전검증 리포트' }];
-  if (areaEl) tabs.push({ id: 'area', label: `공장 면적${B ? ` <small class="rtab-sub">약 ${Math.round(B.arch / 3.305785).toLocaleString()}평</small>` : ''}` });
+  // 오피스형 입주사는 건물 전체 평수를 탭에 띄우지 않는다 — 호실 면적이 있으면 그것을, 없으면 '확인 필요'
+  const tabSub = !B ? '' : B.unit ? (B.unit.area && B.unit.area.excl ? `호실 약 ${Math.round(B.unit.area.excl / 3.305785).toLocaleString()}평` : '호실 확인 필요')
+    : `약 ${Math.round(B.arch / 3.305785).toLocaleString()}평`;
+  if (areaEl) tabs.push({ id: 'area', label: `공장 면적${tabSub ? ` <small class="rtab-sub">${tabSub}</small>` : ''}` });
   tabs.push({ id: 'nearby', label: '근처 업체' });
   // 조회 대기 화면에 넘겨 보이던 업계 소식을 여기서 전체 목록으로 다시 본다(프록시가 있어야 조회된다)
   const hasTrend = typeof mountTrendPane === 'function' && typeof getProxy === 'function' && getProxy();

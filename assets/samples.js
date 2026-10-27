@@ -670,8 +670,41 @@ function siteField(site, bld, today) {
     `★ ${S.why || '번지까지 확인된 주소'} — 방문 이동거리와 공장 면적을 이 주소 기준으로 조회했습니다.${link}`
       + ` 후보: ${S.cands.map((c) => `${c.label} ${c.addr} [${SITE_STATE[c.state] || c.state}]`).join(' / ')}`);
 }
+// 오피스형 건물(지식산업센터 등) 입주 여부 — 주소에 호수가 적혀 있거나 대장 용도가 지식산업센터면
+// 건축물대장 면적은 건물 전체라 업체 크기로 읽으면 안 된다. 주소 글들에서 호수·층·건물명을 뽑는다.
+function unitTenantOf(texts, B) {
+  const t = (texts || []).filter(Boolean).map(String).join(' | ');
+  const units = [];
+  for (const m of t.matchAll(/((?:\d{2,5}\s*호?\s*[,·~]\s*)*\d{2,5})\s*호/g)) {
+    m[1].split(/[^\d]+/).filter((u) => u.length >= 2).forEach((u) => { if (!units.includes(u)) units.push(u); });
+  }
+  const bl = (B && B.bldgs) || [];
+  const kic = /지식산업센터|아파트형\s*공장/.test(t) || bl.some((b) => /지식산업센터|아파트형/.test(`${b.purpose || ''} ${b.etc || ''}`));
+  if (!units.length && !kic && !(B && B.collective)) return null;
+  const floor = (t.match(/(?:^|[^하])\s(\d{1,2})\s*층/) || [])[1] || null;
+  const bname = ((bl[0] && String(bl[0].name || '').trim()) || (t.match(/\([^)]*?(?:동|가|리)\s*,\s*([^)]+)\)/) || [])[1] || '').trim();
+  const floors = bl.length ? Math.max(0, ...bl.map((b) => b.floors || 0)) || null : null;
+  return { units: units.slice(0, 8), floor, bname, kic, floors };
+}
 function areaFieldFromBld(bld, fctFloor, fctRegDe, today) {
   const B = bld && bld.ok ? bld.data : null;
+  if (B && B.arch && B.unit) {
+    // 입주 사업장 — 건물 전체 면적을 업체 크기로 내세우지 않는다. 호실 전유면적을 찾았으면 그것을 값으로
+    const py = (m2) => Math.round(m2 / PYEONG);
+    const U = B.unit, A = U.area;
+    const where = `${U.bname ? `「${U.bname}」 ` : ''}${U.kic ? '(지식산업센터) ' : ''}${U.units.length ? `${U.units.join('·')}호` : '일부 호실'}`;
+    const whole = `건물 전체는 건축면적 약 ${py(B.arch).toLocaleString()}평 · 연면적 약 ${py(B.tot || 0).toLocaleString()}평${U.floors ? ` · 지상 ${U.floors}층` : ''}`;
+    if (A && A.excl) {
+      return f('공장 건축면적 (건평)', `호실 전용 약 ${py(A.excl).toLocaleString()}평 (${Math.round(A.excl).toLocaleString()}㎡)${A.common ? ` · 공용 포함 약 ${py(A.excl + A.common).toLocaleString()}평` : ''}`,
+        A.missing && A.missing.length ? 'B' : 'A', '국토부 건축물대장 (전유부)', today,
+        `⚠ ${where} 입주 사업장입니다 — 건물 전체가 아니라 주소에 적힌 호실의 전유부 면적을 더했습니다`
+          + ` (${A.rows.map((r) => `${r.ho} ${Math.round(r.excl)}㎡`).join(', ')}${A.missing && A.missing.length ? ` · 대장에서 못 찾은 호실 ${A.missing.join('·')}호` : ''}).`
+          + ` 참고로 ${whole}입니다 — 크기를 건물 전체로 오해하지 마세요. 실제로 쓰는 공간(창고 임차·추가 호실)은 방문 때 확인하세요.`);
+    }
+    return f('공장 건축면적 (건평)', `확인 필요 — 입주 호실 면적 미확인 (건물 전체 약 ${py(B.arch).toLocaleString()}평)`, 'C', '국토부 건축물대장', today,
+      `⚠ ${where} 입주 사업장으로 보입니다 — 건축물대장 면적은 건물 전체 값이라 업체가 쓰는 면적이 아닙니다. ${whole}.`
+        + ` 호실 전용면적은 건축물대장 전유부(호별)나 임대차계약서로 확인하세요${A && A.err ? ` (전유부 자동 조회 실패: ${A.err})` : ''}.`);
+  }
   if (B && B.arch) {
     const py = (m2) => Math.round(m2 / PYEONG);
     const facNote = B.factoryCount
@@ -902,9 +935,12 @@ function assembleLiveReport(name, corp, res) {
   const bznoVal = corp?.bzno || ntsBno || recBzno || null;
   const bznoSrc = corp?.bzno ? '금융위 기업기본정보' : (ntsBno ? '국세청 확인' : (recBzno ? '식약처/공장등록' : '금융위 기업기본정보'));
   const bznoNote = corp?.bzno ? null : (ntsBno ? '국세청 사업자상태로 확인된 활성 사업자번호' : (recBzno ? '식약처/공장 레코드 추출' : '법인 미검색으로 미확보'));
-  const repVal = corp?.rep || mkRep || null;
-  const repSrc = corp?.rep ? '금융위 기업기본정보' : '식약처 화장품제조업 API';
-  const repNote = corp?.rep ? null : (mkRep ? '식약처 제조업 허가상 대표자 (금융위 법인 미확보 보강)' : why('maker', '대표자 정보 없음'));
+  // 금융위 기업정보에 없는 신생·소규모 법인(큐브캡 등)은 산단공 공장등록 대표자로 채운다
+  const repVal = corp?.rep || mkRep || fctRep || null;
+  const repSrc = corp?.rep ? '금융위 기업기본정보' : mkRep ? '식약처 화장품제조업 API' : fctRep ? '산업단지공단 공장등록' : '식약처 화장품제조업 API';
+  const repNote = corp?.rep ? null : mkRep ? '식약처 제조업 허가상 대표자 (금융위 법인 미확보 보강)'
+    : fctRep ? '공장등록 신고 대표자 — 금융위 기업정보에 이 법인이 없어 대신 씁니다'
+    : why('maker', '대표자 정보 없음 — 금융위·식약처·공장등록 어디에도 없음');
   const mkRegDate = mkRegDt ? fmtDate(mkRegDt) : null;
   const estbVal = fmtDate(corp?.estbDt) || mkRegDate || null;
   const estbSrc = corp?.estbDt ? '금융위 기업기본정보' : (mkRegDate ? '식약처 화장품제조업 API' : '금융위 기업기본정보');

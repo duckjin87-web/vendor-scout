@@ -2281,3 +2281,10 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .tk-st.ok { color: var(--gA); }
 .tk-st.tight { color: var(--gC); }
 .tk-st.hard { color: var(--risk); }
+
+/* 오피스형 건물 입주 — 건물 전체 면적 위의 경고 */
+.at-unit { border-left: 3px solid var(--gC); background: var(--gC-bg); }
+.at-unit-lead { margin: 0 0 8px; font-size: 13px; line-height: 1.6; color: var(--text); }
+.at-unit .at-tbl { min-width: 0; }
+.at-unit .at-tbl td:nth-child(2) { white-space: nowrap; }
+@media (max-width: 720px) { .at-unit .at-tbl th:nth-child(3), .at-unit .at-tbl td:nth-child(3) { display: none; } }
