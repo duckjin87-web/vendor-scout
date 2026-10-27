@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 211;
+const BUILD = 212;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -6295,6 +6295,8 @@ function truckAccess(plat, arch, collective) {
 function renderAreaTab(report) {
   const M = report.meta || {};
   if (!M.live) return null;
+  // 부지 공간정보(브이월드) — 없으면 받아 오고, 끝나면 리포트를 다시 그린다(sitegeo.js)
+  if (typeof sgEnsure === 'function') sgEnsure(report);
   const wrap = el('div', 'at');
   const nm = stripCorp(M.vendor_name || '') || '이 업체';
   const B = M.bld && M.bld.arch ? M.bld : null;
@@ -6376,17 +6378,31 @@ function renderAreaTab(report) {
     const T = truckAccess(B.plat, B.arch, B.collective || !!B.unit || parts.some((p) => p.collective));
     if (!T) return '';
     const ST = { ok: '여유', tight: '빠듯', hard: '어려움' };
+    // 브이월드 보강 — 접한 도로 폭과 마당에 들어가는 회차 원으로 판정을 한 번 더 깎는다
+    const E = !T.collective && typeof sgTruckExtra === 'function' ? sgTruckExtra(report) : null;
+    if (E && T.rows) {
+      T.rows.forEach((r, i) => {
+        // 도로가 무난한 차보다 한 단계 큰 차는 '빠듯'(회전 반경 확인), 그 위는 '어려움'
+        if (E.rm && i > E.rm.idx + (E.rm.strict ? 0 : 1)) { r.st = 'hard'; r.why = '진입 도로가 좁음'; }
+        else if (E.rm && i > E.rm.idx) { if (r.st === 'ok') r.st = 'tight'; r.why = '진입 도로 폭 — 회전 반경 확인'; }
+        else if (E.turn && r.st === 'ok' && E.turn.r < SG_TURN_R[i]) { r.st = 'tight'; r.why = '마당 안 회차 어려움 — 후진 진입'; }
+      });
+      const top = T.rows.filter((r) => r.st !== 'hard').pop(); T.max = top ? top.name : null;
+    }
+    const extra = E ? `<ul class="tk-extra">${E.road ? `<li>접한 도로 <b>${esc(E.road.name.replace(/\(폭.*$/, ''))} (폭 ${E.road.lo ? `${E.road.lo}~` : ''}${E.road.hi}m)</b> — ${esc(E.rm.text)}</li>` : '<li>접한 도시계획도로가 없습니다 — 진입로 폭은 현장에서 확인하세요</li>'}`
+      + `${E.turn ? `<li>부지 안 빈 땅에 들어가는 가장 큰 회차 원 <b>반경 약 ${E.turn.r}m</b> — ${(() => { const k = SG_TURN_R.filter((x) => x <= E.turn.r).length; return k ? `${esc(TRUCKS[k - 1].name)}까지 마당 안에서 돌려 나갈 수 있습니다` : '마당 안 회차는 어렵습니다(후진 진입)'; })()}</li>` : ''}</ul>` : '';
     const lead = T.collective
       ? '<p class="tk-lead">지식산업센터 등 <b>여러 회사가 입주한 건물</b>이라 대지·마당이 건물 전체 몫입니다 — 차량은 <b>공용 하역장·화물 엘리베이터</b> 기준으로 관리사무소에 확인하세요.</p>'
       : `<p class="tk-lead">마당(대지 − 건평) <b>약 ${py(T.yard)}평</b> (${m2(T.yard)}) · 실제로 차가 쓸 수 있는 넓이는 주차·조경을 빼고 약 ${m2(T.usable)}로 봤습니다.`
         + ` <b>${T.max ? `${esc(T.max)}까지 입차 예상` : '1톤도 마당 안 정차가 어렵습니다 — 도로변 하역 예상'}</b></p>`;
     // 한 줄에 한 차종 — 차종·길이·PLT·필요 마당·판정을 같은 칸 너비로 맞춰 2열로 촘촘히
     const WHY = { tight: '후진 진입·회차 확인', hard: '도로 정차·하역 예상' };
+    if (T.rows) T.rows.forEach((r) => { if (r.why) WHY[`${r.name}`] = r.why; });
     const rows = T.collective ? '' : '<div class="tk-list">'
-      + T.rows.map((r) => `<div class="tk-row ${r.st}"${WHY[r.st] ? ` title="${WHY[r.st]}"` : ''}><b>${esc(r.name)}</b><span>${esc(r.len)}</span><em>(${esc(r.plt)})</em>`
+      + T.rows.map((r) => `<div class="tk-row ${r.st}"${WHY[r.name] || WHY[r.st] ? ` title="${esc(WHY[r.name] || WHY[r.st])}"` : ''}><b>${esc(r.name)}</b><span>${esc(r.len)}</span><em>(${esc(r.plt)})</em>`
         + `<small><i>필요 마당 </i>${m2(r.need)}</small><span class="tk-st ${r.st}">${ST[r.st]}</span></div>`).join('')
       + '</div><p class="tk-note">PLT: 표준 팔레트(1.1m × 1.1m) 한 단 기준 대략치 — 적재함 폭·윙바디 여부에 따라 달라집니다.</p>';
-    return `<div class="at-sec tk"><h4>화물차 입차 예상 <small>대지면적 − 건축면적 기준 대략치</small></h4>${lead}${rows}`
+    return `<div class="at-sec tk"><h4>화물차 입차 예상 <small>대지면적 − 건축면적 기준 대략치${E ? ' · 브이월드 도로·부지 모양 반영' : ''}</small></h4>${lead}${extra}${rows}`
       + '<p class="tk-note">실제 입차는 진입 도로 폭(6m 미만이면 11톤 이상 곤란)·정문 폭과 높이·경사·주차 차량에 따라 달라집니다. 방문 때 정문과 하역장 위치를 함께 확인하세요.</p></div>';
   };
   const lotsHtml = () => {
@@ -6479,7 +6495,10 @@ function renderAreaTab(report) {
   };
 
   const paint = () => {
-    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${sumHtml()}${truckHtml()}${lotsHtml()}${bldgHtml()}${airSecHtml(M)}${noteHtml()}`;
+    const sg = typeof sgSectionsHtml === 'function';
+    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${sumHtml()}${sg ? sgScaleHtml(B) + sgSectionsHtml(report, B) : ''}${truckHtml()}`
+      + `${sg ? sgOverlayHtml(report, B) : ''}${lotsHtml()}${bldgHtml()}${airSecHtml(M)}${noteHtml()}`;
+    if (sg) sgBindOverlay(wrap);
     ui.painted = true;
     const cmp = renderAreaCompare(report);
     if (cmp) wrap.appendChild(cmp);
