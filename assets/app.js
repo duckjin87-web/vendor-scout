@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 213;
+const BUILD = 214;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1612,7 +1612,10 @@ async function bldUnitArea(B, units) {
   if (!m) throw new Error('건축물대장 지번 키 없음');
   const base = { sigunguCd: m[1], bjdongCd: m[2], platGbCd: m[3], bun: m[4], ...(m[5] ? { ji: m[5] } : {}) };
   const items = (d) => listOf(d, ['response.body.items.item', 'body.items.item', 'body.items']).filter((x) => x && typeof x === 'object');
-  const first = items(await proxyGet('bldExpos', { ...base, rows: '100' }));
+  // 건축HUB가 가끔 한 번씩 실패한다 — 첫 쪽은 잠깐 쉬었다 한 번 더
+  let first;
+  try { first = items(await proxyGet('bldExpos', { ...base, rows: '100' })); }
+  catch { await new Promise((r) => setTimeout(r, 1200)); first = items(await proxyGet('bldExpos', { ...base, rows: '100' })); }
   if (!first.length) throw new Error('이 지번에 전유부(호실 대장)가 없습니다');
   const tail = (h) => (String(h || '').match(/(\d{2,5})\s*호?$/) || [])[1] || '';
   const prefixes = [...new Set(first.map((x) => String(x.hoNm || '').replace(/\d{2,5}\s*호?$/, '')).filter(Boolean))].slice(0, 3);

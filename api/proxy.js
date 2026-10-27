@@ -115,6 +115,8 @@ async function handleBld(url, service, env) {
     // 200이어도 본문이 미승인·오류일 수 있다 — 정상 코드가 보일 때만 채택
     const okBody = r.status === 200 && /"resultCode"\s*:\s*"?(00|0)"?\s*[,}]|<resultCode>00<\/resultCode>/.test(body);
     if (okBody) return r;
+    // 옛 주소가 '서비스 없음'이면 새 주소(건축HUB)의 실패 내용을 돌려준다 — 원인이 그쪽이다
+    if (last && /NO_OPENAPI_SERVICE/.test(body)) break;
     last = r;
   }
   return last;
