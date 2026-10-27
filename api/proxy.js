@@ -437,4 +437,5 @@ export default async function handler(req) {
   }
 }
 
-export const config = { runtime: 'edge' };
+// 서울(icn1)에서만 실행 — 브이월드는 해외 IP를 막는다(미국 엣지에서 부르면 502). 다른 공공 API도 국내라 가깝다
+export const config = { runtime: 'edge', regions: ['icn1'] };
