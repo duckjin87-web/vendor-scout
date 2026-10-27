@@ -1,0 +1,62 @@
+name: Diagnose site geo (area tab)
+
+# 배포된 사이트에서 업체를 실제로 조회하고 공장 면적 탭의 브이월드 보강(용도지역·주소 대조·겹쳐 보기·화물차)을 확인한다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      names: { description: '업체명(쉼표 구분)', required: true, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Check
+        env:
+          SITE: ${{ inputs.site }}
+          NAMES: ${{ inputs.names }}
+        run: |
+          npm i -s playwright@1.56.1 >/dev/null 2>&1 && npx -y playwright@1.56.1 install --with-deps chromium >/dev/null 2>&1
+          cat > d.mjs <<'JS'
+          import { chromium } from 'playwright';
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3900));
+          const b = await chromium.launch();
+          const base = process.env.SITE.replace(/\/$/, '');
+          for (const nm of process.env.NAMES.split(',').map((s) => s.trim()).filter(Boolean)) {
+            const page = await b.newPage({ viewport: { width: 1280, height: 900 } });
+            const errs = [];
+            page.on('pageerror', (e) => errs.push('JS ' + e.message.slice(0, 120)));
+            try {
+              await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 60000 });
+              await page.evaluate((p) => { localStorage.clear(); localStorage.setItem('vs_proxy', p); }, `${base}/api/proxy`);
+              await page.reload({ waitUntil: 'domcontentloaded' });
+              await page.waitForTimeout(1500);
+              await page.evaluate(async (nm) => {
+                let x = await liveLookup(nm);
+                if (x.candidates) { const pick = x.candidates.find((c) => c.mfds) || x.candidates[0]; x = { report: await (pick.mfds ? finishLiveMfds(nm, pick) : finishLive(nm, pick)) }; }
+                let rep = x.report; if (rep && rep._late) { const fin = await rep._late; if (fin) rep = fin; }
+                render(rep, { noScroll: true });
+              }, nm);
+              await page.waitForFunction(() => currentReport && currentReport.meta && currentReport.meta.geo, null, { timeout: 60000 }).catch(() => {});
+              await page.waitForTimeout(800);
+              const geo = await page.evaluate(() => { const G = currentReport.meta.geo || {}; return { err: G.err, src: G.src, parcel: G.site && G.site.parcel && G.site.parcel.addr, uses: G.site && (G.site.uses || []).length, bldgs: G.site && (G.site.bldgs || []).length, ref: G.ref && (G.ref.bldgs || []).length, addrs: G.addrs }; });
+              n(`[${nm}] geo: ${JSON.stringify(geo).slice(0, 900)}`);
+              await page.click('#rtab-area').catch(() => {});
+              await page.waitForTimeout(600);
+              for (const sel of ['.sg-zone', '.sg-addr', '.sg-scale-sec', '.at-sec.tk', '.sg-ov', '.at-unit']) {
+                const t = await page.$eval(sel, (e) => e.innerText.replace(/\n+/g, ' | ')).catch(() => null);
+                if (t) n(`[${nm}] ${sel}: ${t.slice(0, 700)}`);
+              }
+              n(`[${nm}] 교차진단: ${await page.evaluate(() => JSON.stringify((currentReport.cross_diag && currentReport.cross_diag.items || []).map((x) => [x.label, x.status, String(x.detail).slice(0, 120)])))}`);
+              if (errs.length) n(`[${nm}] 화면 오류: ${[...new Set(errs)].slice(0, 5).join(' | ')}`);
+            } catch (e) { n(`[${nm}] 실행 실패 ${e.message}`); }
+            await page.close();
+          }
+          await b.close();
+          JS
+          node d.mjs
