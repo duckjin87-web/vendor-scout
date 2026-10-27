@@ -21,7 +21,8 @@ jobs:
           SITE: ${{ inputs.site }}
           NAMES: ${{ inputs.names }}
         run: |
-          npm i -s playwright@1.56.1 >/dev/null 2>&1 && npx -y playwright@1.56.1 install --with-deps chromium >/dev/null 2>&1
+          npm i -s playwright@1.56.1 2>&1 | tail -5
+          npx -y playwright@1.56.1 install --with-deps chromium 2>&1 | tail -3
           cat > d.mjs <<'JS'
           import { chromium } from 'playwright';
           const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3900));
