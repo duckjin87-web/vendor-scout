@@ -31,6 +31,12 @@ jobs:
               const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].filter((m) => /getItem/.test(m[1]))
                 .map((m) => [...m[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((x) => txt(x[1])));
               n(`${name} · HTTP ${r.status} · ${rows.length}행 · ` + rows.slice(0, 4).map((t) => t.join(' / ')).join(' ‖ '));
+              const href = (html.match(/href=["']([^"']*getItem[^"']*)["']/i) || [])[1];
+              if (href) {
+                const d = await (await fetch('https://nedrug.mfds.go.kr' + href.replace(/&amp;/g, '&'), { headers: { 'User-Agent': 'Mozilla/5.0 vendor-scout' }, signal: AbortSignal.timeout(30000) })).text();
+                const t = txt(d); const k = t.indexOf('대표');
+                n(`${name} 상세 · 대표 주변: ${k >= 0 ? t.slice(Math.max(0, k - 80), k + 120) : '대표 글자 없음'}`);
+              }
             } catch (e) { n(`${name} · 오류 ${e.message}`); }
           }
           JS
