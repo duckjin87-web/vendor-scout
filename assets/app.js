@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 212;
+const BUILD = 213;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1617,16 +1617,22 @@ async function bldUnitArea(B, units) {
   const tail = (h) => (String(h || '').match(/(\d{2,5})\s*호?$/) || [])[1] || '';
   const prefixes = [...new Set(first.map((x) => String(x.hoNm || '').replace(/\d{2,5}\s*호?$/, '')).filter(Boolean))].slice(0, 3);
   const rows = [], missing = [];
+  // 같은 번호가 여러 구역에 있을 수 있다(블루텍: 공존618=공장, 미플존618=기숙사) — 이름별로 모아 공장 용도를 고른다
+  const isFac = (x) => /공장|제조/.test(`${x.etcPurps || ''} ${x.mainPurpsCdNm || ''}`) && !/지원시설|기숙사|근린/.test(x.etcPurps || '');
   await mapLimit(units, 2, async (u) => {
-    let hit = first.filter((x) => tail(x.hoNm) === u);
-    for (const nm of [...prefixes.map((p) => `${p}${u}`), `${u}호`, ...prefixes.map((p) => `${p}${u}호`)]) {
-      if (hit.length) break;
-      try { hit = items(await proxyGet('bldExpos', { ...base, hoNm: nm, rows: '100' })).filter((x) => tail(x.hoNm) === u); } catch { /* 다음 이름 */ }
+    const got = first.filter((x) => tail(x.hoNm) === u);
+    for (const nm of [...prefixes.map((p) => `${p}${u}`), `${u}호`]) {
+      try { got.push(...items(await proxyGet('bldExpos', { ...base, hoNm: nm, rows: '100' })).filter((x) => tail(x.hoNm) === u)); } catch { /* 다음 이름 */ }
     }
-    if (!hit.length) { missing.push(u); return; }
+    const groups = new Map();
+    got.forEach((x) => { const k = String(x.hoNm || ''); const arr = groups.get(k) || []; if (!arr.some((y) => y.exposPubuseGbCdNm === x.exposPubuseGbCdNm && y.area === x.area && y.etcPurps === x.etcPurps)) arr.push(x); groups.set(k, arr); });
+    if (!groups.size) { missing.push(u); return; }
+    const exclOf = (arr) => arr.filter((x) => x.exposPubuseGbCdNm === '전유').reduce((a, x) => a + (bldNum(x.area) || 0), 0);
+    const hit = [...groups.values()].sort((a, b) => (b.some(isFac) - a.some(isFac)) || (exclOf(b) - exclOf(a)))[0];
     const sum = (gb) => hit.filter((x) => String(x.exposPubuseGbCdNm || '') === gb).reduce((a, x) => a + (bldNum(x.area) || 0), 0);
     const ex = hit.find((x) => x.exposPubuseGbCdNm === '전유') || hit[0];
-    rows.push({ ho: `${u}호`, name: ex.hoNm, flr: ex.flrNoNm || '', purpose: ex.etcPurps || ex.mainPurpsCdNm || '', excl: sum('전유'), common: sum('공용') });
+    rows.push({ ho: `${u}호`, name: ex.hoNm, flr: ex.flrNoNm || '', purpose: ex.etcPurps || ex.mainPurpsCdNm || '', excl: sum('전유'), common: sum('공용'),
+      alt: groups.size > 1 ? [...groups.keys()].filter((k) => k !== ex.hoNm) : [] });
   });
   if (!rows.length) throw new Error(`전유부에서 ${units.join('·')}호를 찾지 못했습니다`);
   rows.sort((a, b) => units.indexOf(a.ho.replace('호', '')) - units.indexOf(b.ho.replace('호', '')));
@@ -6363,7 +6369,7 @@ function renderAreaTab(report) {
     const A = U.area;
     const where = `${U.bname ? `「${esc(U.bname)}」 ` : ''}${U.kic ? '지식산업센터 ' : ''}${U.units.length ? `<b>${esc(U.units.join('·'))}호</b>` : '일부 호실'}`;
     const rows = A && A.rows ? '<div class="at-tw"><table class="at-tbl"><thead><tr><th>호실</th><th>층</th><th>용도</th><th class="n">전용면적</th><th class="n">공용 포함</th></tr></thead><tbody>'
-      + A.rows.map((r) => `<tr><td>${esc(r.ho)}<small>대장 ${esc(r.name)}</small></td><td>${esc(r.flr)}</td><td>${esc(r.purpose)}</td><td class="n">${py(r.excl)}평<small>${m2(r.excl)}</small></td><td class="n">${py(r.excl + r.common)}평<small>${m2(r.excl + r.common)}</small></td></tr>`).join('')
+      + A.rows.map((r) => `<tr><td>${esc(r.ho)}<small>대장 ${esc(r.name)}${r.alt && r.alt.length ? ` · 같은 번호 다른 구역 ${esc(r.alt.join(', '))}` : ''}</small></td><td>${esc(r.flr)}</td><td>${esc(r.purpose)}</td><td class="n">${py(r.excl)}평<small>${m2(r.excl)}</small></td><td class="n">${py(r.excl + r.common)}평<small>${m2(r.excl + r.common)}</small></td></tr>`).join('')
       + (A.rows.length > 1 ? `<tr class="fac"><td colspan="3"><b>합계</b></td><td class="n"><b>${py(A.excl)}평</b><small>${m2(A.excl)}</small></td><td class="n">${py(A.excl + A.common)}평<small>${m2(A.excl + A.common)}</small></td></tr>` : '')
       + '</tbody></table></div>' : '';
     return `<div class="at-sec at-unit"><h4>⚠ 오피스형 건물 입주 <small>주소에 호수가 적힌 사업장</small></h4>`

@@ -163,10 +163,12 @@ async function sgRefSite(ref) {
 }
 // 주소 후보들을 좌표로 바꿔 제조소와의 거리를 잰다
 async function sgAddrCheck(M, basePt, baseAddr) {
-  const cands = ((M.site && M.site.cands) || []).filter((c) => c.full && c.addr);
-  const seen = new Set([sgClean(baseAddr)]);
-  const list = cands.filter((c) => { const k = sgClean(c.addr); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 5);
+  const cands = ((M.site && M.site.cands) || []).filter((c) => c.full && c.addr && c.state !== 'pick');
+  // 기준 주소와 글자가 같은 후보는 부르지 않고 0m로 — 그래야 '모두 같은 곳'도 판정에 남는다
+  const base0 = sgClean(baseAddr), seen = new Set();
+  const list = cands.filter((c) => { const k = sgClean(c.addr); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 6);
   const rows = await mapLimit(list, 2, async (c) => {
+    if (sgClean(c.addr) === base0) return { label: c.label, addr: c.addr, m: 0, src: '같은 주소' };
     const p = await sgGeocode(c.addr).catch(() => null);
     return { label: c.label, addr: c.addr, m: p ? Math.round(sgKm(basePt, p) * 1000) : null, src: p ? p.src : null };
   });
