@@ -1,0 +1,50 @@
+name: Diagnose vworld via proxy
+
+# 배포된 프록시(/api/proxy?service=vworld)로 브이월드 지오코딩·건물 윤곽·지적·용도지역 응답 모양을 본다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      addrs: { description: '주소(; 구분)', required: true, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          SITE: ${{ inputs.site }}
+          ADDRS: ${{ inputs.addrs }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 1800));
+          const vw = async (p) => { const r = await fetch(`${process.env.SITE}/api/proxy?service=vworld&${new URLSearchParams(p)}`, { signal: AbortSignal.timeout(28000) }); const t = await r.text(); try { return JSON.parse(t); } catch { return { raw: t.slice(0, 300), status: r.status }; } };
+          const feats = (j) => (j && j.response && j.response.result && j.response.result.featureCollection && j.response.result.featureCollection.features) || [];
+          const geomN = (g) => g ? JSON.stringify(g.coordinates).split('],[').length : 0;
+          for (const a of process.env.ADDRS.split(';').map((s) => s.trim()).filter(Boolean)) {
+            const g = await vw({ op: 'address', request: 'getcoord', type: 'road', address: a, refine: 'true', simple: 'false' });
+            const pt = g.response && g.response.result && g.response.result.point;
+            n(`[${a}] 지오코딩: ${g.response ? g.response.status : JSON.stringify(g).slice(0, 300)} ${pt ? `${pt.x},${pt.y}` : ''} ${g.response && g.response.refined ? JSON.stringify(g.response.refined.structure).slice(0, 300) : ''}`);
+            if (!pt) continue;
+            const P = `POINT(${pt.x} ${pt.y})`;
+            for (const layer of ['LT_C_SPBD', 'LP_PA_CBND_BUBUN', 'LT_C_UQ111', 'LT_C_UQ112']) {
+              const j = await vw({ op: 'data', data: layer, geomFilter: P, size: '5', geometry: 'true', attribute: 'true', crs: 'EPSG:4326' });
+              const f = feats(j);
+              n(`[${a}] ${layer}: ${j.response ? j.response.status : JSON.stringify(j).slice(0, 200)} · ${f.length}건 · ` + f.slice(0, 2).map((x) => `${JSON.stringify(x.properties).slice(0, 500)} (꼭짓점 ${geomN(x.geometry)})`).join(' ‖ '));
+              if (layer === 'LP_PA_CBND_BUBUN' && f[0] && f[0].properties.pnu) {
+                const l = await vw({ op: 'landuse', pnu: f[0].properties.pnu, numOfRows: '30' });
+                const fs = (l.landUses && l.landUses.field) || [];
+                n(`[${a}] 토지이용계획(${f[0].properties.pnu}): ${fs.length ? fs.map((x) => `${x.prposAreaDstrcCodeNm}(${x.cnflcAtNm || ''})`).join(', ') : JSON.stringify(l).slice(0, 300)}`);
+              }
+            }
+            // 건물 반경 — 같은 필지의 다른 동까지
+            const b = await vw({ op: 'data', data: 'LT_C_SPBD', geomFilter: P, buffer: '60', size: '20', geometry: 'false', attribute: 'true', crs: 'EPSG:4326' });
+            n(`[${a}] 반경60m 건물: ${feats(b).length}건 · ${feats(b).slice(0, 6).map((x) => `${x.properties.buld_nm || x.properties.bd_mgt_sn}`).join(', ')}`);
+          }
+          JS
+          node d.mjs

@@ -349,6 +349,27 @@ ${SITE_SCHEMA}`;
   return jsonRes({ ok: true, data: obj });
 }
 
+// ── 브이월드(국토부 공간정보) — 건물 윤곽·지적(부지 경계)·용도지역·지오코딩 ──
+// 키(VWORLD_KEY)는 Vercel 환경변수에만 둔다. 브이월드는 등록한 서비스 URL(domain)과 대조하므로 함께 보낸다.
+// 아무 주소나 대신 불러 주지 않도록 쓰는 엔드포인트·레이어·파라미터만 열어 둔다.
+const VW_LAYERS = new Set(['LT_C_SPBD', 'LP_PA_CBND_BUBUN', 'LT_C_UQ111', 'LT_C_UQ112', 'LT_C_UQ113', 'LT_C_UQ114', 'LT_C_UQ121', 'LT_C_UQ123', 'LT_C_UQ128', 'LT_C_UQ129']);
+const VW_OPS = {
+  data: { url: 'https://api.vworld.kr/req/data', keys: ['data', 'geomFilter', 'attrFilter', 'size', 'page', 'columns', 'geometry', 'attribute', 'crs', 'buffer'], fixed: { service: 'data', request: 'GetFeature', format: 'json' } },
+  address: { url: 'https://api.vworld.kr/req/address', keys: ['request', 'type', 'address', 'point', 'crs', 'refine', 'simple'], fixed: { service: 'address', format: 'json' } },
+  landuse: { url: 'https://api.vworld.kr/ned/data/getLandUseAttr', keys: ['pnu', 'cnflcAt', 'numOfRows', 'pageNo'], fixed: { format: 'json' } },
+};
+async function handleVworld(url, env) {
+  if (!env.VWORLD_KEY) return jsonRes({ error: 'VWORLD_KEY 미설정' }, 501);
+  const op = VW_OPS[url.searchParams.get('op')];
+  if (!op) return jsonRes({ error: 'op는 data·address·landuse 중 하나' }, 400);
+  const q = new URLSearchParams(op.fixed);
+  for (const k of op.keys) { const v = url.searchParams.get(k); if (v) q.set(k, v.slice(0, 600)); }
+  if (url.searchParams.get('op') === 'data' && !VW_LAYERS.has(q.get('data') || '')) return jsonRes({ error: '허용하지 않은 레이어' }, 400);
+  q.set('key', env.VWORLD_KEY);
+  q.set('domain', env.VWORLD_DOMAIN || 'https://vendor-scout-gilt.vercel.app');
+  return relay(`${op.url}?${q}`, '브이월드');
+}
+
 // ── 급성장 집계 조회 요청 ──
 // 대시보드 버튼 → GitHub Actions growth.yml 실행. 토큰(GH_DISPATCH_TOKEN, 이 저장소 Actions 쓰기 권한만 준
 // fine-grained 토큰)은 Vercel 환경변수에만 둔다. 누구나 누를 수 있는 버튼이라 돌고 있거나 30분 안에 돈 적이
@@ -402,6 +423,7 @@ export default async function handler(req) {
     if (service === 'ntsStatus')       return handleNtsStatus(url, env);
     if (service === 'ntsValidate')     return handleNtsValidate(url, env);
     if (service === 'siteExtract')     return handleSiteExtract(url, env);
+    if (service === 'vworld')          return handleVworld(url, env);
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
     if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
     if (service === 'kakaoKeyword')    return handleKakao(url, env, 'keyword');
