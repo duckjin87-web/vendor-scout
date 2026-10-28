@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 219;
+const BUILD = 220;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2211,6 +2211,16 @@ async function mfdsCandidates(name) {
   return out;
 }
 // 식약처 후보 선택 시: 정확한 등록업체명으로 금융위 재조회(법인 매칭되면 법인/재무 확보) → 없으면 상호명 조회
+// 금융위 법인을 사업자번호로 특정한다 — '(주)' 붙인/뗀 이름으로 100건씩 받아 합친 뒤 사업자번호가 같은 것.
+// 상호 검색 첫 30건에 안 들어 법인번호(재무 조회 열쇠)를 놓치던 상장사(코스맥스)를 잡는다.
+async function fscByBz(corpNm, bzno) {
+  const bz = String(bzno || '').replace(/\D/g, '');
+  if (bz.length !== 10 || !corpNm) return { pick: null, all: [] };
+  const qs = [...new Set([corpNm, stripCorp(corpNm)].filter((q) => q && q.length >= 2))];
+  const got = await mapLimit(qs, 2, (q) => proxyGet('corp', { name: q, rows: '100' }).then((d) => window.mapCorpCandidates(d)).catch(() => []));
+  const seen = new Set(), all = got.flat().filter((x) => { const k = x.crno || x.bzno || x.corpNm; if (seen.has(k)) return false; seen.add(k); return true; });
+  return { pick: all.find((x) => String(x.bzno || '').replace(/\D/g, '') === bz) || null, all };
+}
 async function finishLiveMfds(name, cand) {
   const nk = (s) => stripCorp(s || '').replace(/\s/g, '');
   // 후보 화면을 거치지 않고 불려도(다시 조회·자동 선택) 조회 근거가 비지 않게
@@ -2222,13 +2232,12 @@ async function finishLiveMfds(name, cand) {
   try {
     // '코스맥스(주)'처럼 법인격을 붙여 부르면 금융위가 엉뚱한 30건만 줘서 상장사도 놓쳤다(법인번호 미상 → 재무 없음).
     // 붙인 이름·뗀 이름으로 100건씩 받아 합치고, 사업자번호가 같은 법인을 먼저 고른다.
-    const qs = [...new Set([cand.corpNm, stripCorp(cand.corpNm)].filter((q) => q && q.length >= 2))];
-    const got = await mapLimit(qs, 2, (q) => proxyGet('corp', { name: q, rows: '100' }).then((d) => window.mapCorpCandidates(d)).catch(() => []));
-    const seenC = new Set(), cc = got.flat().filter((x) => { const k = x.crno || x.bzno || x.corpNm; if (seenC.has(k)) return false; seenC.add(k); return true; });
+    const F = bz ? await fscByBz(cand.corpNm, bz) : { pick: null, all: window.mapCorpCandidates(await proxyGet('corp', { name: cand.corpNm, rows: '100' })) };
+    const cc = F.all;
     const mine = cc.filter((x) => nk(x.corpNm) === nk(cand.corpNm));
     // 동명 법인이 여럿일 때 아무거나 집으면 남의 회사 재무가 붙는다.
     // ① 사업자번호가 같은 법인 ② 같은 시·군의 법인 ③ 동명이 하나뿐일 때만 그것.
-    const pick = (bz ? cc.find((x) => String(x.bzno || '').replace(/\D/g, '') === bz) : null)
+    const pick = F.pick
       || (regionKeyOf(cand.addr) ? mine.find((x) => regionKeyOf(x.addr) === regionKeyOf(cand.addr)) : null)
       || (mine.length === 1 ? mine[0] : null);
     if (pick) return await finishLive(cand.corpNm, { ...pick, bzno: pick.bzno || bz || null, _lookup: cand._lookup || null });
@@ -2311,7 +2320,8 @@ async function liveLookup(name) {
       const alts = ledC.filter((c) => c !== one).slice(0, 5).map((c) => c.corpNm);
       const lookup = { typed: name, via: 'ledger', matched: one.corpNm, bzno: one.bzno, why: one._why,
         basis: `식약처 화장품 제조업 허가 명단의 「${one.corpNm}」${one.bzno ? `(사업자 ${one.bzno})` : ''}${one.pdate ? ` · ${one.pdate} 허가` : ''}`, alts };
-      const f = fscOf(one);
+      // 금융위 후보 첫 30건에 없으면 사업자번호로 한 번 더 찾는다 — 없으면 법인번호가 비어 재무를 못 부른다
+      const f = fscOf(one) || (await fscByBz(one.corpNm, one.bzno).catch(() => ({}))).pick;
       return { report: await finishLive(one.corpNm, f ? { ...f, _lookup: lookup } : { corpNm: one.corpNm, bzno: one.bzno, addr: one.addr, _lookup: lookup }) };
     }
     if (ledC.length) return { candidates: [...ledC, ...noLic], name, source: 'ledger', similar: !exactL.length };

@@ -163,7 +163,8 @@ async function sgRefSite(ref) {
 }
 // 주소 후보들을 좌표로 바꿔 제조소와의 거리를 잰다
 async function sgAddrCheck(M, basePt, baseAddr) {
-  const cands = ((M.site && M.site.cands) || []).filter((c) => c.full && c.addr && c.state !== 'pick');
+  // 다른 제조소(제조업 허가)는 원래 떨어져 있는 공장이라 '주소 충돌'로 재지 않는다 — 본점·공장등록·연금·지도 장소만
+  const cands = ((M.site && M.site.cands) || []).filter((c) => c.full && c.addr && c.state !== 'pick' && c.src !== 'maker');
   // 기준 주소와 글자가 같은 후보는 부르지 않고 0m로 — 그래야 '모두 같은 곳'도 판정에 남는다
   const base0 = sgClean(baseAddr), seen = new Set();
   const list = cands.filter((c) => { const k = sgClean(c.addr); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 6);
@@ -222,7 +223,7 @@ function sgPatchCross(report) {
   }
   if (!G.addrs || !G.addrs.length) { report.cross_diag.warnCount = items.filter((x) => x.status === 'warn').length; return; }
   const i = items.findIndex((x) => x.label === '주소 정합성');
-  const rows = G.addrs.filter((r) => r.m != null);
+  const rows = G.addrs.filter((r) => r.m != null && !/^제조업 허가/.test(r.label));
   if (!rows.length) return;
   const worst = rows.reduce((a, r) => (r.m > a.m ? r : a));
   const tier = SG_TIER(worst.m);
@@ -261,7 +262,7 @@ function sgPlace(report, B) {
     facts.push(`<div class="sg-f"><span>증설 여력 (건폐율)</span><b>${room > 0 ? `약 ${sgPy(room)}평` : '여유 없음'}</b><small>현재 ${cur.toFixed(0)}% / 상한 ${Z.bcr}%</small></div>`);
   }
   const lim = Z.limits.length ? `<p class="sg-warn">⚠ ${esc(Z.limits.join(', '))} 저촉 — 증설·폐수 배출에 제약이 있을 수 있습니다</p>` : '';
-  const rows = G.addrs || [];
+  const rows = (G.addrs || []).filter((r) => !/^제조업 허가/.test(r.label));      // 예전 저장분에 섞인 다른 제조소
   const addr = rows.length ? `<h4 class="at-sub">주소 위치 대조 <small>공장 좌표 기준 거리</small></h4><div class="sg-dist">`
     + rows.map((r) => { const t = SG_TIER(r.m); const w = r.m == null ? 0 : Math.max(2, Math.min(100, (Math.log10(Math.max(r.m, 1)) / 5) * 100));
       return `<div class="sg-drow" title="${esc(r.addr)}"><span>${esc(r.label)}</span><span class="sg-dbar"><i class="${t.lv}" style="width:${w.toFixed(0)}%"></i></span><span class="sg-dm">${sgFmtM(r.m)}</span>${sgChip(t.lv, t.t)}</div>`; }).join('')

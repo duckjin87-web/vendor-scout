@@ -1289,7 +1289,11 @@ function assembleLiveReport(name, corp, res) {
     .map((n) => ({ title: String(n.title || '').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&'), desc: String(n.description || '').replace(/<[^>]+>/g, ''),
       link: n.originallink || n.link || '', date: n.pubDate ? parsePubDate(n.pubDate) : null }))
     .filter((n) => n.date && cgCore.length >= 2 && `${n.title} ${n.desc}`.replace(/\s/g, '').includes(cgCore)
-      && /CGMP/i.test(`${n.title} ${n.desc}`) && /획득|인증|적합|취득|지정|통과|판정/.test(`${n.title} ${n.desc}`))
+      && /CGMP/i.test(`${n.title} ${n.desc}`) && /획득|인증|적합|취득|지정|통과|판정/.test(`${n.title} ${n.desc}`)
+      // 제목의 회사가 계열·동명 회사(코스맥스 → 코스맥스바이오)면 남의 인증이다
+      && !String(n.title).split(/[\s,·…"'“”‘’()[\]]+/).some((w) => { const c = w.replace(/\(주\)|㈜|주식회사/g, ''); return c.startsWith(cgCore) && c.length > cgCore.length && !/^(?:이|가|은|는|의|와|과|도|에|,)$/.test(c.slice(cgCore.length)); })
+      // 미국 FDA·UL cGMP 같은 해외 인증은 식약처 CGMP가 아니다
+      && !/\bUL\b|FDA|美|미국|EU|유럽|NSF|WHO|호주|TGA|할랄/.test(n.title))
     .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5).map(({ title, link, date }) => ({ title, link, date }));
   const cgFirst = cgmpNews[0] || null;
   const capacity = [
