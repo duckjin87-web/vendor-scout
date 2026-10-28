@@ -2386,3 +2386,16 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 /* 3D 칸 안에 들어간 옛 비교(브이월드 윤곽이 없을 때) — 카드 제목과 겹치는 머리줄·테두리는 걷는다 */
 .at-cat-cmp .ac { border: 0; padding: 0; margin: 0; background: none; box-shadow: none; }
 .at-cat-cmp .ac > h3 { display: none; }
+/* 3D 칸 보기 전환 — 실제 모양(예측) / 육면체(부피) */
+.s3-views { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--gD-bg); align-self: flex-start; }
+.s3-views button { font: inherit; font-size: 12.5px; font-weight: 700; padding: 5px 12px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.s3-views button small { font-weight: 500; font-size: 11px; margin-left: 2px; }
+.s3-views button[aria-selected="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+.s3-views button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.s3-pred { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.ac-vol { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 8px 0 4px; padding: 8px 12px; border-radius: 6px; background: var(--accent-soft); }
+.ac-vol > span { font-size: 12px; color: var(--muted); }
+.ac-vol b { font-size: 14px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.ac-vol b.k { color: var(--text); font-weight: 600; }
+.ac-vol em { font-style: normal; font-weight: 800; color: var(--text); }
+.ac-vol small { flex-basis: 100%; font-size: 11.5px; color: var(--muted); }

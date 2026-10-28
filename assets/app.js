@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 216;
+const BUILD = 217;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -6110,7 +6110,13 @@ function renderAreaCompare(report) {
     const analog = `<div class="ac-analog">축구장(7,140㎡)으로 치면 <b>${nm} ${fields < 1 ? `약 ${Math.round(fields * 100)}%` : `약 ${fields.toFixed(1)}개`}</b>`
       + (kf ? ` · 한국콜마 세종 <b>약 ${kf.toFixed(1)}개</b>` : '') + '</div>';
     const manualNote = B.manual ? `<div class="ac-manual">직접 입력한 값(${toPy(B.arch).toLocaleString()}평 · 지상 ${B.floors}층)으로 비교 중입니다 <button type="button" class="ac3-spin" data-act="clear-manual">입력 지우기</button></div>` : '';
-    body.innerHTML = `<div class="ac-head">${head}</div>${manualNote}`
+    // 부피 — 연면적 × 층 높이 4.5m(연면적이 없으면 건축면적 × 층수). 육면체 그림으로 덩치를 가늠하게 숫자로도 준다
+    const volOf = (D) => (D && D.arch ? (D.tot || D.arch * acFloors(D)) * 4.5 : 0);
+    const vM = volOf(B), vK = rf && rf.arch ? volOf(R) : 0;
+    const fmtV = (v) => (v >= 10000 ? `약 ${(v / 10000).toFixed(v >= 100000 ? 0 : 1)}만 ㎥` : `약 ${Math.round(v).toLocaleString()} ㎥`);
+    const vol = vM ? `<div class="ac-vol"><span>부피 (추정)</span><b>${esc(nm)} ${fmtV(vM)}</b>${vK ? `<b class="k">한국콜마 ${fmtV(vK)}</b><em>${vM / vK < 0.1 ? `${((vM / vK) * 100).toFixed(1)}%` : `${Math.round((vM / vK) * 100)}%`}</em>` : ''}`
+      + '<small>연면적 × 층 높이 4.5m — 창고·설비가 들어갈 공간의 덩치를 가늠하는 값입니다</small></div>' : '';
+    body.innerHTML = `<div class="ac-head">${head}</div>${vol}${manualNote}`
       + `<div class="ac-grid">${scene ? `<div class="ac-left">${scene}</div>` : ''}<div class="ac-right">${bars}${analog}</div></div>`
       + `<div class="ac-foot">${B.manual ? '이 업체: 직접 입력값' : `이 업체: 국토부 건축물대장 ${esc(B.jibun)} 지번${B.collective ? ' · ⚠ 집합건물이라 건물 전체 면적입니다(업체 전용면적 아님)' : ''}`}. `
       + `${refFoot(R)}.</div>`;
@@ -6283,7 +6289,7 @@ function renderRoadview(addr, name) {
   return box;
 }
 
-// 화물차 입차 대략 추정. 마당 = 대지 − 건축면적, 그중 60%만 차가 쓴다고 본다(주차·조경·통로).
+// 화물차 입차 대략 추정. 마당 = 대지 − 건축면적, 그중 80%를 차가 쓸 수 있다고 본다(조경·통로 등 20% 제외).
 // 필요 넓이는 정차 + 하역 작업 + 돌려 나가기(회차) 공간을 차 길이·회전반경으로 어림한 값이다.
 // 적재 PLT는 표준 팔레트 T11(1.1m × 1.1m) 한 단 기준, 흔한 적재함 안쪽 치수로 어림했다
 // (예: 5톤 6.2m × 2.35m → 길이 5장 × 폭 2장 = 10)
@@ -6299,7 +6305,7 @@ const TRUCKS = [
 function truckAccess(plat, arch, collective) {
   if (!plat || !arch) return null;
   if (collective) return { collective: true };
-  const yard = Math.max(0, plat - arch), usable = yard * 0.6;
+  const yard = Math.max(0, plat - arch), usable = yard * 0.8;
   const rows = TRUCKS.map((t) => ({ ...t, st: usable >= t.need * 1.5 ? 'ok' : usable >= t.need ? 'tight' : 'hard' }));
   const top = rows.filter((r) => r.st !== 'hard').pop();
   return { yard, usable, rows, max: top ? top.name : null };
@@ -6318,7 +6324,7 @@ function renderAreaTab(report) {
   const today = () => new Date().toISOString().slice(0, 10);
   const py = (m2) => toPy(m2 || 0).toLocaleString();
   const m2 = (v) => (v ? `${Math.round(v).toLocaleString()}㎡` : '—');
-  const ui = { editing: false, busy: '', err: '', siteArea: {}, rvSite: null, src: new Set(), more: false };
+  const ui = { editing: false, busy: '', err: '', siteArea: {}, rvSite: null, src: new Set(), more: false, view: 'shape' };
 
   const headHtml = () => {
     if (ui.editing) {
@@ -6405,7 +6411,7 @@ function renderAreaTab(report) {
       + `${E.turn ? `<li>부지 안 빈 땅에 들어가는 가장 큰 회차 원 <b>반경 약 ${E.turn.r}m</b> — ${(() => { const k = SG_TURN_R.filter((x) => x <= E.turn.r).length; return k ? `${esc(TRUCKS[k - 1].name)}까지 마당 안에서 돌려 나갈 수 있습니다` : '마당 안 회차는 어렵습니다(후진 진입)'; })()}</li>` : ''}</ul>` : '';
     const lead = T.collective
       ? '<p class="tk-lead">지식산업센터 등 <b>여러 회사가 입주한 건물</b>이라 대지·마당이 건물 전체 몫입니다 — 차량은 <b>공용 하역장·화물 엘리베이터</b> 기준으로 관리사무소에 확인하세요.</p>'
-      : `<p class="tk-lead">마당(대지 − 건평) <b>약 ${py(T.yard)}평</b> (${m2(T.yard)}) · 실제로 차가 쓸 수 있는 넓이는 주차·조경을 빼고 약 ${m2(T.usable)}로 봤습니다.`
+      : `<p class="tk-lead">마당(대지 − 건평) <b>약 ${py(T.yard)}평</b> (${m2(T.yard)}) · 차가 쓸 수 있는 넓이는 마당의 80%인 약 ${m2(T.usable)}로 봤습니다.`
         + ` <b>${T.max ? `${esc(T.max)}까지 입차 예상` : '1톤도 마당 안 정차가 어렵습니다 — 도로변 하역 예상'}</b></p>`;
     // 한 줄에 한 차종 — 차종·길이·PLT·필요 마당·판정을 같은 칸 너비로 맞춰 2열로 촘촘히
     const WHY = { tight: '후진 진입·회차 확인', hard: '도로 정차·하역 예상' };
@@ -6415,7 +6421,7 @@ function renderAreaTab(report) {
         + `<small><i>필요 마당 </i>${m2(r.need)}</small><span class="tk-st ${r.st}">${ST[r.st]}</span></div>`).join('')
       + '</div>';
     const src = [
-      '마당 = 대지면적 − 건축면적(국토부 건축물대장). 그중 60%만 차가 쓴다고 봤습니다(주차·조경·통로 제외)',
+      '마당 = 대지면적 − 건축면적(국토부 건축물대장). 그중 80%를 차가 쓸 수 있다고 봤습니다(조경·통로 등 20% 제외)',
       '필요 마당은 정차·하역·회차 공간을 차 길이와 회전반경으로 어림한 경험치입니다',
       E ? '접한 도로 폭: 브이월드 토지이용계획의 도시계획도로 · 회차 원: 부지 경계에서 건물 윤곽을 뺀 빈 땅에 들어가는 가장 큰 원' : '',
       'PLT: 표준 팔레트(1.1m × 1.1m) 한 단 기준 대략치 — 적재함 폭·윙바디 여부에 따라 달라집니다',
@@ -6539,7 +6545,16 @@ function renderAreaTab(report) {
     const more = B ? `<details class="at-more"${ui.more ? ' open' : ''}><summary>필지·동별 내역 <small>${parts.length}개 필지 · ${(B.bldgs || []).length}동</small></summary>${lotsHtml()}${bldgHtml()}</details>` : '';
     const area = { html: `${sitesHtml()}${sumHtml()}${warnHtml()}${sg ? sgScaleBody(B) : ''}${more}`, src: areaSrc(), badge: areaBadge };
     const s3 = sg && B ? sg3dHtml(report, B) : null;
-    const cmpPart = s3 ? { html: s3.html, src: s3.src, badge: s3.badge } : { html: '<div data-slot="cmp"></div>', src: ['건물 윤곽(브이월드)을 아직 받지 못해 건축물대장 면적으로 비교합니다'] };
+    // 실제 모양(예측) · 육면체(부피) 두 보기 — 윤곽이 없으면 육면체만
+    const boxSrc = ['육면체: 건축물대장 건축면적을 정사각형 바닥으로, 층수를 높이로 세운 상자 — 바닥은 같은 축척, 높이는 보기 쉽게 과장', '부피(추정) = 연면적 × 층 높이 4.5m'];
+    const view = s3 ? ui.view : 'box';
+    const cmpPart = s3
+      ? { html: `<div class="s3-views" role="tablist"><button type="button" role="tab" data-s3view="shape" aria-selected="${view === 'shape'}">실제 모양 <small>예측</small></button>`
+          + `<button type="button" role="tab" data-s3view="box" aria-selected="${view === 'box'}">육면체 <small>부피 비교</small></button></div>`
+          + `<div data-view="shape"${view === 'shape' ? '' : ' hidden'}>${s3.html}<p class="s3-pred">지도의 건물 윤곽에 지상 층수를 세운 <b>예측 모양</b>입니다 — 실제 높이·지붕 모양과 다를 수 있습니다.</p></div>`
+          + `<div data-view="box"${view === 'box' ? '' : ' hidden'}><div data-slot="cmp"></div></div>`,
+        src: [...s3.src, ...boxSrc], badge: s3.badge }
+      : { html: '<div data-slot="cmp"></div>', src: ['건물 윤곽(브이월드)을 아직 받지 못해 건축물대장 면적의 육면체로만 비교합니다', ...boxSrc] };
     const place = sg ? sgPlace(report, B) : null;
     const placePart = { html: `${place ? place.html : ''}<div data-slot="rv"></div>`, src: place ? place.src : [], badge: place ? place.badge : '' };
     const tk = truckPart();
@@ -6558,7 +6573,7 @@ function renderAreaTab(report) {
       + cat('air', '환경 · 대기배출', air ? { html: air, src: airSrc } : null);
     ui.painted = true;
     if (s3) sgBind3d(wrap, s3.D, nm);
-    else { const slot = wrap.querySelector('[data-slot="cmp"]'); const cmp = renderAreaCompare(report); if (slot && cmp) slot.appendChild(cmp); }
+    { const slot = wrap.querySelector('[data-slot="cmp"]'); const cmp = slot ? renderAreaCompare(report) : null; if (cmp) slot.appendChild(cmp); }
     // 로드뷰 — 주소가 같으면 이미 띄운 것을 그대로 옮겨 붙인다(다시 불러오지 않게)
     const rvA = ui.rvSite || curAddr;
     if (!ui.rv || ui.rvAddr !== rvA) { ui.rv = renderRoadview(rvA, nm); ui.rvAddr = rvA; }
@@ -6601,6 +6616,14 @@ function renderAreaTab(report) {
     if (e.target.classList && e.target.classList.contains('at-more')) ui.more = e.target.open;
   }, true);
   wrap.addEventListener('click', (e) => {
+    const vb = e.target.closest('[data-s3view]');
+    if (vb) {
+      ui.view = vb.dataset.s3view;
+      const card = vb.closest('.at-cat');
+      card.querySelectorAll('[data-s3view]').forEach((x) => x.setAttribute('aria-selected', String(x === vb)));
+      card.querySelectorAll('[data-view]').forEach((x) => { x.hidden = x.dataset.view !== ui.view; });
+      return;
+    }
     const sb = e.target.closest('[data-src]');
     if (sb) {
       const id = sb.dataset.src, box = sb.closest('.at-cat').querySelector('.at-srcbox');

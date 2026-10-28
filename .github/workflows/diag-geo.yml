@@ -54,6 +54,9 @@ jobs:
                 if (t) n(`[${nm}] ${sel}: ${t.slice(0, 700)}`);
               }
               n(`[${nm}] 3D: ${await page.evaluate(() => { const c = document.querySelector('.s3-cv'); if (!c) return '없음'; const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) k++; return `${c.width}×${c.height} 칠한 픽셀 ${k}`; })}`);
+              await page.click('[data-s3view="box"]').catch(() => {});
+              await page.waitForTimeout(3000);
+              n(`[${nm}] 육면체: ${await page.$eval('.at-cat-cmp [data-view="box"]', (e) => (e.hidden ? '(숨김) ' : '') + e.innerText.replace(/\n+/g, ' | ').slice(0, 600)).catch(() => '없음')}`);
               n(`[${nm}] 교차진단: ${await page.evaluate(() => JSON.stringify((currentReport.cross_diag && currentReport.cross_diag.items || []).map((x) => [x.label, x.status, String(x.detail).slice(0, 120)])))}`);
               if (errs.length) n(`[${nm}] 화면 오류: ${[...new Set(errs)].slice(0, 5).join(' | ')}`);
             } catch (e) { n(`[${nm}] 실행 실패 ${e.message}`); }
