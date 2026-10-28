@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 217;
+const BUILD = 219;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -182,7 +182,7 @@ function buildProxyUrl(params) {
 // 서비스별 파라미터 매핑(논리키 → 실제 data.go 파라미터명). 실제 엔드포인트 URL은
 // 프록시(api/proxy.js·worker.js)에 단일 정의 — 화이트리스트로 오픈프록시 방지.
 const PARAM_MAP = {
-  corp:      { name: 'corpNm', bzno: 'bzno' }, // 상호 또는 사업자등록번호로 조회
+  corp:      { name: 'corpNm', bzno: 'bzno', rows: 'numOfRows' }, // 상호 또는 사업자등록번호로 조회
   finance:   { crno: 'crno', rows: 'numOfRows', page: 'pageNo', year: 'bizYear' },
   financeBs: { crno: 'crno', rows: 'numOfRows', page: 'pageNo', year: 'bizYear' },
   financeIs: { crno: 'crno', rows: 'numOfRows', page: 'pageNo', year: 'bizYear' },
@@ -2220,11 +2220,15 @@ async function finishLiveMfds(name, cand) {
   }
   const bz = String(cand.bzno || '').replace(/\D/g, '');
   try {
-    const cc = window.mapCorpCandidates(await proxyGet('corp', { name: cand.corpNm }));
+    // '코스맥스(주)'처럼 법인격을 붙여 부르면 금융위가 엉뚱한 30건만 줘서 상장사도 놓쳤다(법인번호 미상 → 재무 없음).
+    // 붙인 이름·뗀 이름으로 100건씩 받아 합치고, 사업자번호가 같은 법인을 먼저 고른다.
+    const qs = [...new Set([cand.corpNm, stripCorp(cand.corpNm)].filter((q) => q && q.length >= 2))];
+    const got = await mapLimit(qs, 2, (q) => proxyGet('corp', { name: q, rows: '100' }).then((d) => window.mapCorpCandidates(d)).catch(() => []));
+    const seenC = new Set(), cc = got.flat().filter((x) => { const k = x.crno || x.bzno || x.corpNm; if (seenC.has(k)) return false; seenC.add(k); return true; });
     const mine = cc.filter((x) => nk(x.corpNm) === nk(cand.corpNm));
     // 동명 법인이 여럿일 때 아무거나 집으면 남의 회사 재무가 붙는다.
     // ① 사업자번호가 같은 법인 ② 같은 시·군의 법인 ③ 동명이 하나뿐일 때만 그것.
-    const pick = (bz ? mine.find((x) => String(x.bzno || '').replace(/\D/g, '') === bz) : null)
+    const pick = (bz ? cc.find((x) => String(x.bzno || '').replace(/\D/g, '') === bz) : null)
       || (regionKeyOf(cand.addr) ? mine.find((x) => regionKeyOf(x.addr) === regionKeyOf(cand.addr)) : null)
       || (mine.length === 1 ? mine[0] : null);
     if (pick) return await finishLive(cand.corpNm, { ...pick, bzno: pick.bzno || bz || null, _lookup: cand._lookup || null });
@@ -2794,6 +2798,13 @@ const EXT_PROFILE_FIELDS = [
   ['인력·급여', '평균연봉', /평균\s*연봉\s*:?\s*([0-9,]{2,9}\s*(?:만원|만|원))/, 'company'],
   ['인력·급여', '신입초봉', /(?:신입\s*)?초봉\s*:?\s*([0-9,]{2,9}\s*(?:만원|만|원))/, 'company'],
   ['인력·급여', '평균근속', /평균\s*근속(?:연수|년수)?\s*:?\s*([0-9.]{1,4}\s*년)/, 'company'],
+  // 공시에 없거나(신용등급·평판) 공시보다 최신인(진행 중 공고) 값만 더한다
+  ['기업 평가', '신용등급', /신용\s*등급\s*:?\s*([가-힣]{2,3}|[A-D][A-D+\-]{0,3})(?:\s*(20\d{2}\.\d{2}))?/, null],
+  ['기업 평가', '기업형태', /기업\s*형태\s*:?\s*(코스피|코스닥|코넥스|대기업|중견기업|중소기업|외국계|공기업|스타트업)/, null],
+  ['기업 평가', '업력', /업력\s*:?\s*(\d{1,3}\s*년차)/, null],
+  ['채용 활동', '진행 중 공고', /진행\s*중(?:인)?\s*(?:채용\s*)?공고\s*(\d{1,4}\s*건)/, null],
+  ['평판', '기업리뷰', /기업\s*리뷰\s*(\d[\d,]{0,6}\s*건)/, null],
+  ['평판', '면접후기', /면접\s*(?:후기|정보)\s*(\d[\d,]{0,6}\s*건)/, null],
 ];
 // 값이 라벨만 다시 잡히거나 통째로 문장이 딸려 오는 걸 막는다
 const PROFILE_JUNK = /(로그인|회원가입|채용정보|더보기|검색|바로가기|자세히|https?:\/\/[^\s]*(?:jobkorea|saramin|incruit|catch)|^[.\-·,\s]*$)/;
@@ -2844,7 +2855,7 @@ function extProfile(text, host, link, kind) {
     if (want && kind && want !== kind) continue;
     const m = t.match(re);
     if (!m || !m[1]) continue;
-    const v = cleanProfileValue(m[1], m.index + m[0].length >= t.length - 1);
+    const v = cleanProfileValue(m[2] ? `${m[1]} (${m[2]})` : m[1], m.index + m[0].length >= t.length - 1);
     if (!v || v.length < 1 || v.length > 50 || PROFILE_JUNK.test(v)) continue;
     out.push({ cat, key, value: v, host, link });
   }
@@ -2906,7 +2917,10 @@ function extAmountEok(str) {
   const sign = neg ? -1 : 1;
   // 억은 소수 한 자리까지 살린다. 사람인은 '68.1억 / 100.7억'처럼 적는데 정수로 반올림하면
   // 매출 100.7억이 101억이 되고, 외감 기준선(100억)을 넘었는지 같은 판단이 흐려진다.
-  let m = s.match(/^([\d,.]+)억/);
+  // '1조5,264억'·'2조' — 조 단위를 빼먹으면 매출 1조 5천억이 5천억으로 적힌다(코스맥스 실제 사례)
+  let m = s.match(/^([\d,.]+)조(?:([\d,.]+)억)?/);
+  if (m) return Math.round((Number(m[1].replace(/,/g, '')) * 10000 + (m[2] ? Number(m[2].replace(/,/g, '')) : 0)) * 10) / 10 * sign;
+  m = s.match(/^([\d,.]+)억/);
   if (m) return Math.round(Number(m[1].replace(/,/g, '')) * 10) / 10 * sign;
   m = s.match(/^([\d,]+)백만/);
   if (m) return Math.round(Number(m[1].replace(/,/g, '')) / 100) * sign;
@@ -2946,7 +2960,7 @@ function extFinance(text, host, link) {
   const nowY = new Date().getFullYear();
   const inRange = (y) => y >= 2010 && y <= nowY;
   // 음수 표기(△·▲·괄호)까지 포함해 금액을 잡는다
-  const AMT = /((?:[-−–—△▲▽▼(])?[0-9][0-9,.]*\s*(?:억|백만|원)\)?)/g;
+  const AMT = /((?:[-−–—△▲▽▼(])?(?:[0-9][0-9,.]*\s*조\s*(?:[0-9][0-9,.]*\s*억)?|[0-9][0-9,.]*\s*(?:억|백만|원))\)?)/g;
 
   for (const [s0, e0] of financeSections(full)) {
     const t = full.slice(s0, e0);
@@ -3167,6 +3181,7 @@ async function hiringTrace(nm) {
   // ② 채용 사이트 결과만 남기고 링크 기준 중복 제거
   const seen = new Set();
   const posts = [];
+  const affil = new Set();
   const strip = (s) => String(s || '').replace(/<[^>]+>/g, '').replace(/&[a-z]+;/gi, ' ').trim();
   const key = stripCorp(nm).replace(/\s/g, '');
   got.forEach((d) => {
@@ -3178,6 +3193,9 @@ async function hiringTrace(nm) {
       if (!HIRE_HOSTS.test(link) || !HIRE_WORDS.test(blob)) return;
       // 상호가 실제로 들어간 결과만 — 동종 업체 공고가 섞이면 전부 무의미해진다
       if (!stripCorp(blob).replace(/\s/g, '').includes(key)) return;
+      // 제목의 회사 이름이 상호보다 긴 다른 회사면(코스맥스 → 코스맥스엔비티·코스맥스바이오·코스맥스그룹) 계열·동명 회사다 — 빼고 따로 적는다
+      const tk = String(title).split(/[\s[\]|·:,–\-]+/).map((w) => stripCorp(w).replace(/[()]/g, '')).find((w) => w.includes(key)) || '';
+      if (tk && tk !== key && tk.length > key.length) { affil.add(tk); return; }
       const id = link.replace(/[?#].*$/, '');
       if (seen.has(id)) return;
       seen.add(id);
@@ -3333,7 +3351,24 @@ async function hiringTrace(nm) {
   // 사원수는 기준일이 있는 값을 우선한다(페이지 > 스니펫)
   heads.sort((a, b) => (b.asOf ? 1 : 0) - (a.asOf ? 1 : 0) || (b.from === 'page' ? 1 : 0) - (a.from === 'page' ? 1 : 0));
   return { posts, heads, extFin: finRows, extProfile: reconcileProfile(extProf),
-    hpHints: [...new Set(hpHints)], workAddrs: [...new Set(workAddrs)], extDiag, contacts };
+    hpHints: [...new Set(hpHints)], workAddrs: [...new Set(workAddrs)], extDiag, contacts, affil: [...affil].slice(0, 10) };
+}
+// 공고 조건 요약 — 공고 설명의 '근무형태·경력·급여'를 모아 이 회사가 어떤 사람을 어떤 조건으로 뽑는지 본다
+function hireTerms(posts) {
+  const T = { type: {}, career: {}, pay: [], payTalk: 0, n: 0 };
+  (posts || []).forEach((p) => {
+    const t = `${p.title} ${p.desc}`.replace(/\s+/g, ' ');
+    let hit = false;
+    const ty = t.match(/(정규직|계약직|파견직|인턴|아르바이트|프리랜서|병역특례)/g);
+    if (ty) { new Set(ty).forEach((x) => { T.type[x] = (T.type[x] || 0) + 1; }); hit = true; }
+    const ca = t.match(/경력\s*[:：]?\s*(신입\s*[·/·]\s*경력|경력\s*무관|경력\s*\(?년수무관\)?|신입|경력\s*\d+\s*년\s*(?:이상|↑)?)/);
+    if (ca) { const k = /무관|년수무관/.test(ca[1]) ? '경력 무관' : /신입\s*[·/·]\s*경력/.test(ca[1]) ? '신입·경력' : /신입/.test(ca[1]) ? '신입' : '경력'; T.career[k] = (T.career[k] || 0) + 1; hit = true; }
+    const pay = t.match(/(월급?|연봉|시급)\s*[:：]?\s*([\d,]{2,7})\s*만?\s*원/);
+    if (pay) { const v = Number(pay[2].replace(/,/g, '')); const unit = pay[1].startsWith('월') ? '월' : pay[1]; if (v) T.pay.push({ unit, v: unit === '시급' ? v : (v > 100000 ? Math.round(v / 10000) : v) }); hit = true; }
+    if (/면접\s*후\s*결정|회사\s*내규/.test(t)) { T.payTalk++; hit = true; }
+    if (hit) T.n++;
+  });
+  return T.n ? T : null;
 }
 
 // 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
@@ -3455,7 +3490,7 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile, hpH
   }
 
   return {
-    ok: true, posts, heads: heads || [], extDiag: extDiag || null, extProfile: extProfile || [],
+    ok: true, posts, heads: heads || [], extDiag: extDiag || null, extProfile: extProfile || [], terms: hireTerms(posts),
     hpHints: hpHints || [], workAddrs: workAddrs || [], byYear, byRole,
     dated: dated.length, undated: undated.length,
     recent, prior, spanYears, intensity, headTrend,
@@ -3578,6 +3613,8 @@ async function finishLive(name, corp) {
     recall: liveFirstList('vs_c_recall', recallLookup),
     nts: corp.bzno ? proxyOnlyGet('ntsStatus', { b_no: String(corp.bzno).replace(/\D/g, '') }) : Promise.reject(new Error('사업자번호 없음')),
     naverNews: proxyOnlyGet('naverNews', { query: nm, display: '30', sort: 'date' }),
+    // CGMP 취득 시기 — 명단 API에 판정일이 없어 인증 기사로 가늠한다(정확도순이라 오래된 기사도 잡힌다)
+    cgmpNews: proxyOnlyGet('naverNews', { query: `${nm} CGMP`, display: '30', sort: 'sim' }),
     // 제조원 역추적 — 이 업체를 '제조원/제조사'로 표기한 웹문서(납품 브랜드·제품 추정)
     oemTrace: proxyOnlyGet('naverWeb', { query: `${nm} 제조원`, display: '10' }),
     // 채용공고 추적 — 뉴스도 홈페이지도 없는 영세업체의 거의 유일한 활동 흔적
@@ -4414,8 +4451,20 @@ function renderHiring(h) {
   }
   // [우] 급여 수준 — 공시에는 없고 채용 사이트에만 있는 몇 안 되는 실질 정보
   const prof = h.extProfile || [];
+  // 공고 조건 — 근무형태·경력·급여
+  const TM = h.terms;
+  if (TM) {
+    const cnt = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' · ');
+    const pays = TM.pay.filter((x) => x.unit !== '시급');
+    const pr = (u) => { const a = pays.filter((x) => x.unit === u).map((x) => x.v); return a.length ? `${u === '월' ? '월' : '연봉'} ${Math.min(...a).toLocaleString()}${a.length > 1 && Math.max(...a) !== Math.min(...a) ? `~${Math.max(...a).toLocaleString()}` : ''}만원` : ''; };
+    right += `<div class="hire-sec">공고 조건 <em>공고 ${TM.n}건 설명에서</em></div><div class="pf-kv">`
+      + (Object.keys(TM.type).length ? `<div class="pf-k">근무형태</div><div class="pf-v">${esc(cnt(TM.type))}</div>` : '')
+      + (Object.keys(TM.career).length ? `<div class="pf-k">경력 요구</div><div class="pf-v">${esc(cnt(TM.career))}</div>` : '')
+      + (pays.length || TM.payTalk ? `<div class="pf-k">급여 제시</div><div class="pf-v">${esc([pr('월'), pr('연봉')].filter(Boolean).join(' · ') || '금액 미기재')}${TM.payTalk ? `<small>면접 후 결정·내규 ${TM.payTalk}건</small>` : ''}</div>` : '')
+      + '</div>';
+  }
   if (prof.length) {
-    right += `<div class="hire-sec">급여 수준 <em>채용사이트 게재값 · 공시 아님</em></div><div class="pf-kv">`
+    right += `<div class="hire-sec">채용사이트 기업정보 <em>사이트 게재값 · 공시 아님</em></div><div class="pf-kv">`
       + prof.map((r) => {
         const alt = r.agree ? '' : `<u>${esc(r.sources.map((s) => `${s.host} ${s.value}`).join(' / '))}</u>`;
         return `<div class="pf-k">${esc(r.key)}</div>`
@@ -4432,6 +4481,7 @@ function renderHiring(h) {
     html += `<div class="hire-warn">채용 강도·급여 수준은 국민연금 가입자수나 채용사이트 기업정보가 있어야 계산됩니다 — 이번에는 확보하지 못했습니다.</div>`;
   }
 
+  if (h.affil && h.affil.length) html += `<div class="hire-warn">이름이 비슷한 계열·동명 회사 공고는 집계에서 뺐습니다: ${esc(h.affil.join(', '))}</div>`;
   // 근거 원문 — 추정의 출처를 사용자가 직접 열어볼 수 있어야 한다
   const show = h.posts.slice(0, 6);
   html += `<div class="hire-sec">공고 원문 <em>클릭 시 해당 사이트</em></div><ul class="hire-list">`
@@ -5002,9 +5052,11 @@ function bizEvents(report) {
   const C = report.capacity || [];
   const cgmpOn = C.some((x) => x.key === 'CGMP 적합업소' && x.value);
   const tl = (report.insights && report.insights.timeline) || [];
-  const cgNews = tl.filter((t) => /CGMP/i.test(`${t.title || ''} ${t.desc || ''}`) && dOf(t.date)).sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
-  if (cgNews) push(dOf(cgNews.date), 'CGMP 기사', 'cgmp', { why: String(cgNews.title || '').slice(0, 60) });
-  else if (cgmpOn) push(qd, 'CGMP 적합', 'cgmp', { dl: `${qd} 확인`, why: '식약처 CGMP 적합업소 명단 등재(판정일은 공개되지 않음)' });
+  // 판정일을 모르면 연혁에 '조회한 날'로 찍지 않는다(예전엔 모든 CGMP 업체가 2026년 취득처럼 보였다)
+  const cgList = cgmpOn ? [...(M.cgmp_news || []), ...tl.filter((t) => /CGMP/i.test(`${t.title || ''} ${t.desc || ''}`))]
+    .filter((t) => dOf(t.date)).sort((a, b) => String(a.date).localeCompare(String(b.date))) : [];
+  const cgNews = cgList[0];
+  if (cgNews) push(dOf(cgNews.date), 'CGMP 인증 기사', 'cgmp', { why: `${String(cgNews.title || '').slice(0, 60)} — 취득 시기 추정(판정일 비공개)` });
 
   // ② 재무 — 해마다 찍지 않고 '선을 넘은 해'만. 결산 기준이라 그해 12월에 둔다
   const fin = (report.finance_history || []).filter((d) => d.src !== 'ext' && d.year);
@@ -6367,11 +6419,14 @@ function renderAreaTab(report) {
         + allSitesHtml() + '</div>';
     }
     const stat = (lab, v, sub) => `<div class="at-stat"><span>${lab}</span><b>${v ? `약 ${py(v)}평` : '—'}</b><small>${[v ? m2(v) : '', sub].filter(Boolean).join(' · ')}</small></div>`;
+    // 면적 4개와 시설 연식·층 구성·규모 구간을 같은 크기 칸으로 한 줄에
+    const sc = typeof sgScaleStats === 'function' ? sgScaleStats(B) : [];
     return unitHtml() + (B.unit ? '<h4 class="at-sub">건물 전체 <small>여러 회사가 함께 쓰는 건물 — 참고용</small></h4>' : '') + '<div class="at-stats">'
       + stat('건축면적 (건평)', B.arch, '바닥에 닿은 면적')
       + stat('연면적', B.tot, '모든 층 합계')
       + stat('대지면적', B.plat, '부지')
       + stat('공장 용도 건축면적', B.factoryArch, `공장 ${B.factoryCount || 0}동 / 전체 ${B.bldgCount || 0}동`)
+      + sc.map(([lab, v, sub]) => `<div class="at-stat"><span>${lab}</span><b>${esc(v)}</b><small>${esc(sub)}</small></div>`).join('')
       + '</div>';
   };
   // 오피스형 건물 입주 — 건물 전체 면적 위에 호실 면적과 경고를 먼저 보인다
@@ -6543,7 +6598,7 @@ function renderAreaTab(report) {
     const areaBadge = !B ? '' : U ? (U.area && U.area.excl ? `<span class="sg-chip warn">호실 약 ${py(U.area.excl)}평</span>` : '<span class="sg-chip warn">호실 확인 필요</span>')
       : `<span class="sg-chip info">건평 약 ${py(B.arch)}평</span>`;
     const more = B ? `<details class="at-more"${ui.more ? ' open' : ''}><summary>필지·동별 내역 <small>${parts.length}개 필지 · ${(B.bldgs || []).length}동</small></summary>${lotsHtml()}${bldgHtml()}</details>` : '';
-    const area = { html: `${sitesHtml()}${sumHtml()}${warnHtml()}${sg ? sgScaleBody(B) : ''}${more}`, src: areaSrc(), badge: areaBadge };
+    const area = { html: `${sitesHtml()}${sumHtml()}${warnHtml()}${sg ? sgScaleAsks(B) : ''}${more}`, src: areaSrc(), badge: areaBadge };
     const s3 = sg && B ? sg3dHtml(report, B) : null;
     // 실제 모양(예측) · 육면체(부피) 두 보기 — 윤곽이 없으면 육면체만
     const boxSrc = ['육면체: 건축물대장 건축면적을 정사각형 바닥으로, 층수를 높이로 세운 상자 — 바닥은 같은 축척, 높이는 보기 쉽게 과장', '부피(추정) = 연면적 × 층 높이 4.5m'];
@@ -6585,6 +6640,8 @@ function renderAreaTab(report) {
   const commit = async (bld) => {
     // 고친 주소도 오피스형 건물 호실이면 호실 면적을 다시 붙인다
     if (bld && bld.arch) await bldAttachUnit(bld, bld.queried, [bld.queried, ...reportUnitTexts(report)]).catch(() => {});
+    // 다른 제조소로 바꾸면 부지·건물 윤곽(브이월드)도 그 주소로 다시 받는다 — 예전엔 처음 제조소 모양이 그대로 남았다
+    if (M.geo && bld && bld.queried && M.geo.addr !== bld.queried) delete M.geo;
     M.bld = bld;
     M.bldUser = true;          // 늦게 온 자료로 리포트를 다시 그려도 사용자가 고친 면적은 지킨다
     const cap = report.capacity || [];
@@ -7099,7 +7156,7 @@ function render(report, opts = {}) {
 // 먼저 그린 리포트(finishLive의 _late)가 완성되면 같은 업체를 보고 있을 때만 바꿔 그린다.
 // 그 사이 사용자가 한 일(홈페이지 추적·심층분석·면적 수정·직접 입력)은 새 리포트로 옮긴다.
 const LIVE_SRC_NAME = { finance: '금융위 재무', rpt: '식약처 보고품목', nps: '국민연금', maker: '식약처 제조업', nedrug: '의약품안전나라 제조소', gmp: '식약처 CGMP',
-  factory: '산단공 공장등록', recall: '식약처 회수·판매중지', nts: '국세청 사업자상태', naverNews: '뉴스', oemTrace: '웹 언급',
+  factory: '산단공 공장등록', recall: '식약처 회수·판매중지', nts: '국세청 사업자상태', naverNews: '뉴스', cgmpNews: 'CGMP 기사', oemTrace: '웹 언급',
   hiring: '채용공고', ntsVal: '국세청 진위확인', insure: '고용·산재보험', air: '대기배출시설' };
 function hookLateReport(report) {
   if (!report || !report._late || report._lateHooked) return;

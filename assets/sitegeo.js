@@ -278,9 +278,9 @@ function sgPlace(report, B) {
     badge: sgChip(Z.level, Z.zone || '용도 미확인') };
 }
 
-// 시설 규모 · 연식 — 건축물대장(이미 받은 값)으로 한 줄 판정과 방문 확인 질문
-function sgScaleBody(B) {
-  if (!B || !B.arch || B.unit) return '';
+// 시설 규모 · 연식 — 건축물대장(이미 받은 값)으로. 칸(면적 칸과 같은 모양)과 방문 확인 질문을 따로 준다
+function sgScaleInfo(B) {
+  if (!B || !B.arch || B.unit) return null;
   const bl = B.bldgs || [];
   const aprs = bl.map((b) => String(b.apr || '')).filter((a) => /^\d{8}$/.test(a)).sort();
   const y0 = aprs.length ? Number(aprs[0].slice(0, 4)) : null, y1 = aprs.length ? Number(aprs[aprs.length - 1].slice(0, 4)) : null;
@@ -289,16 +289,26 @@ function sgScaleBody(B) {
   const tier = tot >= 20000 ? '대형' : tot >= 5000 ? '중형' : tot >= 1000 ? '중소형' : tot ? '소형' : '—';
   const floors = Math.max(0, ...bl.map((b) => b.floors || 0)) || null;
   const strct = [...new Set(bl.map((b) => b.strct).filter(Boolean))].slice(0, 2).join('·');
+  return { y0, y1, age, tot, tier, floors, strct };
+}
+function sgScaleStats(B) {
+  const I = sgScaleInfo(B);
+  if (!I) return [];
+  return [
+    ['시설 연식', I.age != null ? `${I.age}년` : '—', I.y0 ? `${I.y0} 사용승인${I.y1 && I.y1 !== I.y0 ? ` · 최근 ${I.y1}` : ''}` : '사용승인일 없음'],
+    ['층 구성', I.floors ? `지상 ${I.floors}층` : '—', I.strct || '구조 미상'],
+    ['규모 구간', I.tier, `${B.factoryTot ? '공장 ' : ''}연면적 기준`],
+  ];
+}
+function sgScaleAsks(B) {
+  const I = sgScaleInfo(B);
+  if (!I) return '';
   const asks = [];
-  if (age != null && age >= 15) asks.push(`${y0}년 준공 ${age}년차 — 공조·정제수·배관 설비 교체 이력`);
-  if (y1 && y0 && y1 - y0 >= 3) asks.push(`${y1}년 증축(최초 ${y0}년) — 당시 늘린 물량·고객사`);
-  if (floors && floors >= 3) asks.push(`지상 ${floors}층 — 층별 공정 배치와 화물 엘리베이터 용량`);
-  if (tot) asks.push(`대장 연면적 ${Math.round(tot).toLocaleString()}㎡ — 실제 생산 라인 수와 일 생산량`);
-  return `<div class="sg-facts">`
-    + `<div class="sg-f"><span>시설 연식</span><b>${age != null ? `${age}년` : '—'}</b><small>${y0 ? `${y0} 사용승인${y1 && y1 !== y0 ? ` · 최근 ${y1}` : ''}` : '사용승인일 없음'}</small></div>`
-    + `<div class="sg-f"><span>층 구성</span><b>${floors ? `지상 ${floors}층` : '—'}</b><small>${esc(strct || '구조 미상')}</small></div>`
-    + `<div class="sg-f"><span>규모 구간</span><b>${tier}</b><small>${B.factoryTot ? '공장' : ''} 연면적 약 ${sgPy(tot)}평</small></div></div>`
-    + (asks.length ? `<div class="sg-askbox"><b>방문 때 확인</b><ul class="sg-asks">${asks.map((a) => `<li>${esc(a)}</li>`).join('')}</ul></div>` : '');
+  if (I.age != null && I.age >= 15) asks.push(`${I.y0}년 준공 ${I.age}년차 — 공조·정제수·배관 설비 교체 이력`);
+  if (I.y1 && I.y0 && I.y1 - I.y0 >= 3) asks.push(`${I.y1}년 증축(최초 ${I.y0}년) — 당시 늘린 물량·고객사`);
+  if (I.floors && I.floors >= 3) asks.push(`지상 ${I.floors}층 — 층별 공정 배치와 화물 엘리베이터 용량`);
+  if (I.tot) asks.push(`대장 연면적 ${Math.round(I.tot).toLocaleString()}㎡ — 실제 생산 라인 수와 일 생산량`);
+  return asks.length ? `<div class="sg-askbox"><b>방문 때 확인</b><ul class="sg-asks">${asks.map((a) => `<li>${esc(a)}</li>`).join('')}</ul></div>` : '';
 }
 
 // 화물차 예상에 붙일 보강 — 진입 도로 · 마당 회차 원
@@ -330,7 +340,11 @@ function sg3dData(report, B) {
   } else {
     if (!(S.bldgs || []).length) return null;
     const so = sgCentroid(S.parcel && S.parcel.ring ? S.parcel.ring : S.bldgs.flatMap((b) => b.ring)), sM = sgM(so);
-    mine = { parcel: S.parcel && S.parcel.ring ? open(S.parcel.ring).map(sM) : null, bldgs: S.bldgs.map((b) => ({ pts: open(b.ring).map(sM), floors: b.floors || 1 })) };
+    // 브이월드 층수가 비면(전부 1층 이하) 건축물대장의 평균 층수(연면적 ÷ 건축면적)로 채운다
+    const avgF = B && B.arch && B.tot ? Math.max(1, Math.min(15, Math.round(B.tot / B.arch))) : 1;
+    const noF = S.bldgs.every((b) => !b.floors || b.floors <= 1) && avgF > 1;
+    mine = { parcel: S.parcel && S.parcel.ring ? open(S.parcel.ring).map(sM) : null, estF: noF ? avgF : null,
+      bldgs: S.bldgs.map((b) => ({ pts: open(b.ring).map(sM), floors: noF ? avgF : (b.floors || 1) })) };
   }
   const sum = (g) => g.bldgs.reduce((a, b) => a + sgArea(b.pts), 0);
   const gfa = (g) => g.bldgs.reduce((a, b) => a + sgArea(b.pts) * (b.floors || 1), 0);
@@ -348,7 +362,7 @@ function sg3dHtml(report, B) {
       + `<div class="s3-b k"><i style="width:${Math.max(1.5, (b / mx) * 100).toFixed(1)}%"></i><em>${unitTxt(b)}</em></div></div></div>`;
   };
   const html = `<div class="s3"><div class="s3-stage"><canvas class="s3-cv" role="img" aria-label="${esc(nm)} 건물과 한국콜마 세종 건물을 같은 축척 3D로 나란히 세운 그림"></canvas>`
-    + `<div class="s3-ctl"><button type="button" class="nb-btn sm" data-s3="side" aria-pressed="true">나란히</button><button type="button" class="nb-btn sm" data-s3="over" aria-pressed="false">겹쳐 보기</button><button type="button" class="nb-btn sm" data-s3="reset">처음 시점</button></div>`
+    + `<div class="s3-ctl"><button type="button" class="nb-btn sm" data-s3="side" aria-pressed="true">위아래로</button><button type="button" class="nb-btn sm" data-s3="over" aria-pressed="false">겹쳐 보기</button><button type="button" class="nb-btn sm" data-s3="reset">처음 시점</button></div>`
     + `<span class="s3-hint">끌어서 돌리기 · 위아래로 끌면 각도</span></div>`
     + `<div class="s3-side"><p class="s3-head"><b>${esc(nm)}</b>의 바닥 면적은 한국콜마 세종의 <em>${pct(st.myFoot, st.refFoot)}</em>${unit ? ' (호실 전용)' : ''}</p>`
     + `<div class="s3-legend"><span><i class="s3-sw m"></i>${esc(nm)}${unit ? ' 호실' : ` ${D.mine.bldgs.length}동`}</span><span><i class="s3-sw k"></i>한국콜마 세종 ${D.ref.bldgs.length}동</span></div>`
@@ -358,7 +372,8 @@ function sg3dHtml(report, B) {
     + '</div></div>';
   const src = ['건물 모양·지상 층수: 브이월드 건물 윤곽(도로명주소 건물) — 지도 윤곽이라 대장 건축면적과 조금 다를 수 있습니다',
     '한국콜마 기준: 세종 산단길 22-17 필지 안 건물만(세종 공장 전체가 아님)', `높이는 층수 × ${SG_FLOOR_M}m로 가정했습니다 · 추정 연면적 = 바닥 면적 × 층수`,
-    unit ? '오피스형 건물 입주사라 건물 전체 대신 호실 전용면적만큼의 한 층짜리 상자로 그렸습니다' : ''].filter(Boolean);
+    unit ? '오피스형 건물 입주사라 건물 전체 대신 호실 전용면적만큼의 한 층짜리 상자로 그렸습니다' : '',
+    D.mine.estF ? `브이월드에 층수가 없어 건축물대장 평균 층수(연면적 ÷ 건축면적 ≈ ${D.mine.estF}층)로 세웠습니다` : ''].filter(Boolean);
   return { html, src, D, badge: sgChip('info', `콜마 대비 ${pct(st.myFoot, st.refFoot)}`) };
 }
 // 캔버스 그리기 — st: { yaw, pitch, mode }
@@ -374,7 +389,8 @@ function sg3dDraw(cv, D, st) {
   // 배치 — 나란히: 업체를 콜마 오른쪽에 / 겹쳐: 콜마 가운데에
   const bb = (g) => { const xs = g.bldgs.flatMap((b) => b.pts.map((p) => p[0])).concat((g.parcel || []).map((p) => p[0])); const ys = g.bldgs.flatMap((b) => b.pts.map((p) => p[1])).concat((g.parcel || []).map((p) => p[1])); return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]; };
   const rb = bb(D.ref), mb = bb(D.mine);
-  const off = st.mode === 'over' ? [0, 0] : [rb[1] - mb[0] + Math.max(12, (rb[1] - rb[0]) * 0.08), 0];
+  // 위아래: 콜마를 위(북쪽), 업체를 아래(남쪽)에 가운데 맞춰 둔다 — 돌리지 않아도 바로 견줘진다
+  const off = st.mode === 'over' ? [0, 0] : [(rb[0] + rb[1]) / 2 - (mb[0] + mb[1]) / 2, rb[2] - mb[3] - Math.max(14, (rb[3] - rb[2]) * 0.12)];
   const groups = [{ g: D.ref, o: [0, 0], rgbc: kRGB, a: 1, key: 'k' }, { g: D.mine, o: off, rgbc: mRGB, a: st.mode === 'over' ? 0.55 : 0.92, key: 'm' }];
   // 가운데 맞춤 — 두 무리 전체의 가운데를 원점으로
   const allX = [rb[0], rb[1], mb[0] + off[0], mb[1] + off[0]], allY = [rb[2], rb[3], mb[2] + off[1], mb[3] + off[1]];
@@ -382,7 +398,7 @@ function sg3dDraw(cv, D, st) {
   const Rxy = Math.max(...allX.map((x) => Math.abs(x - cx0)), ...allY.map((y) => Math.abs(y - cy0))) * 1.08 || 50;
   const maxZ = Math.max(...[D.ref, D.mine].flatMap((g) => g.bldgs.map((b) => (b.floors || 1) * SG_FLOOR_M)));
   const ct = Math.cos(st.yaw), sn = Math.sin(st.yaw), cp = Math.cos(st.pitch), sp = Math.sin(st.pitch);
-  const scale = Math.min(W / (2 * Rxy), H / (2 * Rxy * sp + maxZ * cp)) * 0.9;
+  const scale = Math.min(W / (2 * Rxy), H / (2 * Rxy * sp + maxZ * cp)) * 0.96;
   const P = ([x, y, z]) => { const X = x - cx0, Y = y - cy0; const xr = X * ct - Y * sn, yr = X * sn + Y * ct;
     return { x: W / 2 + xr * scale, y: H / 2 - (yr * sp + z * cp - maxZ * cp / 2) * scale, d: yr * cp - z * sp }; };
   const poly = (pts, fill, stroke, dash) => { c.beginPath(); pts.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y))); c.closePath();
@@ -422,7 +438,7 @@ function sg3dDraw(cv, D, st) {
 }
 function sgBind3d(root, D, label) {
   const cv = root.querySelector('.s3-cv'); if (!cv || !D) return;
-  const st = { yaw: -0.55, pitch: 0.72, mode: 'side', label };
+  const st = { yaw: -0.18, pitch: 0.95, mode: 'side', label };
   const draw = () => sg3dDraw(cv, D, st);
   let drag = null;
   cv.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, yaw: st.yaw, pitch: st.pitch }; cv.setPointerCapture(e.pointerId); cv.classList.add('drag'); });
@@ -431,7 +447,7 @@ function sgBind3d(root, D, label) {
   cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
   root.querySelectorAll('[data-s3]').forEach((b) => b.addEventListener('click', () => {
     const k = b.dataset.s3;
-    if (k === 'reset') { st.yaw = -0.55; st.pitch = 0.72; } else { st.mode = k; root.querySelectorAll('[data-s3="side"],[data-s3="over"]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.s3 === k))); }
+    if (k === 'reset') { st.yaw = -0.18; st.pitch = 0.95; } else { st.mode = k; root.querySelectorAll('[data-s3="side"],[data-s3="over"]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.s3 === k))); }
     draw();
   }));
   if (window.ResizeObserver) new ResizeObserver(draw).observe(cv);

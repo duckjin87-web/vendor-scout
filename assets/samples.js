@@ -1282,6 +1282,16 @@ function assembleLiveReport(name, corp, res) {
       grade: gradeRaw || null, severe };
   }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 
+  // CGMP 취득 시기 — 식약처 공개 명단(API)에는 판정일이 없다. '업체명 CGMP'로 찾은 기사 중
+  // 이 업체 이름과 인증·획득 표현이 함께 나온 가장 이른 기사로 가늠한다(없으면 '판정일 비공개').
+  const cgCore = String(name || '').replace(/\(주\)|㈜|주식회사|\(유\)|유한회사/g, '').replace(/\s/g, '');
+  const cgmpNews = (hasCgmp && R.cgmpNews && R.cgmpNews.ok && R.cgmpNews.data && R.cgmpNews.data.items ? R.cgmpNews.data.items : [])
+    .map((n) => ({ title: String(n.title || '').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&'), desc: String(n.description || '').replace(/<[^>]+>/g, ''),
+      link: n.originallink || n.link || '', date: n.pubDate ? parsePubDate(n.pubDate) : null }))
+    .filter((n) => n.date && cgCore.length >= 2 && `${n.title} ${n.desc}`.replace(/\s/g, '').includes(cgCore)
+      && /CGMP/i.test(`${n.title} ${n.desc}`) && /획득|인증|적합|취득|지정|통과|판정/.test(`${n.title} ${n.desc}`))
+    .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5).map(({ title, link, date }) => ({ title, link, date }));
+  const cgFirst = cgmpNews[0] || null;
   const capacity = [
     // ★ 생산역량 칸에는 '제조소에 실제로 몇 명이 있나' 한 줄만 둔다.
     //   전체 근로자 구성·사업장별 내역·인력 추이·공장등록 신고값은 아래 「인력 · 사업장 구성」 표로 옮겼다.
@@ -1381,7 +1391,11 @@ function assembleLiveReport(name, corp, res) {
         ? '★ 제품명 앞머리에서 2건 이상 반복된 표기입니다 — 실제 납품 브랜드일 가능성이 높지만 추정입니다. '
           + '업체가 말하는 거래처와 대조해 보시고, 차이가 크면 그 이유를 물어보세요.'
         : (rl.length ? '제품명에서 반복되는 브랜드 표기를 찾지 못했습니다 — 자사 브랜드 위주이거나 제품명에 브랜드를 안 쓰는 경우' : why('rpt', rptEmpty))),
-    f('CGMP 적합업소', hasCgmp ? '적합 (식약처 GMP 등재)' : null, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null, hasCgmp ? 'CGMP 적합업소 — ISO/할랄/비건은 공개 API 없어 방문 시 인증서 확인' : why('gmp', 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)')),
+    f('CGMP 적합업소', hasCgmp ? `적합 (식약처 GMP 등재)${cgFirst ? ` · ${cgFirst.date.slice(0, 7)} 기사 확인` : ''}` : null, hasCgmp ? 'A' : 'D', '식약처 GMP API', hasCgmp ? today : null,
+      hasCgmp ? (cgFirst
+        ? `★ 취득 시기 추정: ${cgFirst.date} 「${cgFirst.title.slice(0, 60)}」 기사 — 식약처 공개 명단에는 판정일이 없어 이 업체의 CGMP 인증 기사 중 가장 이른 것으로 가늠했습니다. ※ 방문 때 CGMP 적합 증명서의 발급일로 확인하세요. ISO/할랄/비건은 공개 API 없음`
+        : '★ 판정일은 공개되지 않습니다 — 식약처 명단(API)에 날짜 칸이 없고, 이 업체의 CGMP 인증 기사도 찾지 못했습니다. ※ 방문 때 CGMP 적합 증명서 발급일을 확인하세요. ISO/할랄/비건은 공개 API 없음')
+        : why('gmp', 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)')),
   ];
 
   // 재무 — 연도별 '가장 완전한' 레코드 채택(같은 해 별도/연결 복수 제출 대비) 후 최신 5개년
@@ -1389,7 +1403,7 @@ function assembleLiveReport(name, corp, res) {
   // (재무 조립보다 앞에 둔다 — 아래에서 외부사이트 재무를 붙일 때 필요하다)
   const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
   const hiring = hireRaw && typeof analyzeHiring === 'function'
-    ? analyzeHiring(hireRaw.posts, hireRaw.heads, workforce ? workforce.total : empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs)
+    ? { ...analyzeHiring(hireRaw.posts, hireRaw.heads, workforce ? workforce.total : empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs), affil: hireRaw.affil || [] }
     : null;
   if (hiring && hireRaw && hireRaw.contacts) hiring.contacts = hireRaw.contacts;   // 대표번호·메일(업체명 옆 표시)
 
@@ -1753,7 +1767,8 @@ function assembleLiveReport(name, corp, res) {
       version: 1, overall_grade: overall, data_grade: overall, sources_used: [...new Set(all.filter((x) => !x.data_gap).map((x) => x.source))],
       bld: R.bld ? (R.bld.ok ? R.bld.data : { err: R.bld.err, queried: R.bld.queried }) : null,
       site: R.site && R.site.ok ? R.site.data : null,          // 실제 공장 소재지 선정 결과(후보·근거)
-      mfds_sites: nedSites.length ? nedSites : null,            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
+      mfds_sites: nedSites.length ? nedSites : null,
+      cgmp_news: cgmpNews.length ? cgmpNews : null,            // CGMP 인증 기사(이른 순) — 연혁의 취득 시점            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
       lookup: (corp && corp._lookup) || null,                   // 어떤 입력으로, 무엇을 근거로 이 업체를 조회했는지
       workforce,                                                // 고용·산재보험 사업장별 인원·역할
       // 인력 표에 함께 싣는 참고값 — 국민연금 월별 추이, 공장등록 신고 종업원수
