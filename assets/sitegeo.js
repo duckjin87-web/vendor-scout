@@ -236,117 +236,50 @@ function sgPatchCross(report) {
 }
 
 // ── 화면 ──
-// 공장 면적 탭에 들어가는 섹션들. B: 건축물대장 합계(meta.bld), T: truckAccess 결과
-function sgSectionsHtml(report, B) {
+// 공장 면적 탭은 카테고리 카드로 묶는다. 아래 함수들은 카드 본문(html)과, 「!」 버튼 안에 숨길 출처·설명(src)을 따로 돌려준다.
+const sgChip = (lv, t) => `<span class="sg-chip ${lv}">${esc(t)}</span>`;
+const sgPy = (m2) => Math.round(m2 / 3.305785).toLocaleString();
+
+// 입지 · 부지 — 용도지역 판정 · 산업단지 · 접한 도로 · 공시가 · 증설 여력 · 주소 위치 대조
+function sgPlace(report, B) {
   const M = report.meta || {}, G = M.geo;
-  if (!M.live) return '';
-  if (!G) return getProxy() ? '<div class="at-sec sg-wait"><h4>부지 공간정보</h4><p class="tk-note">브이월드에서 부지 경계·용도지역·건물 윤곽을 불러오는 중…</p></div>' : '';
-  if (G.err) return `<div class="at-sec sg-wait"><h4>부지 공간정보</h4><p class="tk-note">불러오지 못했습니다 — ${esc(G.err)}</p></div>`;
+  if (!M.live) return null;
+  if (!G) return getProxy() ? { html: '<p class="at-wait">브이월드에서 용도지역·부지 경계·건물 윤곽을 불러오는 중…</p>', src: [], badge: '' } : null;
+  if (G.err) return { html: `<p class="at-wait">공간정보를 불러오지 못했습니다 — ${esc(G.err)}</p>`, src: [], badge: '' };
   const S = G.site || {}, Z = sgZone(S.uses || []), road = sgRoad(S.uses || []);
-  const unit = B && B.unit;
-  const py = (m2) => Math.round(m2 / 3.305785).toLocaleString();
-  const chip = (lv, t) => `<span class="sg-chip ${lv}">${esc(t)}</span>`;
-  // ① 부지 · 용도지역 요약
-  const plat = B && B.plat;
+  const unit = B && B.unit, plat = B && B.plat;
   const facts = [];
-  facts.push(`<div class="sg-f"><span>용도지역</span><b>${esc(Z.zone || '미확인')}</b>${chip(Z.level === 'unk' ? 'unk' : Z.level, { ok: '정상 제조소', warn: '확인 필요', bad: '제조소 의심', unk: '미확인' }[Z.level])}</div>`);
-  if (Z.park) facts.push(`<div class="sg-f"><span>산업단지</span><b>${esc(Z.park.replace(/\(.*\)/, ''))}</b>${chip('ok', '입주')}</div>`);
+  facts.push(`<div class="sg-f"><span>용도지역</span><b>${esc(Z.zone || '미확인')}</b>${sgChip(Z.level, { ok: '정상 제조소', warn: '확인 필요', bad: '제조소 의심', unk: '미확인' }[Z.level])}</div>`);
+  if (Z.park) facts.push(`<div class="sg-f"><span>산업단지</span><b>${esc(Z.park.replace(/\(.*\)/, ''))}</b>${sgChip('ok', '입주')}</div>`);
   facts.push(`<div class="sg-f"><span>접한 도로</span><b>${road ? esc(road.name.replace(/\(폭.*$/, '')) : '도시계획도로 없음'}</b><small>${road ? `폭 ${road.lo ? `${road.lo}~` : ''}${road.hi}m` : '현장 확인'}</small></div>`);
   if (S.parcel && S.parcel.jiga && plat && !unit) {
     const v = S.parcel.jiga * plat;
-    facts.push(`<div class="sg-f"><span>부지 공시가 (참고)</span><b>약 ${v >= 1e8 ? `${Math.round(v / 1e8).toLocaleString()}억` : `${Math.round(v / 1e4).toLocaleString()}만`} 원</b><small>${S.parcel.jiga.toLocaleString()}원/㎡ · ${esc(S.parcel.gosi || '')} 공시</small></div>`);
+    facts.push(`<div class="sg-f"><span>부지 공시가 (참고)</span><b>약 ${v >= 1e8 ? `${Math.round(v / 1e8).toLocaleString()}억` : `${Math.round(v / 1e4).toLocaleString()}만`} 원</b><small>${S.parcel.jiga.toLocaleString()}원/㎡</small></div>`);
   }
   if (Z.bcr && plat && B.arch && !unit) {
     const cur = (B.arch / plat) * 100, room = Math.max(0, (Z.bcr / 100) * plat - B.arch);
-    facts.push(`<div class="sg-f"><span>증설 여력 (건폐율)</span><b>${room > 0 ? `약 ${py(room)}평` : '여유 없음'}</b><small>현재 ${cur.toFixed(0)}% / 상한 ${Z.bcr}%</small></div>`);
+    facts.push(`<div class="sg-f"><span>증설 여력 (건폐율)</span><b>${room > 0 ? `약 ${sgPy(room)}평` : '여유 없음'}</b><small>현재 ${cur.toFixed(0)}% / 상한 ${Z.bcr}%</small></div>`);
   }
   const lim = Z.limits.length ? `<p class="sg-warn">⚠ ${esc(Z.limits.join(', '))} 저촉 — 증설·폐수 배출에 제약이 있을 수 있습니다</p>` : '';
-  const zoneSec = `<div class="at-sec sg-zone"><h4>부지 · 용도지역 <small>브이월드 토지이용계획 · ${esc((S.parcel && S.parcel.addr) || '')}</small></h4>`
-    + `<p class="sg-lead ${Z.level}">${esc(Z.text)}</p><div class="sg-facts">${facts.join('')}</div>${lim}`
-    + (S.uses && S.uses.length ? `<details class="sg-uses"><summary>토지이용계획 전체 ${S.uses.length}건</summary><p>${S.uses.map((u) => `${esc(u.name)}<small>(${esc(u.rel)})</small>`).join(' · ')}</p></details>` : '')
-    + '<p class="tk-note">건폐율 상한은 법정 기준입니다 — 지자체 조례·산업단지 관리계획으로 더 낮을 수 있습니다.</p></div>';
-
-  // ② 주소 위치 대조
   const rows = G.addrs || [];
-  const addrSec = rows.length ? `<div class="at-sec sg-addr"><h4>주소 위치 대조 <small>공장(제조소) 좌표 기준 거리 · 50m 이내 일치 / 1km 이상 분리 의심</small></h4><div class="sg-dist">`
-    + `<div class="sg-drow base"><b>공장 (조회 기준)</b><span class="sg-dbar"><i style="width:2%"></i></span><span class="sg-dm">기준</span>${chip('ok', '기준')}</div>`
+  const addr = rows.length ? `<h4 class="at-sub">주소 위치 대조 <small>공장 좌표 기준 거리</small></h4><div class="sg-dist">`
     + rows.map((r) => { const t = SG_TIER(r.m); const w = r.m == null ? 0 : Math.max(2, Math.min(100, (Math.log10(Math.max(r.m, 1)) / 5) * 100));
-      return `<div class="sg-drow" title="${esc(r.addr)}"><span>${esc(r.label)}</span><span class="sg-dbar"><i class="${t.lv}" style="width:${w.toFixed(0)}%"></i></span><span class="sg-dm">${sgFmtM(r.m)}</span>${chip(t.lv, t.t)}</div>`; }).join('')
-    + '</div><p class="tk-note">막대는 거리의 로그 눈금입니다. 좌표는 브이월드(못 찾으면 카카오)로 바꿨습니다.</p></div>' : '';
-
-  return zoneSec + addrSec;
+      return `<div class="sg-drow" title="${esc(r.addr)}"><span>${esc(r.label)}</span><span class="sg-dbar"><i class="${t.lv}" style="width:${w.toFixed(0)}%"></i></span><span class="sg-dm">${sgFmtM(r.m)}</span>${sgChip(t.lv, t.t)}</div>`; }).join('')
+    + '</div>' : '';
+  const uses = S.uses && S.uses.length ? `<details class="sg-uses"><summary>토지이용계획 전체 ${S.uses.length}건</summary><p>${S.uses.map((u) => `${esc(u.name)}<small>(${esc(u.rel)})</small>`).join(' · ')}</p></details>` : '';
+  const src = [
+    `용도지역·도로·산업단지: 브이월드 토지이용계획 (필지 ${esc((S.parcel && S.parcel.addr) || '미확인')})`,
+    S.parcel && S.parcel.jiga ? `공시지가: 브이월드 연속지적도 ${esc(S.parcel.gosi || '')} 공시 × 건축물대장 대지면적 — 시세가 아닌 참고값` : '',
+    Z.bcr ? `건폐율 상한 ${Z.bcr}%는 법정 기준입니다 — 지자체 조례·산업단지 관리계획으로 더 낮을 수 있습니다` : '',
+    rows.length ? '주소 위치 대조: 후보 주소를 브이월드 지오코딩(못 찾으면 카카오)으로 좌표로 바꿔 거리를 쟀습니다 · 50m 이내 일치 / 1km 미만 같은 단지 / 10km 미만 분리 의심 / 그 이상 본사·공장 분리 · 막대는 로그 눈금' : '',
+    `좌표 출처: ${esc(G.src || '브이월드')}`,
+  ].filter(Boolean);
+  return { html: `<p class="sg-lead ${Z.level}">${esc(Z.text)}</p><div class="sg-facts">${facts.join('')}</div>${lim}${addr}${uses}`, src,
+    badge: sgChip(Z.level, Z.zone || '용도 미확인') };
 }
 
-// 화물차 예상에 붙일 보강 — 진입 도로 · 마당 회차 원
-function sgTruckExtra(report) {
-  const G = report.meta && report.meta.geo;
-  if (!G || !G.site) return null;
-  const road = sgRoad(G.site.uses || []), rm = sgRoadMax(road);
-  const turn = G.site.parcel && G.site.parcel.ring ? sgTurnCircle(G.site) : null;
-  return { road, rm, turn };
-}
-
-// 건물 윤곽 겹쳐 보기 — 한국콜마 부지·건물(회색) 위에 조회 업체 건물(파랑)을 같은 축척으로
-function sgOverlayHtml(report, B) {
-  const G = report.meta && report.meta.geo;
-  if (!G || !G.site || !G.ref || !G.ref.parcel || !G.ref.parcel.ring) return '';
-  const R = G.ref, S = G.site, unit = B && B.unit;
-  const ro = sgCentroid(R.parcel.ring), rM = sgM(ro);
-  const refP = R.parcel.ring.map(rM), refB = (R.bldgs || []).map((b) => ({ ...b, pts: b.ring.map(rM) }));
-  let mine = [];
-  if (unit) {
-    const a = unit.area && unit.area.excl;
-    if (a) { const s = Math.sqrt(a) / 2; mine = [{ pts: [[-s, -s], [s, -s], [s, s], [-s, s]], dash: true, name: `호실 전용 ${Math.round(a)}㎡` }]; }
-  } else if (S.bldgs && S.bldgs.length) {
-    const all = S.bldgs.flatMap((b) => b.ring), so = sgCentroid(all), sM = sgM(so);
-    mine = S.bldgs.map((b) => ({ pts: b.ring.map(sM), name: b.name, floors: b.floors }));
-  }
-  if (!mine.length) return '';
-  const xs = refP.map((p) => p[0]), ys = refP.map((p) => p[1]);
-  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 60) * 1.15;
-  const vb = `${(-span / 2).toFixed(1)} ${(-span / 2).toFixed(1)} ${span.toFixed(1)} ${span.toFixed(1)}`;
-  const pts = (arr) => arr.map(([x, y]) => `${x.toFixed(1)},${(-y).toFixed(1)}`).join(' ');      // 북쪽이 위
-  const refArea = refB.reduce((a, b) => a + sgArea(b.pts), 0), myArea = mine.reduce((a, b) => a + sgArea(b.pts), 0);
-  const big = refB.slice().sort((a, b) => sgArea(b.pts) - sgArea(a.pts))[0];
-  const bar = [10, 20, 50, 100, 200].find((v) => v >= span / 6) || 200;
-  const sw = span / 400;
-  return `<div class="at-sec sg-ov"><h4>건물 모양 겹쳐 보기 <small>브이월드 건물 윤곽 · 같은 축척(미터) · 북쪽이 위</small></h4>`
-    + `<div class="sg-ovgrid"><div class="sg-ovbox"><svg class="sg-svg" viewBox="${vb}" data-span="${span.toFixed(1)}" role="img" aria-label="한국콜마 세종 부지와 건물 위에 ${esc(report.meta.vendor_name || '')} 건물 윤곽을 같은 축척으로 겹친 그림">`
-    + `<polygon class="sg-refp" points="${pts(refP)}" style="stroke-width:${(sw * 1.5).toFixed(2)}"/>`
-    + refB.map((b) => `<polygon class="sg-refb" points="${pts(b.pts)}" style="stroke-width:${sw.toFixed(2)}"/>`).join('')
-    + `<g class="sg-mine" data-x="0" data-y="0" data-r="0">${mine.map((b) => `<polygon class="sg-myb${b.dash ? ' dash' : ''}" points="${pts(b.pts)}" style="stroke-width:${(sw * 2).toFixed(2)}"/>`).join('')}</g>`
-    + `<g class="sg-scale" transform="translate(${(-span / 2 + span * 0.04).toFixed(1)},${(span / 2 - span * 0.05).toFixed(1)})"><rect width="${bar}" height="${(sw * 4).toFixed(2)}"/><text y="${(-sw * 5).toFixed(2)}" style="font-size:${(sw * 13).toFixed(2)}px">${bar}m</text></g>`
-    + `</svg></div><div class="sg-ovside">`
-    + `<div class="sg-legend"><span><i class="sg-sw mine"></i>${esc(stripCorp(report.meta.vendor_name || '') || '조회 업체')} ${unit ? '호실' : `건물 ${mine.length}동`}</span><span><i class="sg-sw ref"></i>한국콜마 세종 건물 ${refB.length}동</span><span><i class="sg-sw refp"></i>한국콜마 부지 경계</span></div>`
-    + `<div class="sg-ovstat"><div><span>조회 업체 바닥 면적</span><b>약 ${Math.round(myArea / 3.305785).toLocaleString()}평</b></div><div><span>한국콜마 대비</span><b>${refArea ? `${Math.max(1, Math.round((myArea / refArea) * 100))}%` : '—'}</b></div></div>`
-    + `<label class="tk-note" for="sgRot">돌리기 <span class="sg-rotv">0°</span></label><input id="sgRot" class="sg-rot" type="range" min="-180" max="180" value="0">`
-    + `<div class="sg-btns"><button type="button" class="nb-btn sm" data-sg="snap">콜마 가장 큰 동에 맞추기</button><button type="button" class="nb-btn sm" data-sg="reset">처음 위치</button></div>`
-    + `<p class="tk-note">파란 도형은 끌어서 옮길 수 있습니다.${unit ? ' 오피스형 건물 입주사라 건물 전체 대신 호실 전용면적만큼의 점선 정사각형으로 그렸습니다.' : ''} 바닥 면적은 지도 윤곽 기준이라 대장 건축면적과 조금 다를 수 있습니다.</p>`
-    + `</div></div><span class="sg-snap" hidden data-x="${big ? sgCentroid(big.pts)[0].toFixed(1) : 0}" data-y="${big ? (-sgCentroid(big.pts)[1]).toFixed(1) : 0}"></span></div>`;
-}
-// 겹쳐 보기 끌기·돌리기 — 공장 면적 탭이 그려진 뒤 붙인다
-function sgBindOverlay(root) {
-  const svg = root.querySelector('.sg-svg'); if (!svg) return;
-  const g = svg.querySelector('.sg-mine'), rot = root.querySelector('.sg-rot'), rv = root.querySelector('.sg-rotv');
-  const st = { x: 0, y: 0, r: 0 };
-  const apply = () => { g.setAttribute('transform', `translate(${st.x} ${st.y}) rotate(${st.r})`); if (rv) rv.textContent = `${st.r}°`; };
-  const toSvg = (e) => { const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY; return p.matrixTransform(svg.getScreenCTM().inverse()); };
-  let drag = null;
-  g.addEventListener('pointerdown', (e) => { const p = toSvg(e); drag = { dx: p.x - st.x, dy: p.y - st.y }; g.setPointerCapture(e.pointerId); g.classList.add('drag'); });
-  g.addEventListener('pointermove', (e) => { if (!drag) return; const p = toSvg(e); st.x = p.x - drag.dx; st.y = p.y - drag.dy; apply(); });
-  const end = () => { drag = null; g.classList.remove('drag'); };
-  g.addEventListener('pointerup', end); g.addEventListener('pointercancel', end);
-  if (rot) rot.addEventListener('input', () => { st.r = Number(rot.value); apply(); });
-  root.querySelectorAll('[data-sg]').forEach((b) => b.addEventListener('click', () => {
-    const s = root.querySelector('.sg-snap');
-    if (b.dataset.sg === 'snap' && s) { st.x = Number(s.dataset.x); st.y = Number(s.dataset.y); }
-    else { st.x = 0; st.y = 0; st.r = 0; if (rot) rot.value = 0; }
-    apply();
-  }));
-}
-
-// 건물 연식·규모 한 줄 — 건축물대장(이미 받은 값)으로
-function sgScaleHtml(B) {
+// 시설 규모 · 연식 — 건축물대장(이미 받은 값)으로 한 줄 판정과 방문 확인 질문
+function sgScaleBody(B) {
   if (!B || !B.arch || B.unit) return '';
   const bl = B.bldgs || [];
   const aprs = bl.map((b) => String(b.apr || '')).filter((a) => /^\d{8}$/.test(a)).sort();
@@ -361,11 +294,148 @@ function sgScaleHtml(B) {
   if (y1 && y0 && y1 - y0 >= 3) asks.push(`${y1}년 증축(최초 ${y0}년) — 당시 늘린 물량·고객사`);
   if (floors && floors >= 3) asks.push(`지상 ${floors}층 — 층별 공정 배치와 화물 엘리베이터 용량`);
   if (tot) asks.push(`대장 연면적 ${Math.round(tot).toLocaleString()}㎡ — 실제 생산 라인 수와 일 생산량`);
-  const py = (m2) => Math.round(m2 / 3.305785).toLocaleString();
-  return `<div class="at-sec sg-scale-sec"><h4>시설 규모 · 연식 <small>국토부 건축물대장 · 방문 크로스체크</small></h4><div class="sg-facts">`
-    + `<div class="sg-f"><span>${B.factoryTot ? '공장 연면적' : '연면적'}</span><b>약 ${py(tot)}평</b><small>${Math.round(tot).toLocaleString()}㎡ · ${B.factoryCount || B.bldgCount || 0}개 동</small></div>`
+  return `<div class="sg-facts">`
     + `<div class="sg-f"><span>시설 연식</span><b>${age != null ? `${age}년` : '—'}</b><small>${y0 ? `${y0} 사용승인${y1 && y1 !== y0 ? ` · 최근 ${y1}` : ''}` : '사용승인일 없음'}</small></div>`
     + `<div class="sg-f"><span>층 구성</span><b>${floors ? `지상 ${floors}층` : '—'}</b><small>${esc(strct || '구조 미상')}</small></div>`
-    + `<div class="sg-f"><span>규모 구간</span><b>${tier}</b><small>연면적 기준</small></div></div>`
-    + (asks.length ? `<ul class="sg-asks">${asks.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : '') + '</div>';
+    + `<div class="sg-f"><span>규모 구간</span><b>${tier}</b><small>${B.factoryTot ? '공장' : ''} 연면적 약 ${sgPy(tot)}평</small></div></div>`
+    + (asks.length ? `<div class="sg-askbox"><b>방문 때 확인</b><ul class="sg-asks">${asks.map((a) => `<li>${esc(a)}</li>`).join('')}</ul></div>` : '');
+}
+
+// 화물차 예상에 붙일 보강 — 진입 도로 · 마당 회차 원
+function sgTruckExtra(report) {
+  const G = report.meta && report.meta.geo;
+  if (!G || !G.site) return null;
+  const road = sgRoad(G.site.uses || []), rm = sgRoadMax(road);
+  const turn = G.site.parcel && G.site.parcel.ring ? sgTurnCircle(G.site) : null;
+  return { road, rm, turn };
+}
+
+// ── 3D 규모 비교 ── 브이월드 건물 윤곽을 지상 층수만큼 세워 한국콜마 세종 건물과 같은 축척으로 나란히(또는 겹쳐) 본다.
+// 라이브러리 없이 캔버스에 직교 투영으로 그린다. 끌면 돌아가고, 위아래로 끌면 내려다보는 각도가 바뀐다.
+const SG_FLOOR_M = 4.5;          // 공장 한 층 높이 가정
+function sg3dData(report, B) {
+  const G = report.meta && report.meta.geo;
+  if (!G || !G.site || !G.ref || !(G.ref.bldgs || []).length) return null;
+  const R = G.ref, S = G.site, unit = B && B.unit;
+  const open = (ring) => (ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1] ? ring.slice(0, -1) : ring);
+  const ro = sgCentroid(R.parcel && R.parcel.ring ? R.parcel.ring : R.bldgs.flatMap((b) => b.ring)), rM = sgM(ro);
+  const ref = { parcel: R.parcel && R.parcel.ring ? open(R.parcel.ring).map(rM) : null,
+    bldgs: R.bldgs.map((b) => ({ pts: open(b.ring).map(rM), floors: b.floors || 1 })) };
+  let mine;
+  if (unit) {
+    const a = unit.area && unit.area.excl;
+    if (!a) return null;
+    const s = Math.sqrt(a) / 2;
+    mine = { parcel: null, unit: true, bldgs: [{ pts: [[-s, -s], [s, -s], [s, s], [-s, s]], floors: 1 }] };
+  } else {
+    if (!(S.bldgs || []).length) return null;
+    const so = sgCentroid(S.parcel && S.parcel.ring ? S.parcel.ring : S.bldgs.flatMap((b) => b.ring)), sM = sgM(so);
+    mine = { parcel: S.parcel && S.parcel.ring ? open(S.parcel.ring).map(sM) : null, bldgs: S.bldgs.map((b) => ({ pts: open(b.ring).map(sM), floors: b.floors || 1 })) };
+  }
+  const sum = (g) => g.bldgs.reduce((a, b) => a + sgArea(b.pts), 0);
+  const gfa = (g) => g.bldgs.reduce((a, b) => a + sgArea(b.pts) * (b.floors || 1), 0);
+  const top = (g) => Math.max(...g.bldgs.map((b) => b.floors || 1));
+  return { ref, mine, stat: { refFoot: sum(ref), myFoot: sum(mine), refGfa: gfa(ref), myGfa: gfa(mine), refTop: top(ref), myTop: top(mine) } };
+}
+function sg3dHtml(report, B) {
+  const D = sg3dData(report, B);
+  if (!D) return null;
+  const nm = stripCorp(report.meta.vendor_name || '') || '조회 업체', st = D.stat, unit = B && B.unit;
+  const pct = (a, b) => (b ? `${Math.max(1, Math.round((a / b) * 100))}%` : '—');
+  const bar = (lab, a, b, unitTxt) => {
+    const mx = Math.max(a, b) || 1;
+    return `<div class="s3-row"><span class="s3-l">${lab}</span><div class="s3-bars"><div class="s3-b m"><i style="width:${Math.max(1.5, (a / mx) * 100).toFixed(1)}%"></i><em>${unitTxt(a)}</em></div>`
+      + `<div class="s3-b k"><i style="width:${Math.max(1.5, (b / mx) * 100).toFixed(1)}%"></i><em>${unitTxt(b)}</em></div></div></div>`;
+  };
+  const html = `<div class="s3"><div class="s3-stage"><canvas class="s3-cv" role="img" aria-label="${esc(nm)} 건물과 한국콜마 세종 건물을 같은 축척 3D로 나란히 세운 그림"></canvas>`
+    + `<div class="s3-ctl"><button type="button" class="nb-btn sm" data-s3="side" aria-pressed="true">나란히</button><button type="button" class="nb-btn sm" data-s3="over" aria-pressed="false">겹쳐 보기</button><button type="button" class="nb-btn sm" data-s3="reset">처음 시점</button></div>`
+    + `<span class="s3-hint">끌어서 돌리기 · 위아래로 끌면 각도</span></div>`
+    + `<div class="s3-side"><p class="s3-head"><b>${esc(nm)}</b>의 바닥 면적은 한국콜마 세종의 <em>${pct(st.myFoot, st.refFoot)}</em>${unit ? ' (호실 전용)' : ''}</p>`
+    + `<div class="s3-legend"><span><i class="s3-sw m"></i>${esc(nm)}${unit ? ' 호실' : ` ${D.mine.bldgs.length}동`}</span><span><i class="s3-sw k"></i>한국콜마 세종 ${D.ref.bldgs.length}동</span></div>`
+    + bar('바닥 면적', st.myFoot, st.refFoot, (v) => `${sgPy(v)}평`)
+    + bar('추정 연면적', st.myGfa, st.refGfa, (v) => `${sgPy(v)}평`)
+    + bar('최고 층수', st.myTop, st.refTop, (v) => `${v}층`)
+    + '</div></div>';
+  const src = ['건물 모양·지상 층수: 브이월드 건물 윤곽(도로명주소 건물) — 지도 윤곽이라 대장 건축면적과 조금 다를 수 있습니다',
+    '한국콜마 기준: 세종 산단길 22-17 필지 안 건물만(세종 공장 전체가 아님)', `높이는 층수 × ${SG_FLOOR_M}m로 가정했습니다 · 추정 연면적 = 바닥 면적 × 층수`,
+    unit ? '오피스형 건물 입주사라 건물 전체 대신 호실 전용면적만큼의 한 층짜리 상자로 그렸습니다' : ''].filter(Boolean);
+  return { html, src, D, badge: sgChip('info', `콜마 대비 ${pct(st.myFoot, st.refFoot)}`) };
+}
+// 캔버스 그리기 — st: { yaw, pitch, mode }
+function sg3dDraw(cv, D, st) {
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (!W || !H) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+  const css = getComputedStyle(cv), col = (v, d) => (css.getPropertyValue(v).trim() || d);
+  const rgb = (h) => { const m = String(h).match(/^#([0-9a-f]{6})$/i); return m ? [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16)) : [128, 128, 128]; };
+  const kRGB = rgb(col('--muted', '#6b7280')), mRGB = rgb(col('--accent', '#2f6df6')), line = col('--faint', '#9aa1ab'), txt = col('--text', '#1a1d21');
+  // 배치 — 나란히: 업체를 콜마 오른쪽에 / 겹쳐: 콜마 가운데에
+  const bb = (g) => { const xs = g.bldgs.flatMap((b) => b.pts.map((p) => p[0])).concat((g.parcel || []).map((p) => p[0])); const ys = g.bldgs.flatMap((b) => b.pts.map((p) => p[1])).concat((g.parcel || []).map((p) => p[1])); return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]; };
+  const rb = bb(D.ref), mb = bb(D.mine);
+  const off = st.mode === 'over' ? [0, 0] : [rb[1] - mb[0] + Math.max(12, (rb[1] - rb[0]) * 0.08), 0];
+  const groups = [{ g: D.ref, o: [0, 0], rgbc: kRGB, a: 1, key: 'k' }, { g: D.mine, o: off, rgbc: mRGB, a: st.mode === 'over' ? 0.55 : 0.92, key: 'm' }];
+  // 가운데 맞춤 — 두 무리 전체의 가운데를 원점으로
+  const allX = [rb[0], rb[1], mb[0] + off[0], mb[1] + off[0]], allY = [rb[2], rb[3], mb[2] + off[1], mb[3] + off[1]];
+  const cx0 = (Math.min(...allX) + Math.max(...allX)) / 2, cy0 = (Math.min(...allY) + Math.max(...allY)) / 2;
+  const Rxy = Math.max(...allX.map((x) => Math.abs(x - cx0)), ...allY.map((y) => Math.abs(y - cy0))) * 1.08 || 50;
+  const maxZ = Math.max(...[D.ref, D.mine].flatMap((g) => g.bldgs.map((b) => (b.floors || 1) * SG_FLOOR_M)));
+  const ct = Math.cos(st.yaw), sn = Math.sin(st.yaw), cp = Math.cos(st.pitch), sp = Math.sin(st.pitch);
+  const scale = Math.min(W / (2 * Rxy), H / (2 * Rxy * sp + maxZ * cp)) * 0.9;
+  const P = ([x, y, z]) => { const X = x - cx0, Y = y - cy0; const xr = X * ct - Y * sn, yr = X * sn + Y * ct;
+    return { x: W / 2 + xr * scale, y: H / 2 - (yr * sp + z * cp - maxZ * cp / 2) * scale, d: yr * cp - z * sp }; };
+  const poly = (pts, fill, stroke, dash) => { c.beginPath(); pts.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y))); c.closePath();
+    if (fill) { c.fillStyle = fill; c.fill(); } if (stroke) { c.setLineDash(dash || []); c.strokeStyle = stroke; c.lineWidth = 1; c.stroke(); c.setLineDash([]); } };
+  const shade = (rgbc, k, a) => `rgba(${rgbc.map((v) => Math.round(Math.min(255, v * k))).join(',')},${a})`;
+  // 땅 — 부지 경계
+  groups.forEach(({ g, o, rgbc }) => { if (g.parcel) poly(g.parcel.map(([x, y]) => P([x + o[0], y + o[1], 0])), shade(rgbc, 1.6, 0.08), line, [4, 3]); });
+  // 건물 — 먼 것부터
+  const L = [Math.cos(-0.8), Math.sin(-0.8)];
+  const bl = groups.flatMap(({ g, o, rgbc, a, key }) => g.bldgs.map((b) => {
+    const pts = b.pts.map(([x, y]) => [x + o[0], y + o[1]]), h = (b.floors || 1) * SG_FLOOR_M;
+    const cen = pts.reduce((s, p) => [s[0] + p[0] / pts.length, s[1] + p[1] / pts.length], [0, 0]);
+    return { pts, h, rgbc, a, key, d: P([cen[0], cen[1], 0]).d, dash: key === 'm' && D.mine.unit };
+  })).sort((p, q) => q.d - p.d);
+  bl.forEach((b) => {
+    const walls = b.pts.map((p, i) => { const q = b.pts[(i + 1) % b.pts.length];
+      const quad = [P([p[0], p[1], 0]), P([q[0], q[1], 0]), P([q[0], q[1], b.h]), P([p[0], p[1], b.h])];
+      const nx = q[1] - p[1], ny = -(q[0] - p[0]), nl = Math.hypot(nx, ny) || 1;
+      return { quad, d: quad.reduce((s, v) => s + v.d, 0) / 4, k: 0.62 + 0.3 * Math.abs((nx * L[0] + ny * L[1]) / nl) };
+    }).sort((p, q) => q.d - p.d);
+    walls.forEach((w) => poly(w.quad, shade(b.rgbc, w.k, b.a), shade(b.rgbc, 0.5, Math.min(1, b.a + 0.1)), b.dash ? [4, 3] : null));
+    poly(b.pts.map(([x, y]) => P([x, y, b.h])), shade(b.rgbc, 1.18, b.a), shade(b.rgbc, 0.5, Math.min(1, b.a + 0.1)), b.dash ? [4, 3] : null);
+  });
+  // 이름표 — 무리마다 가장 높은 건물 위
+  c.font = '600 12px system-ui, sans-serif'; c.textAlign = 'center'; c.fillStyle = txt;
+  [['k', '한국콜마 세종'], ['m', st.label || '조회 업체']].forEach(([key, t]) => {
+    const g = bl.filter((b) => b.key === key); if (!g.length) return;
+    const hi = g.reduce((a, b) => (b.h > a.h ? b : a));
+    const cen = hi.pts.reduce((s, p) => [s[0] + p[0] / hi.pts.length, s[1] + p[1] / hi.pts.length], [0, 0]);
+    const pt = P([cen[0], cen[1], hi.h]);
+    // 겹쳐 보기에서는 두 이름표가 부딪치지 않게 업체 이름을 한 줄 위로
+    c.fillText(t, pt.x, Math.max(14, pt.y - 8 - (st.mode === 'over' && key === 'm' ? 16 : 0)));
+  });
+  // 축척 막대
+  const bar = [10, 20, 50, 100, 200].find((v) => v * scale >= 50) || 200;
+  c.fillStyle = txt; c.fillRect(12, H - 14, bar * scale, 3); c.font = '11px system-ui, sans-serif'; c.textAlign = 'left'; c.fillText(`${bar}m`, 12, H - 19);
+}
+function sgBind3d(root, D, label) {
+  const cv = root.querySelector('.s3-cv'); if (!cv || !D) return;
+  const st = { yaw: -0.55, pitch: 0.72, mode: 'side', label };
+  const draw = () => sg3dDraw(cv, D, st);
+  let drag = null;
+  cv.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, yaw: st.yaw, pitch: st.pitch }; cv.setPointerCapture(e.pointerId); cv.classList.add('drag'); });
+  cv.addEventListener('pointermove', (e) => { if (!drag) return; st.yaw = drag.yaw + (e.clientX - drag.x) * 0.01; st.pitch = Math.max(0.2, Math.min(1.5, drag.pitch - (e.clientY - drag.y) * 0.008)); draw(); });
+  const end = () => { drag = null; cv.classList.remove('drag'); };
+  cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+  root.querySelectorAll('[data-s3]').forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.s3;
+    if (k === 'reset') { st.yaw = -0.55; st.pitch = 0.72; } else { st.mode = k; root.querySelectorAll('[data-s3="side"],[data-s3="over"]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.s3 === k))); }
+    draw();
+  }));
+  if (window.ResizeObserver) new ResizeObserver(draw).observe(cv);
+  // 숨은 탭에서 그리면 크기가 0이다 — 보이게 되면 다시 그린다
+  if (window.IntersectionObserver) new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting)) draw(); }).observe(cv);
+  draw();
 }

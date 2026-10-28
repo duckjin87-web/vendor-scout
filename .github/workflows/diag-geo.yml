@@ -49,10 +49,11 @@ jobs:
               n(`[${nm}] geo: ${JSON.stringify(geo).slice(0, 900)}`);
               await page.click('#rtab-area').catch(() => {});
               await page.waitForTimeout(600);
-              for (const sel of ['.sg-zone', '.sg-addr', '.sg-scale-sec', '.at-sec.tk', '.sg-ov', '.at-unit']) {
+              for (const sel of ['.at-cat-area', '.at-cat-cmp', '.at-cat-place', '.at-cat-truck', '.at-cat-air']) {
                 const t = await page.$eval(sel, (e) => e.innerText.replace(/\n+/g, ' | ')).catch(() => null);
                 if (t) n(`[${nm}] ${sel}: ${t.slice(0, 700)}`);
               }
+              n(`[${nm}] 3D: ${await page.evaluate(() => { const c = document.querySelector('.s3-cv'); if (!c) return '없음'; const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) k++; return `${c.width}×${c.height} 칠한 픽셀 ${k}`; })}`);
               n(`[${nm}] 교차진단: ${await page.evaluate(() => JSON.stringify((currentReport.cross_diag && currentReport.cross_diag.items || []).map((x) => [x.label, x.status, String(x.detail).slice(0, 120)])))}`);
               if (errs.length) n(`[${nm}] 화면 오류: ${[...new Set(errs)].slice(0, 5).join(' | ')}`);
             } catch (e) { n(`[${nm}] 실행 실패 ${e.message}`); }

@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 214;
+const BUILD = 216;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3854,7 +3854,9 @@ function fieldRow(fld) {
   const stale = fld.fresh === false ? ' <span class="stale">⚠기간초과</span>' : '';
   // 설명은 예전에 title 툴팁이었다. 네 문장짜리 주석이 마우스만 올려도 화면을 덮었고,
   // 휴대폰에서는 아예 볼 방법이 없었다. 눌러서 펴는 방식으로 바꾼다.
-  const info = fld.note ? ` <button type="button" class="ninfo" aria-expanded="false" aria-label="설명 보기">ⓘ</button>` : '';
+  // 출처·기준일·설명은 「!」 안으로 — 화면에서는 값만 보이게 줄인다(인쇄에는 출처 열이 그대로 나간다)
+  const hasInfo = !!(fld.note || fld.source);
+  const info = hasInfo ? ` <button type="button" class="ninfo" aria-expanded="false" aria-label="출처·설명 보기">!</button>` : '';
   const valHtml = Array.isArray(fld.checklist)
     ? checklistHtml(fld.checklist) + info
     : pending ? '<span class="skel-v" aria-label="불러오는 중"></span>'
@@ -3865,8 +3867,9 @@ function fieldRow(fld) {
   src.innerHTML = esc(fld.source || '—') + (fld.as_of ? `<br><span class="asof">${esc(fld.as_of)}</span>` : '');
   row.appendChild(src);
 
-  if (fld.note && !pending) {
-    const nt = el('div', 'fnote', noteLines(fld.note).map((s) => `<p>${esc(s)}</p>`).join(''));
+  if (hasInfo && !pending) {
+    const srcLine = fld.source ? `<p class="fsrc">출처 <b>${esc(fld.source)}</b>${fld.as_of ? ` · 기준 ${esc(fld.as_of)}` : ''}</p>` : '';
+    const nt = el('div', 'fnote', srcLine + noteLines(fld.note).map((s) => `<p>${esc(s)}</p>`).join(''));
     nt.hidden = true;
     row.appendChild(nt);
     row.querySelector('.ninfo').addEventListener('click', (e) => {
@@ -6315,7 +6318,7 @@ function renderAreaTab(report) {
   const today = () => new Date().toISOString().slice(0, 10);
   const py = (m2) => toPy(m2 || 0).toLocaleString();
   const m2 = (v) => (v ? `${Math.round(v).toLocaleString()}㎡` : '—');
-  const ui = { editing: false, busy: '', err: '', siteArea: {}, rvSite: null };
+  const ui = { editing: false, busy: '', err: '', siteArea: {}, rvSite: null, src: new Set(), more: false };
 
   const headHtml = () => {
     if (ui.editing) {
@@ -6353,17 +6356,17 @@ function renderAreaTab(report) {
   const sumHtml = () => {
     if (!B) {
       const why = (M.bld && M.bld.err) || '공장 주소가 없어 건축물대장을 조회하지 못했습니다';
-      return `<div class="at-sec at-miss"><b>건축물대장에서 면적을 찾지 못했습니다</b><p>${esc(why)}</p>`
+      return `<div class="at-miss"><b>건축물대장에서 면적을 찾지 못했습니다</b><p>${esc(why)}</p>`
         + '<p>실제 공장의 <b>지번</b>을 알면 위 <b>주소 수정</b>으로 다시 조회하세요. 카카오맵에서 공장을 찍으면 지번이 나옵니다.</p>'
         + allSitesHtml() + '</div>';
     }
     const stat = (lab, v, sub) => `<div class="at-stat"><span>${lab}</span><b>${v ? `약 ${py(v)}평` : '—'}</b><small>${[v ? m2(v) : '', sub].filter(Boolean).join(' · ')}</small></div>`;
-    return unitHtml() + `<div class="at-sec"><h4>${B.unit ? '건물 전체 (참고)' : '합계'} <small>${parts.length > 1 ? `${parts.length}개 필지 합산 · ` : ''}국토부 건축물대장 (${esc(B.src || '표제부')})</small></h4><div class="at-stats">`
+    return unitHtml() + (B.unit ? '<h4 class="at-sub">건물 전체 <small>여러 회사가 함께 쓰는 건물 — 참고용</small></h4>' : '') + '<div class="at-stats">'
       + stat('건축면적 (건평)', B.arch, '바닥에 닿은 면적')
       + stat('연면적', B.tot, '모든 층 합계')
       + stat('대지면적', B.plat, '부지')
       + stat('공장 용도 건축면적', B.factoryArch, `공장 ${B.factoryCount || 0}동 / 전체 ${B.bldgCount || 0}동`)
-      + '</div></div>';
+      + '</div>';
   };
   // 오피스형 건물 입주 — 건물 전체 면적 위에 호실 면적과 경고를 먼저 보인다
   const unitHtml = () => {
@@ -6375,17 +6378,17 @@ function renderAreaTab(report) {
       + A.rows.map((r) => `<tr><td>${esc(r.ho)}<small>대장 ${esc(r.name)}${r.alt && r.alt.length ? ` · 같은 번호 다른 구역 ${esc(r.alt.join(', '))}` : ''}</small></td><td>${esc(r.flr)}</td><td>${esc(r.purpose)}</td><td class="n">${py(r.excl)}평<small>${m2(r.excl)}</small></td><td class="n">${py(r.excl + r.common)}평<small>${m2(r.excl + r.common)}</small></td></tr>`).join('')
       + (A.rows.length > 1 ? `<tr class="fac"><td colspan="3"><b>합계</b></td><td class="n"><b>${py(A.excl)}평</b><small>${m2(A.excl)}</small></td><td class="n">${py(A.excl + A.common)}평<small>${m2(A.excl + A.common)}</small></td></tr>` : '')
       + '</tbody></table></div>' : '';
-    return `<div class="at-sec at-unit"><h4>⚠ 오피스형 건물 입주 <small>주소에 호수가 적힌 사업장</small></h4>`
+    return `<div class="at-unit"><h4 class="at-sub">⚠ 오피스형 건물 입주</h4>`
       + `<p class="at-unit-lead">${where} 입주로 보입니다. 아래 「건물 전체」 면적은 여러 회사가 함께 쓰는 건물 값이라 <b>이 업체의 크기가 아닙니다</b>.`
       + `${A && A.excl ? ` 주소에 적힌 호실의 건축물대장 전유부 면적은 <b>전용 약 ${py(A.excl)}평</b> (${m2(A.excl)})입니다.` : ' 호실 전용면적은 건축물대장 전유부나 임대차계약서로 확인하세요.'}`
-      + `${A && A.missing && A.missing.length ? ` 대장에서 못 찾은 호실: ${esc(A.missing.join('·'))}호.` : ''}${A && A.err ? ` <small>(전유부 조회: ${esc(A.err)})</small>` : ''}</p>${rows}`
-      + '<p class="tk-note">창고 임차·추가 호실·공용 하역장 사용 여부는 방문 때 확인하세요.</p></div>';
+      + `${A && A.missing && A.missing.length ? ` 대장에서 못 찾은 호실: ${esc(A.missing.join('·'))}호.` : ''}${A && A.err ? ` <small>(전유부 조회: ${esc(A.err)})</small>` : ''}`
+      + ' 창고 임차·추가 호실·공용 하역장 사용 여부는 방문 때 확인하세요.</p>' + rows + '</div>';
   };
   // 화물차 입차 예상 — 대지면적에서 건축면적(건평)을 뺀 마당 넓이로만 대략 가늠한다
-  const truckHtml = () => {
-    if (!B) return '';
+  const truckPart = () => {
+    if (!B) return null;
     const T = truckAccess(B.plat, B.arch, B.collective || !!B.unit || parts.some((p) => p.collective));
-    if (!T) return '';
+    if (!T) return null;
     const ST = { ok: '여유', tight: '빠듯', hard: '어려움' };
     // 브이월드 보강 — 접한 도로 폭과 마당에 들어가는 회차 원으로 판정을 한 번 더 깎는다
     const E = !T.collective && typeof sgTruckExtra === 'function' ? sgTruckExtra(report) : null;
@@ -6410,14 +6413,23 @@ function renderAreaTab(report) {
     const rows = T.collective ? '' : '<div class="tk-list">'
       + T.rows.map((r) => `<div class="tk-row ${r.st}"${WHY[r.name] || WHY[r.st] ? ` title="${esc(WHY[r.name] || WHY[r.st])}"` : ''}><b>${esc(r.name)}</b><span>${esc(r.len)}</span><em>(${esc(r.plt)})</em>`
         + `<small><i>필요 마당 </i>${m2(r.need)}</small><span class="tk-st ${r.st}">${ST[r.st]}</span></div>`).join('')
-      + '</div><p class="tk-note">PLT: 표준 팔레트(1.1m × 1.1m) 한 단 기준 대략치 — 적재함 폭·윙바디 여부에 따라 달라집니다.</p>';
-    return `<div class="at-sec tk"><h4>화물차 입차 예상 <small>대지면적 − 건축면적 기준 대략치${E ? ' · 브이월드 도로·부지 모양 반영' : ''}</small></h4>${lead}${extra}${rows}`
-      + '<p class="tk-note">실제 입차는 진입 도로 폭(6m 미만이면 11톤 이상 곤란)·정문 폭과 높이·경사·주차 차량에 따라 달라집니다. 방문 때 정문과 하역장 위치를 함께 확인하세요.</p></div>';
+      + '</div>';
+    const src = [
+      '마당 = 대지면적 − 건축면적(국토부 건축물대장). 그중 60%만 차가 쓴다고 봤습니다(주차·조경·통로 제외)',
+      '필요 마당은 정차·하역·회차 공간을 차 길이와 회전반경으로 어림한 경험치입니다',
+      E ? '접한 도로 폭: 브이월드 토지이용계획의 도시계획도로 · 회차 원: 부지 경계에서 건물 윤곽을 뺀 빈 땅에 들어가는 가장 큰 원' : '',
+      'PLT: 표준 팔레트(1.1m × 1.1m) 한 단 기준 대략치 — 적재함 폭·윙바디 여부에 따라 달라집니다',
+      '실제 입차는 진입 도로 폭·정문 폭과 높이·경사·주차 차량에 따라 달라집니다 — 방문 때 정문과 하역장 위치를 함께 확인하세요',
+      '줄에 마우스를 올리면 빠듯·어려움의 사유가 보입니다',
+    ].filter(Boolean);
+    const badge = T.collective ? '<span class="sg-chip info">공용 하역장</span>'
+      : `<span class="sg-chip ${T.max ? 'ok' : 'bad'}">${T.max ? `${esc(T.max)}까지` : '마당 정차 어려움'}</span>`;
+    return { html: `${lead}${extra}${rows}`, src, badge };
   };
   const lotsHtml = () => {
     if (!B) return '';
     const failed = (M.bld.failedLots || []);
-    return `<div class="at-sec"><h4>필지별 내역 <small>공장이 여러 필지에 걸쳐 있으면 필지를 추가해 합산하세요</small></h4>`
+    return '<h4 class="at-sub">필지별 내역 <small>공장이 여러 필지에 걸쳐 있으면 필지를 추가해 합산하세요</small></h4>'
       + '<div class="at-tw"><table class="at-tbl"><thead><tr><th>필지 (대장 지번)</th><th>조회 주소</th><th>연결</th><th class="n">건축면적</th><th class="n">연면적</th><th class="n">동수</th><th></th></tr></thead><tbody>'
       + parts.map((p, i) => `<tr><td>${esc(p.jibun)}${p.key ? `<small class="at-key">키 ${esc(p.key)}</small>` : ''}</td><td>${esc(p.queried || '')}</td>`
         + `<td>${esc(BLD_HOW[p.matchedBy] || '지번 일치')}${p.matchedBy && p.matchedBy !== 'lot' ? `<small>대표지번 ${esc(p.keyJibun || '')}엔 대장 없음</small>` : ''}</td>`
@@ -6429,7 +6441,7 @@ function renderAreaTab(report) {
       + `<form class="ac-form" data-at="lot"><label for="atLotIn">필지 추가</label><div class="ac-frow">`
       + `<input id="atLotIn" class="ac-in" type="text" placeholder="같은 공장의 다른 필지 — 예: 충청남도 아산시 둔포면 신남리 731-26" autocomplete="off">`
       + `<button type="submit" class="nb-btn"${ui.busy ? ' disabled' : ''}>${ui.busy === 'lot' ? '조회 중…' : '추가해 합산'}</button></div>`
-      + (ui.lotErr ? `<div class="nb-oerr" role="alert">${esc(ui.lotErr)}</div>` : '') + '</form></div>';
+      + (ui.lotErr ? `<div class="nb-oerr" role="alert">${esc(ui.lotErr)}</div>` : '') + '</form>';
   };
   // 식약처(의약품안전나라)에 제조소가 여러 곳 등록돼 있으면 한 번에 모두 더할 수 있게 — 아직 안 더한 곳만 센다
   const mfdsSites = (M.mfds_sites || []).map((x) => x.addr).filter(isFullAddr);
@@ -6464,7 +6476,7 @@ function renderAreaTab(report) {
     }).join('');
     const tot = sitesAll.reduce((t, x) => t + ((ui.siteArea[x.addr] && ui.siteArea[x.addr].arch) || 0), 0);
     const done = sitesAll.every((x) => ui.siteArea[x.addr]);
-    return `<div class="at-sec at-sites" id="atSites"><h4>제조소별 <small>화장품 제조업 허가 제조소 ${sitesAll.length}곳 · 의약품안전나라 등록 순서</small></h4><ul>${rows}</ul>`
+    return `<div class="at-sites" id="atSites"><h4 class="at-sub">제조소별 <small>화장품 제조업 허가 제조소 ${sitesAll.length}곳 · 의약품안전나라 등록 순서</small></h4><ul>${rows}</ul>`
       + (done && tot ? `<div class="at-sites-f">제조소 ${sitesAll.length}곳 건축면적 합계 <b>약 ${py(tot)}평</b> (${m2(tot)}) — 아래 「합계」는 지금 고른 주소 기준입니다</div>` : '')
       + '</div>';
   };
@@ -6483,7 +6495,7 @@ function renderAreaTab(report) {
     if (!rows.length) return '';
     const d8 = (s) => (/^\d{8}$/.test(s || '') ? s.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') : '—');
     const multi = parts.length > 1;
-    return `<div class="at-sec"><h4>동별 건축물대장 <small>표제부 ${rows.length}동${B.bldgCount > rows.length ? ` (전체 ${B.bldgCount}동 중)` : ''}</small></h4>`
+    return `<h4 class="at-sub">동별 건축물대장 <small>표제부 ${rows.length}동${B.bldgCount > rows.length ? ` (전체 ${B.bldgCount}동 중)` : ''}</small></h4>`
       + `<div class="at-tw"><table class="at-tbl"><thead><tr>${multi ? '<th>필지</th>' : ''}<th>건물·동</th><th>주용도</th><th class="n">건축면적</th><th class="n">연면적</th><th class="n">층수</th><th>사용승인</th><th>구조</th></tr></thead><tbody>`
       + rows.map((x) => {
         const fac = /공장|제조/.test(`${x.purpose} ${x.etc || ''}`);
@@ -6491,30 +6503,67 @@ function renderAreaTab(report) {
           + `<td>${esc(x.purpose || '—')}${x.etc && x.etc !== x.purpose ? `<small>${esc(x.etc)}</small>` : ''}</td>`
           + `<td class="n">${x.arch ? `${py(x.arch)}평<small>${m2(x.arch)}</small>` : '—'}</td><td class="n">${x.tot ? `${py(x.tot)}평<small>${m2(x.tot)}</small>` : '—'}</td>`
           + `<td class="n">${x.floors ? `지상 ${x.floors}` : '—'}${x.under ? `<small>지하 ${x.under}</small>` : ''}</td><td>${d8(x.apr)}</td><td>${esc(x.strct || '—')}</td></tr>`;
-      }).join('') + '</tbody></table></div></div>';
+      }).join('') + '</tbody></table></div>';
   };
-  const noteHtml = () => {
+  // 눈에 띄어야 하는 경고는 본문에, 나머지 설명은 「!」 안으로
+  const warnHtml = () => {
     if (!B) return '';
     const n = [];
-    if (B.collective || B.unit) n.push('⚠ 집합건물(지식산업센터 등)입니다 — 표의 면적은 건물 전체이고 업체가 쓰는 호실은 훨씬 작습니다. 전용면적을 따로 물어보세요.');
-    if (!B.factoryCount) n.push(`대장상 '공장' 용도 건물이 없습니다(용도: ${esc((B.purposes || []).join('·') || '미상')}). 창고·근린생활시설을 공장으로 쓰는지 방문 시 확인하세요.`);
-    if (parts.some((p) => p.matchedBy && p.matchedBy !== 'lot')) n.push('도로명주소의 대표지번에는 대장이 없어 같은 본번의 다른 필지로 연결했습니다. 표의 필지가 실제 공장 건물인지 카카오맵 로드뷰로 한 번 대조하세요.');
-    n.push('대장 면적은 사용승인 당시 신고값입니다 — 무단 증축·가설 건물은 빠져 있을 수 있습니다.');
-    return `<div class="at-sec"><h4>주의할 점</h4><ul class="at-notes">${n.map((x) => `<li>${x}</li>`).join('')}</ul></div>`;
+    if (!B.factoryCount && !B.unit) n.push(`대장상 '공장' 용도 건물이 없습니다(용도: ${esc((B.purposes || []).join('·') || '미상')}). 창고·근린생활시설을 공장으로 쓰는지 방문 시 확인하세요.`);
+    if (parts.some((p) => p.matchedBy && p.matchedBy !== 'lot')) n.push('도로명주소의 대표지번에는 대장이 없어 같은 본번의 다른 필지로 연결했습니다. 표의 필지가 실제 공장 건물인지 로드뷰로 한 번 대조하세요.');
+    return n.length ? `<ul class="at-warns">${n.map((x) => `<li>${x}</li>`).join('')}</ul>` : '';
   };
+  const areaSrc = () => (B ? [
+    `국토부 건축물대장 ${esc(B.src || '표제부')} — ${esc(B.jibun || '')} 지번${parts.length > 1 ? ` 외 ${parts.length - 1}개 필지 합산` : ''} (조회 주소: ${esc(curAddr)})`,
+    B.unit ? '호실 면적: 건축물대장 전유부(호실별 전유·공용 면적)' : '',
+    (B.collective || B.unit) ? '집합건물(지식산업센터 등)은 표의 면적이 건물 전체입니다 — 업체가 쓰는 호실은 훨씬 작습니다' : '',
+    '대장 면적은 사용승인 당시 신고값입니다 — 무단 증축·가설 건물은 빠져 있을 수 있습니다',
+    '시설 연식·규모 구간: 동별 사용승인일과 연면적으로 판단했습니다(20,000㎡ 이상 대형 · 5,000 이상 중형 · 1,000 이상 중소형)',
+    '공장이 여러 필지에 걸쳐 있으면 「필지·동별 내역」에서 필지를 추가해 합산하세요',
+  ].filter(Boolean) : []);
 
+  // 카테고리 카드 — 제목 · 한눈 배지 · 「!」(출처·설명은 눌러야 보인다) · 본문
+  const cat = (id, title, part) => {
+    if (!part || !part.html) return '';
+    const src = part.src || [], open = ui.src.has(id);
+    return `<section class="at-cat at-cat-${id}" data-cat="${id}"><div class="at-cath"><h3>${title}</h3>${part.badge || ''}`
+      + (src.length ? `<button type="button" class="at-i" data-src="${id}" aria-expanded="${open}" aria-label="${title} 출처·설명 보기">!</button>` : '') + '</div>'
+      + (src.length ? `<div class="at-srcbox"${open ? '' : ' hidden'}><b>출처 · 설명</b><ul>${src.map((x) => `<li>${x}</li>`).join('')}</ul></div>` : '')
+      + `<div class="at-catb">${part.html}</div></section>`;
+  };
   const paint = () => {
-    const sg = typeof sgSectionsHtml === 'function';
-    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>${sitesHtml()}${sumHtml()}${sg ? sgScaleHtml(B) + sgSectionsHtml(report, B) : ''}${truckHtml()}`
-      + `${sg ? sgOverlayHtml(report, B) : ''}${lotsHtml()}${bldgHtml()}${airSecHtml(M)}${noteHtml()}`;
-    if (sg) sgBindOverlay(wrap);
+    const sg = typeof sgPlace === 'function';
+    const U = B && B.unit;
+    const areaBadge = !B ? '' : U ? (U.area && U.area.excl ? `<span class="sg-chip warn">호실 약 ${py(U.area.excl)}평</span>` : '<span class="sg-chip warn">호실 확인 필요</span>')
+      : `<span class="sg-chip info">건평 약 ${py(B.arch)}평</span>`;
+    const more = B ? `<details class="at-more"${ui.more ? ' open' : ''}><summary>필지·동별 내역 <small>${parts.length}개 필지 · ${(B.bldgs || []).length}동</small></summary>${lotsHtml()}${bldgHtml()}</details>` : '';
+    const area = { html: `${sitesHtml()}${sumHtml()}${warnHtml()}${sg ? sgScaleBody(B) : ''}${more}`, src: areaSrc(), badge: areaBadge };
+    const s3 = sg && B ? sg3dHtml(report, B) : null;
+    const cmpPart = s3 ? { html: s3.html, src: s3.src, badge: s3.badge } : { html: '<div data-slot="cmp"></div>', src: ['건물 윤곽(브이월드)을 아직 받지 못해 건축물대장 면적으로 비교합니다'] };
+    const place = sg ? sgPlace(report, B) : null;
+    const placePart = { html: `${place ? place.html : ''}<div data-slot="rv"></div>`, src: place ? place.src : [], badge: place ? place.badge : '' };
+    const tk = truckPart();
+    // 대기배출 — 제목줄의 출처는 「!」 안으로
+    let air = airSecHtml(M), airSrc = [];
+    if (air) {
+      const m = air.match(/<h4>[^<]*<small>([\s\S]*?)<\/small><\/h4>/);
+      if (m) { airSrc = [m[1]]; air = air.replace(m[0], ''); }
+      air = air.replace(/^<div class="at-sec at-air">/, '<div class="at-air">');
+    }
+    wrap.innerHTML = `<div class="at-head">${headHtml()}</div>`
+      + cat('area', '면적 · 규모', area)
+      + cat('cmp', '3D 규모 비교', cmpPart)
+      + cat('place', '입지 · 부지', placePart)
+      + cat('truck', '물류 · 화물차 입차', tk)
+      + cat('air', '환경 · 대기배출', air ? { html: air, src: airSrc } : null);
     ui.painted = true;
-    const cmp = renderAreaCompare(report);
-    if (cmp) wrap.appendChild(cmp);
-    // 공장 규모 아래 로드뷰 — 주소가 같으면 이미 띄운 것을 그대로 옮겨 붙인다(다시 불러오지 않게)
+    if (s3) sgBind3d(wrap, s3.D, nm);
+    else { const slot = wrap.querySelector('[data-slot="cmp"]'); const cmp = renderAreaCompare(report); if (slot && cmp) slot.appendChild(cmp); }
+    // 로드뷰 — 주소가 같으면 이미 띄운 것을 그대로 옮겨 붙인다(다시 불러오지 않게)
     const rvA = ui.rvSite || curAddr;
     if (!ui.rv || ui.rvAddr !== rvA) { ui.rv = renderRoadview(rvA, nm); ui.rvAddr = rvA; }
-    wrap.appendChild(ui.rv);
+    const rvSlot = wrap.querySelector('[data-slot="rv"]');
+    (rvSlot || wrap).appendChild(ui.rv);
     if (ui.editing) { const i = wrap.querySelector('#atAddrIn'); if (i) { i.focus(); i.select(); } }
   };
   // 면적이 바뀌면 리포트의 면적·소재지 칸도 같은 값으로 고친 뒤 전부 다시 그린다(탭은 그대로 유지)
@@ -6547,8 +6596,19 @@ function renderAreaTab(report) {
     commit({ queried: addr, ...bld });
   };
 
-  wrap.addEventListener('toggle', (e) => { if (e.target.classList && e.target.classList.contains('at-cfold')) ui.candOpen = e.target.open; }, true);
+  wrap.addEventListener('toggle', (e) => {
+    if (e.target.classList && e.target.classList.contains('at-cfold')) ui.candOpen = e.target.open;
+    if (e.target.classList && e.target.classList.contains('at-more')) ui.more = e.target.open;
+  }, true);
   wrap.addEventListener('click', (e) => {
+    const sb = e.target.closest('[data-src]');
+    if (sb) {
+      const id = sb.dataset.src, box = sb.closest('.at-cat').querySelector('.at-srcbox');
+      if (ui.src.has(id)) ui.src.delete(id); else ui.src.add(id);
+      if (box) box.hidden = !ui.src.has(id);
+      sb.setAttribute('aria-expanded', String(ui.src.has(id)));
+      return;
+    }
     const b = e.target.closest('[data-act]'); if (!b || ui.busy) return;
     const act = b.dataset.act;
     if (act === 'at-edit') { ui.editing = true; ui.err = ''; paint(); }
