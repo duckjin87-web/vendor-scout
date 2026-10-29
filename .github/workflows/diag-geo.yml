@@ -46,6 +46,12 @@ jobs:
               await page.waitForFunction(() => currentReport && currentReport.meta && currentReport.meta.geo, null, { timeout: 60000 }).catch(() => {});
               await page.waitForTimeout(800);
               const geo = await page.evaluate(() => { const G = currentReport.meta.geo || {}; return { err: G.err, src: G.src, parcel: G.site && G.site.parcel && G.site.parcel.addr, uses: G.site && (G.site.uses || []).length, bldgs: G.site && (G.site.bldgs || []).length, ref: G.ref && (G.ref.bldgs || []).length, addrs: G.addrs }; });
+              n(`[${nm}] 재무: ${await page.evaluate(() => JSON.stringify((currentReport.finance || []).filter((f) => f.value).slice(0, 6).map((f) => [f.key, f.value, f.source])) + ' · 금융위: ' + JSON.stringify((currentReport.meta.src_status || []).filter((s) => /금융위/.test(s.name)).map((s) => [s.name, s.ok, s.detail])))}`);
+              n(`[${nm}] CGMP: ${await page.evaluate(() => { const c = (currentReport.capacity || []).find((x) => x.key === 'CGMP 적합업소'); return JSON.stringify([c && c.value, c && String(c.note).slice(0, 160), (currentReport.meta.cgmp_news || []).map((x) => x.date + ' ' + x.title.slice(0, 40))]); })}`);
+              n(`[${nm}] 채용: ${await page.evaluate(() => { const h = currentReport.hiring || {}; return JSON.stringify({ posts: (h.posts || []).length, affil: h.affil, prof: (h.extProfile || []).map((r) => r.key + '=' + r.value), terms: h.terms }); })}`);
+              n(`[${nm}] 대표·인력: ${await page.evaluate(() => { const r = (currentReport.basic || []).find((x) => x.key === '대표자'); const W = currentReport.meta.workforce; return JSON.stringify({ rep: r && [r.value, r.source], all: W && W.allR, mfg: W && W.mfgR, nps: W && W.nps }); })}`);
+              n(`[${nm}] 위성: ${await page.evaluate(async () => { const r = await fetch(buildProxyUrl({ service: 'vwTile', z: '18', x: '223606', y: '101524' })); return r.status + ' ' + r.headers.get('content-type'); })}`);
+              n(`[${nm}] 채용 페이지: ${await page.evaluate(() => JSON.stringify(((currentReport.hiring || {}).extDiag || []).map((d) => [d.host, d.kind, d.ok, d.found || d.why]).slice(0, 14)))}`);
               n(`[${nm}] geo: ${JSON.stringify(geo).slice(0, 900)}`);
               await page.click('#rtab-area').catch(() => {});
               await page.waitForTimeout(600);
@@ -57,11 +63,6 @@ jobs:
               await page.click('[data-s3view="box"]').catch(() => {});
               await page.waitForTimeout(3000);
               n(`[${nm}] 육면체: ${await page.$eval('.at-cat-cmp [data-view="box"]', (e) => (e.hidden ? '(숨김) ' : '') + e.innerText.replace(/\n+/g, ' | ').slice(0, 600)).catch(() => '없음')}`);
-              n(`[${nm}] 재무: ${await page.evaluate(() => JSON.stringify((currentReport.finance || []).filter((f) => f.value).slice(0, 6).map((f) => [f.key, f.value, f.source])) + ' · 금융위: ' + JSON.stringify((currentReport.meta.src_status || []).filter((s) => /금융위/.test(s.name)).map((s) => [s.name, s.ok, s.detail])))}`);
-              n(`[${nm}] CGMP: ${await page.evaluate(() => { const c = (currentReport.capacity || []).find((x) => x.key === 'CGMP 적합업소'); return JSON.stringify([c && c.value, c && String(c.note).slice(0, 160), (currentReport.meta.cgmp_news || []).map((x) => x.date + ' ' + x.title.slice(0, 40))]); })}`);
-              n(`[${nm}] 채용: ${await page.evaluate(() => { const h = currentReport.hiring || {}; return JSON.stringify({ posts: (h.posts || []).length, affil: h.affil, prof: (h.extProfile || []).map((r) => r.key + '=' + r.value), terms: h.terms }); })}`);
-              n(`[${nm}] 대표·인력: ${await page.evaluate(() => { const r = (currentReport.basic || []).find((x) => x.key === '대표자'); const W = currentReport.meta.workforce; return JSON.stringify({ rep: r && [r.value, r.source], all: W && W.allR, mfg: W && W.mfgR, nps: W && W.nps }); })}`);
-              n(`[${nm}] 위성: ${await page.evaluate(async () => { const r = await fetch(buildProxyUrl({ service: 'vwTile', z: '18', x: '223606', y: '101524' })); return r.status + ' ' + r.headers.get('content-type'); })}`);
               n(`[${nm}] 교차진단: ${await page.evaluate(() => JSON.stringify((currentReport.cross_diag && currentReport.cross_diag.items || []).map((x) => [x.label, x.status, String(x.detail).slice(0, 120)])))}`);
               if (errs.length) n(`[${nm}] 화면 오류: ${[...new Set(errs)].slice(0, 5).join(' | ')}`);
             } catch (e) { n(`[${nm}] 실행 실패 ${e.message}`); }
