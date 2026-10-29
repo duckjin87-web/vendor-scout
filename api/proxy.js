@@ -213,16 +213,33 @@ async function handleFetchPage(url) {
     return jsonRes({ error: '페이지 호출 실패', detail: String(e && e.message || e) }, 502);
   }
   clearTimeout(timer);
-  const buf = await up.arrayBuffer().catch(() => null);
+  // 통째로 읽기(arrayBuffer)가 실패하는 사이트가 있다(인크루트 — 응답 스트림이 끝에서 끊긴다).
+  // 조각씩 읽고, 중간에 끊겨도 받은 만큼은 쓴다. 600KB까지만.
+  let buf = null, readErr = '';
+  try {
+    const rd = up.body && up.body.getReader();
+    if (rd) {
+      const parts = []; let n = 0;
+      for (;;) {
+        let r;
+        try { r = await rd.read(); } catch (e) { readErr = String(e && e.message || e); break; }
+        if (r.done) break;
+        parts.push(r.value); n += r.value.byteLength;
+        if (n > 600000) { try { rd.cancel(); } catch { /* 무시 */ } break; }
+      }
+      const all = new Uint8Array(n); let o = 0; parts.forEach((p2) => { all.set(p2, o); o += p2.byteLength; });
+      buf = all.buffer;
+    } else buf = await up.arrayBuffer();
+  } catch (e) { readErr = readErr || String(e && e.message || e); }
   // 문자셋을 따른다 — 인크루트·옛 기업 페이지는 EUC-KR이라 UTF-8로 풀면 글자가 깨졌다
   let cs = ((up.headers.get('content-type') || '').match(/charset=([\w-]+)/i) || [])[1] || '';
-  if (!cs && buf) cs = (new TextDecoder('latin1').decode(buf.slice(0, 4000)).match(/charset=["']?([\w-]+)/i) || [])[1] || '';
+  if (!cs && buf) cs = (new TextDecoder('latin1').decode(new Uint8Array(buf).slice(0, 4000)).match(/charset=["']?([\w-]+)/i) || [])[1] || '';
   cs = /euc-?kr|ks_c_5601|cp949|ms949/i.test(cs) ? 'euc-kr' : 'utf-8';
   let text = '';
   if (buf) { try { text = new TextDecoder(cs, { fatal: false }).decode(buf); } catch { text = new TextDecoder('utf-8', { fatal: false }).decode(buf); } }
   text = text.slice(0, 400000);
   // 진단용 — 빈 본문이 오면 받은 바이트·머리글을 함께 본다
-  if (url.searchParams.get('dbg')) return jsonRes({ status: up.status, url: up.url, bytes: buf ? buf.byteLength : null, cs, ct: up.headers.get('content-type'), ce: up.headers.get('content-encoding'), len: text.length, head: text.slice(0, 300) });
+  if (url.searchParams.get('dbg')) return jsonRes({ status: up.status, url: up.url, bytes: buf ? buf.byteLength : null, readErr, cs, ct: up.headers.get('content-type'), ce: up.headers.get('content-encoding'), len: text.length, head: text.slice(0, 300) });
   return jsonRes({ status: up.status, url: up.url, text });
 }
 
