@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 220;
+const BUILD = 222;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2955,6 +2955,20 @@ function financeSections(t) {
   }
   return spans;
 }
+// 인크루트 기업 본문의 재무현황 그래프 — <div id="sale_amt" data-categories="2021, 2022, 2025" data-series_data="2468, 2161, 2989">
+// (단위 백만원). 글자로 바꾸면 속성이 지워져 숫자를 통째로 놓쳤다. HTML에서 바로 읽는다.
+const INCRUIT_FIN = { sale_amt: '매출액', profit: '당기순이익', capital: '자본총계', op_profit: '영업이익', asset: '자산총계' };
+function extFinanceChartHtml(html, host, link) {
+  const out = [];
+  for (const m of String(html || '').matchAll(/id=["']([a-z_]+)["'][^>]*?data-categories=["']([^"']+)["'][^>]*?data-series_data=["']([^"']+)["']/gi)) {
+    const key = INCRUIT_FIN[m[1]];
+    if (!key) continue;
+    const ys = m[2].split(',').map((x) => Number(x.trim()));
+    const vs = m[3].split(',').map((x) => Number(String(x).replace(/[^\d.-]/g, '')));
+    ys.forEach((y, i) => { if (y >= 2005 && y <= new Date().getFullYear() && isFinite(vs[i])) out.push({ key, eok: Math.round((vs[i] / 100) * 10) / 10, years: [y], host, link }); });
+  }
+  return out;
+}
 function extFinance(text, host, link) {
   // 사람인 재무 탭은 항목마다 '○○ Information <설명문> 닫기' 툴팁을 본문에 그대로 깔아 둔다.
   // 그 설명문에 다른 항목 이름이 섞여 있어(영업이익 설명에 '매출총액', 당기순이익 설명에
@@ -3134,8 +3148,9 @@ function financeTabUrls(link) {
   if ((m = u.match(/catch\.co\.kr\/Comp\/[A-Za-z]+\/(\d+)/i))) {
     out.push(`https://www.catch.co.kr/Comp/CompFinance/${m[1]}`);
   }
-  if ((m = u.match(/incruit\.com\/company\/(\d+)/i))) {
-    out.push(`https://www.incruit.com/company/${m[1]}/finance`);
+  // 인크루트 재무현황은 기업 본문(/companies/번호)에 그래프 데이터로 들어 있다 — '/finance' 주소는 빈 페이지였다
+  if ((m = u.match(/incruit\.com\/compan(?:y|ies)\/(\d+)/i))) {
+    out.push(`https://www.incruit.com/companies/${m[1]}`);
   }
   return out;
 }
@@ -3288,7 +3303,7 @@ async function hiringTrace(nm) {
       const hc = hireHeadcount(txt);
       if (hc) { heads.push({ ...hc, host: pg.host, link: pg.link, from: 'page' }); found.push('사원수'); }
     }
-    const fin = extFinance(txt, pg.host, pg.link);
+    const fin = [...extFinance(txt, pg.host, pg.link), ...extFinanceChartHtml(pg.text, pg.host, pg.link)];
     if (fin.length) { extFin.push(...fin); found.push(`재무 ${fin.length}`); }
     const prof = extProfile(txt, pg.host, pg.link, pg.kind === 'finance' ? 'company' : pg.kind);
     if (prof.length) { extProf.push(...prof); found.push(`정보 ${prof.length}`); }
@@ -3973,28 +3988,7 @@ function workforceBlock(report) {
   let h = `<h3>인력 · 사업장 구성<span class="cnt">고용·산재보험 + 국민연금${hasSites ? ` · 보험 사업장 ${W.sites.length}곳` : ''}${bz ? ` · ${esc(bz)}` : ''}</span></h3>`;
   h += '<div class="wf-in">';
 
-  // ── ① 요약 한 줄 — 방문해서 만날 인원이 몇 명인지 ──
-  // 숫자를 하나로 못 박지 않는다. 산재 상시와 국민연금 가입자는 세는 사람이 달라 어느 쪽이든 더 클 수 있다.
-  if (hasSites) {
-    const R = W.mfgSiteN ? W.mfgR : W.allR;
-    const lab = W.mfgSiteN ? `제조소 추정 근무 인원 <small>제조소 ${W.mfgSiteN}곳</small>` : '추정 근무 인원 <small>제조 사업장 미확인 — 회사 전체</small>';
-    const why = R.one
-      ? (W.npsSplit ? '산재 상시와 국민연금 가입자가 같습니다' : '산재보험 상시근로자 기준 — 국민연금은 사업장 미분류')
-      : `산재 상시 ${n(W.mfgSiteN ? W.mfg : W.total)}명 ↔ 국민연금 가입자 ${n(W.mfgSiteN ? (W.mfgR.lo === W.mfg ? W.mfgR.hi : W.mfgR.lo) : MP.nps)}명 — 작은 쪽~큰 쪽`;
-    // 숫자 두 개를 한 막대에 — 제조소가 회사의 몇 할인지, 추정 폭이 얼마나 넓은지가 함께 보인다
-    const top = Math.max(W.allR.hi, R.hi, 1);
-    const scale = top <= 10 ? 10 : Math.ceil((top * 1.15) / 10) * 10;
-    const pct = (v) => `${Math.min(100, (v / scale) * 100).toFixed(1)}%`;
-    const bar = `<div class="wf-bar" role="img" aria-label="제조소 ${rng(R)}, 회사 전체 ${rng(W.allR)}, 눈금 0~${scale}명">`
-      + `<i class="wb-m" style="width:${pct(R.lo)}"></i>`
-      + (R.one ? '' : `<i class="wb-mr" style="left:${pct(R.lo)};width:${pct(R.hi - R.lo)}"></i>`)
-      + (W.mfgSiteN && W.total !== W.mfg ? `<i class="wb-a" style="left:${pct(W.allR.lo)};width:${pct(Math.max(W.allR.hi - W.allR.lo, scale * 0.012))}"></i>` : '')
-      + `</div><div class="wf-scale"><span>0</span><span>${scale}명</span></div>`;
-    h += `<div class="wf-lead"><div class="wf-lead-m"><i>${lab}</i><b>${cuWrap(rng(R))}</b><span>${esc(why)}</span></div>`
-      + (W.mfgSiteN && W.total !== W.mfg ? `<div class="wf-lead-s"><i>회사 전체</i><b>${rng(W.allR)}</b><span>보험 사업장 ${W.sites.length}곳 합계</span></div>` : '')
-      + `<div class="wf-lead-bar">${bar}<div class="wf-key"><span><i class="wb-m"></i>제조소</span>${W.mfgSiteN && W.total !== W.mfg ? '<span><i class="wb-a"></i>회사 전체(폭)</span>' : ''}</div></div>`
-      + '</div>';
-  }
+  // ── ① 요약 막대는 뺐다 — 아래 표의 '추정 근무'와 같은 숫자를 한 번 더 그릴 뿐이었다 ──
 
   // ── ② 사업장별 표 ──
   if (hasSites) {
@@ -4074,12 +4068,14 @@ function workforceBlock(report) {
     refs.push(`<div class="wf-ref"><i>공장등록 신고</i><span><b>${n(MP.fctEmpl)}명</b>${MP.fctRegDe ? ` (${esc(MP.fctRegDe)} 등록)` : ''}`
       + `<em>산단공 공장등록증 신고값 — 등록·변경 시점의 스냅샷입니다${age != null && age >= 3 ? `. ${age}년 전 값이라 현재와 다를 수 있습니다` : ''}</em></span></div>`);
   }
+  // 근거 자료(월별 추이·채용사이트 표기·공장등록 신고·산출 설명)는 접어 둔다 — 필요할 때 펼친다
+  h += `<details class="wf-more"><summary>근거 자료 보기 <small>${refs.length ? `참고값 ${refs.length}건 · ` : ''}산출 기준</small></summary>`;
   if (refs.length) h += `<div class="wf-refs">${refs.join('')}</div>`;
 
   h += '<p class="xfoot"><b>추정 근무 인원</b>은 산재보험 상시근로자와 국민연금 가입자 중 작은 쪽~큰 쪽입니다. '
     + '<b>상시근로자</b>는 보험 신고 기준 월평균 근로자 수로 일용·단시간을 포함하고 대표·임원은 빠집니다. '
     + '<b>국민연금 가입자</b>는 월 60시간 이상 일하는 가입자로 대표·임원을 포함하고 단기 일용은 빠집니다 — 그래서 어느 쪽이든 더 클 수 있어 하나로 못 박지 않습니다. '
-    + '사업장 역할은 보험 업종과 제조소 주소로 자동 분류합니다.</p>';
+    + '사업장 역할은 보험 업종과 제조소 주소로 자동 분류합니다.</p></details>';
   h += '</div>';
   b.innerHTML = h;
   return b;
@@ -5141,7 +5137,9 @@ function timelineSvg(ev, w0 = 640) {
   const gs = groups.slice(-MAXG);
   const n = gs.length, STEP = 92, MAXL = 4;
   const padL = hidden ? 96 : 62, padR = 44;   // 첫·끝 가지 이름표가 잘리지 않을 만큼
-  const w = Math.max(w0, padL + padR + (n - 1) * STEP + 20);
+  // 사건이 몇 개 안 되면 화면 폭까지 늘리지 않는다 — 글자가 크게 부풀고 칸만 차지했다
+  const compact = n <= 4;
+  const w = compact ? padL + padR + (n - 1) * 150 + 20 : Math.max(w0, padL + padR + (n - 1) * STEP + 20);
   const step = n > 1 ? (w - padL - padR) / (n - 1) : 0;
   const lines = Math.min(MAXL + 1, Math.max(...gs.map((g) => g.items.length)));
   const BONE = 30, LH = 13;
@@ -5149,7 +5147,7 @@ function timelineSvg(ev, w0 = 640) {
   const H = half * 2 + 4, base = half + 2;
   const cut = (t) => (t.length > 9 ? `${t.slice(0, 8)}…` : t);
   // 좁은 화면에서 글자가 깨알처럼 줄지 않게 최소 폭을 둔다(넘치면 칸 안에서 가로로 민다)
-  let g = `<svg class="bt-svg bt-fish" viewBox="0 0 ${w} ${H}" style="min-width:${Math.round(w * 0.78)}px" role="img" aria-label="${esc(ev.map((e) => `${e.d} ${e.label}`).join(', '))}">`;
+  let g = `<svg class="bt-svg bt-fish" viewBox="0 0 ${w} ${H}" style="min-width:${Math.round(w * 0.78)}px${compact ? `;max-width:${Math.round(w * 1.05)}px` : ''}" role="img" aria-label="${esc(ev.map((e) => `${e.d} ${e.label}`).join(', '))}">`;
   // 등뼈와 머리(오른쪽 = 지금)
   g += `<line x1="${padL - 14}" y1="${base}" x2="${w - padR + 22}" y2="${base}" class="bt-axis"/>`;
   g += `<path d="M${w - padR + 30} ${base} l-11 -6 v12 z" class="bt-head"/>`;
@@ -5379,17 +5377,19 @@ function renderVerdict(report) {
   const region = (addr.match(/^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[가-힣]*\s*[가-힣]*시?군?/) || [])[0] || '';
 
   const box = el('div', 'verdict v-' + v.tone);
+  // 머리: [왼쪽 고정 칸 = 판정 게이지 + 판정 문구] [오른쪽 = 업체명·저장 / 업종 / 조회 근거 / 연락처]
+  // 예전엔 판정 문구가 따로 떠 있다가 좁은 화면에서 게이지 밑으로 내려가 조회 근거 줄을 덮었다.
   let html = `<div class="vd-head">`
-    + `<button type="button" class="vd-badge vd-gz badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기">${gaugeSvg(g)}<b>${g === 'D' ? '불가' : esc(g)}</b><span>종합판정 ⓘ</span></button>`
-    + `<div class="vd-title"><h2>${esc(m.vendor_name || '')}</h2>`
-    + `<div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div>`
+    + `<div class="vd-left"><button type="button" class="vd-badge vd-gz badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기">${gaugeSvg(g)}<b>${g === 'D' ? '불가' : esc(g)}</b><span>종합판정 ⓘ</span></button>`
+    + `<div class="vd-verd">${esc(v.label)}<small class="vd-qwhy">${esc(Q.why)}</small>`
+    + (Q.toA && Q.toA.length && g !== 'D' ? `<small class="vd-toa">A까지 <b>${esc(Q.toA.slice(0, 3).join(' · '))}</b></small>` : '')
+    + `</div></div>`
+    + `<div class="vd-title"><div class="vd-h2row"><h2>${esc(m.vendor_name || '')}</h2>`
+    + (m.live ? `<button type="button" class="sv-btn" data-act="save-firm" data-sv-key="${esc(svKey(m.vendor_name || ''))}" data-sv-kind="report">☆ 저장</button>` : '')
+    + `</div><div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div>`
     + lookupBasisHtml(m, bv)
     + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
-    + `<div class="vd-side"><div class="vd-verd">${esc(v.label)}<small class="vd-qwhy">${esc(Q.why)}</small>`
-    + (Q.toA && Q.toA.length && g !== 'D' ? `<small class="vd-toa">A까지 <b>${esc(Q.toA.slice(0, 3).join(' · '))}</b></small>` : '')
-    + `</div>`
-    + (m.live ? `<button type="button" class="sv-btn" data-act="save-firm" data-sv-key="${esc(svKey(m.vendor_name || ''))}" data-sv-kind="report">☆ 저장</button>` : '')
-    + '</div></div>';
+    + '</div>';
   // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
   if (ups.length || downs.length) {
     html += `<div class="vd-why">`
@@ -5489,12 +5489,15 @@ function renderVerdict(report) {
         + `<button type="button" class="nb-btn sm" data-act="site-area" data-addr="${esc(x.addr)}">면적·로드뷰</button></span></li>`).join('')
       + '</ol></div>';
   }
-  html += `<div class="vd-foot">종합판정은 <b>공식 자료로 확인된 사실</b>(제조업 허가·영업 상태·CGMP·회수·재무)로 정합니다 — `
+  html += `<div class="vd-foot-wrap"><button type="button" class="at-i vd-foot-i" data-act="vd-foot" aria-expanded="false" aria-label="판정 기준 설명 보기">!</button><div class="vd-foot" hidden>종합판정은 <b>공식 자료로 확인된 사실</b>(제조업 허가·영업 상태·CGMP·회수·재무)로 정합니다 — `
     + `A는 CGMP 적합에 위험 신호가 없는 곳, C는 최근 회수·자본잠식 같은 중대 위험이 있는 곳입니다. `
     + `항목마다 붙는 점(●●● ~ ○○○)은 <b>그 값을 어디서 얻었고 얼마나 믿을 수 있는지</b>이고, 판정에는 쓰지 않습니다.`
     + (revF && revF.grade === 'C' ? ` <em>* 매출은 공시가 아닌 외부 기업정보 참고값입니다.</em>` : '')
-    + `</div>`;
+    + `</div></div>`;
   box.innerHTML = html;
+  // 판정 기준 설명은 「!」를 눌러야 보인다
+  const fi = box.querySelector('[data-act="vd-foot"]');
+  if (fi) fi.addEventListener('click', () => { const f = box.querySelector('.vd-foot'); f.hidden = !f.hidden; fi.setAttribute('aria-expanded', String(!f.hidden)); });
   box.querySelector('[data-act="verdict-why"]').addEventListener('click', () => openVerdictWhy(report));
   const sitesBtn = box.querySelector('[data-act="mk-sites"]');
   if (sitesBtn) {
@@ -6630,10 +6633,12 @@ function renderAreaTab(report) {
       if (m) { airSrc = [m[1]]; air = air.replace(m[0], ''); }
       air = air.replace(/^<div class="at-sec at-air">/, '<div class="at-air">');
     }
+    // 면적과 입지·부지는 한 카드로 — 건물 칸 아래에 용도지역·도로·공시가·증설 여력과 주소 대조를 잇는다
+    const areaPlace = { html: area.html + `<h4 class="at-sub">입지 · 부지</h4>${placePart.html}`,
+      src: [...area.src, ...placePart.src], badge: `${area.badge || ''}${placePart.badge || ''}` };
     wrap.innerHTML = `<div class="at-head">${headHtml()}</div>`
-      + cat('area', '면적 · 규모', area)
+      + cat('area', '면적 · 입지', areaPlace)
       + cat('cmp', '3D 규모 비교', cmpPart)
-      + cat('place', '입지 · 부지', placePart)
       + cat('truck', '물류 · 화물차 입차', tk)
       + cat('air', '환경 · 대기배출', air ? { html: air, src: airSrc } : null);
     ui.painted = true;
@@ -6863,7 +6868,6 @@ function render(report, opts = {}) {
   const shareBtn = el('button', 'act', '🔗 기본정보 공유');
   shareBtn.title = '업체 기본정보(대표·사업자번호·주소·제조업 허가 등)와 다시 조회 링크를 공유합니다';
   shareBtn.addEventListener('click', () => shareBasic(report, shareBtn));
-  actions.appendChild(el('span', 'act-hint', '방문 전 리포트로 저장 →'));
   // 🗺 카카오맵에서 공장 위치 보기 (제조소 주소 우선) — 별도 키 불필요, 새 탭에서 로드맵 표시
   const visitAddr = visitAddress(report);
   // 길찾기 목적지 — 실데이터 리포트는 meta.visit_addr(공장 실주소) 우선, 없으면 필드값

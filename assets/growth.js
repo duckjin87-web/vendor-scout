@@ -497,10 +497,58 @@ const mkState = { data: null, err: null, view: null, sido: null, npsOnly: false 
 const MK_VIEWS = [{ id: 'add', label: '이번 조회 추가' }, { id: 'd30', label: '최근 30일 허가', days: 30 }, { id: 'd90', label: '최근 90일', days: 90 }];
 const mkSido = (a) => grRegion(a).split(' ')[0] || '기타';
 const mkDay = (iso) => (iso ? iso.slice(5) : '—');
+// 「최신 자료 조회」 — 주간 집계를 기다리지 않고 식약처 명단 전체(공개 API ≈ 3.3만 건, 500건씩)를 지금 받아
+// 누적 명단(makers-ledger.json)에 없는 제조업체를 찾는다. GitHub 실행 권한(토큰) 없이 화면에서 바로 돈다.
+async function mkLiveScan(repaint) {
+  if (mkState.live && mkState.live.busy) return;
+  if (!getProxy()) { mkState.live = { err: '실데이터 연결(프록시)이 있어야 합니다' }; repaint(); return; }
+  const L = mkState.live = { busy: true, done: 0, pages: 0 };
+  repaint();
+  try {
+    const ledP = fetch(`data/growth/makers-ledger.json?v=${BUILD}-${Date.now()}`, { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null));
+    const take = (d) => listOf(d, ['body.items', 'response.body.items.item', 'items']).map((r) => (r && r.item && typeof r.item === 'object' ? r.item : r));
+    const first = await proxyOnlyGet('maker', { numOfRows: '500', pageNo: '1' });
+    const total = nbTotalCount(first) || 0;
+    L.pages = Math.max(1, Math.ceil(total / 500)); L.done = 1; repaint();
+    const all = take(first);
+    const rest = []; for (let p = 2; p <= L.pages; p++) rest.push(p);
+    let failed = 0;
+    const got = await mapLimit(rest, 4, async (p) => {
+      for (let k = 0; k < 2; k++) {
+        try { const g = take(await proxyOnlyGet('maker', { numOfRows: '500', pageNo: String(p) })); L.done++; if (L.done % 4 === 0) repaint(); return g; } catch { /* 한 번 더 */ }
+      }
+      failed++; L.done++; return [];
+    });
+    got.forEach((g) => all.push(...g));
+    const led = await ledP;
+    const firms = (led && led.firms) || {};
+    const known = new Set(Object.keys(firms));
+    const nk = (v) => String(v || '').replace(/\(주\)|㈜|주식회사|\s/g, '');
+    const d8 = (v) => String(v || '').replace(/\D/g, '').slice(0, 8);
+    const iso = (v) => (v.length === 8 ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6)}` : null);
+    const makers = all.filter((x) => x && /제조/.test(String(x.INDUTY || '')) && !/판매/.test(String(x.INDUTY || '')));
+    const idOf = (x) => String(x.ENTP_SEQ || '') || `${String(x.BIZRNO || '').replace(/\D/g, '')}|${nk(x.ENTP_NAME)}`;
+    const cur = new Set(makers.map(idOf));
+    const added = makers.filter((x) => !known.has(idOf(x)) || (firms[idOf(x)] && firms[idOf(x)].g))
+      .map((x) => ({ id: idOf(x), n: String(x.ENTP_NAME || '').trim(), a: String(x.FACTORY_ADDR || '').trim(), p: iso(d8(x.ENTP_PERMIT_DATE)), add: true, live: true }))
+      .sort((a, b) => String(b.p || '').localeCompare(String(a.p || '')));
+    // 빠짐은 명단을 거의 다 받았을 때만 센다 — 한 쪽이라도 못 받으면 그 쪽 업체가 전부 빠진 것처럼 보인다
+    const complete = !failed && all.length >= total * 0.98;
+    const removed = complete ? Object.entries(firms).filter(([id, r]) => !r.g && !cur.has(id)).length : null;
+    mkState.live = { at: new Date().toISOString(), added, removed, total, makers: makers.length, failed, ledgerAt: led && led.at };
+    if (added.length) mkState.view = 'add';
+  } catch (e) {
+    mkState.live = { err: e && e.message ? e.message : String(e) };
+  }
+  repaint();
+}
 function mkRows(st) {
   const d = st.data; if (!d) return [];
   const v = MK_VIEWS.find((x) => x.id === st.view) || MK_VIEWS[1];
   let rows = d.recent || [];
+  // 화면에서 방금 찾은 신규(아직 주간 집계 전)를 앞에 붙인다
+  const liveAdd = (st.live && st.live.added) || [];
+  if (liveAdd.length) { const ids = new Set(liveAdd.map((r) => r.id)); rows = [...liveAdd, ...rows.filter((r) => !ids.has(r.id))]; }
   if (v.id === 'add') rows = rows.filter((r) => r.add);
   else { const lim = new Date(Date.now() - v.days * 864e5).toISOString().slice(0, 10); rows = rows.filter((r) => r.p && r.p >= lim); }
   return rows;
@@ -520,11 +568,12 @@ function mkBars(monthly, w) {
 }
 function mkBadges(r) {
   return [
-    r.add ? '<span class="mk-b new">이번 조회 추가</span>' : '',
+    r.live ? '<span class="mk-b new" title="방금 식약처 명단 전체를 받아 누적 명단과 대조해 찾은 업체 — 번지 주소·국민연금은 다음 주간 집계 때 채워집니다">현시점 신규</span>'
+      : r.add ? '<span class="mk-b new">이번 조회 추가</span>' : '',
     r.gmp === true ? '<span class="mk-b ok" title="식약처 CGMP(우수화장품 제조 및 품질관리기준) 적합업소 목록에 상호가 있음">CGMP 적합</span>'
       : r.gmp === false ? '<span class="mk-b dim" title="식약처 CGMP 적합업소 목록에 상호가 없음(신청 전·심사 중이거나 미신청)">CGMP 미등재</span>' : '',
     r.on ? `<span class="mk-b warn" title="지난 조회 때 상호">상호 변경 · 이전 ${esc(r.on)}</span>` : '',
-    r.nps != null ? `<span class="mk-b ok" title="국민연금 월간 파일(사업자번호 앞 6자리·상호 일치)">국민연금 ${r.nps.toLocaleString()}명</span>` : '<span class="mk-b dim" title="국민연금 월간 파일에 아직 없음(직원 3인 미만이거나 반영 전)">국민연금 미가입</span>',
+    r.live ? '' : r.nps != null ? `<span class="mk-b ok" title="국민연금 월간 파일(사업자번호 앞 6자리·상호 일치)">국민연금 ${r.nps.toLocaleString()}명</span>` : '<span class="mk-b dim" title="국민연금 월간 파일에 아직 없음(직원 3인 미만이거나 반영 전)">국민연금 미가입</span>',
     r.job ? `<span class="mk-b warn">채용공고 ${r.job}건</span>` : '',
     r.sale ? '<span class="mk-b dim" title="같은 사업자번호로 먼저 받은 책임판매업 허가가 있음">책임판매업 기존 보유</span>' : '',
     r.more ? '<span class="mk-b warn" title="같은 사업자번호로 먼저 받은 제조업 허가(다른 제조소)가 있음">기존 제조사 제조소 추가</span>' : '',
@@ -532,8 +581,13 @@ function mkBadges(r) {
 }
 function mkHtml(st) {
   const d = st.data;
-  const head = (sub) => `<div class="gr-head"><div><h2>제조업 등록 현황 <small>식약처 화장품 제조업 허가 명단 누적 관리</small></h2>${sub || ''}</div>`
-    + `${grReqHtml(growthState, `명단 마지막 갱신 ${(st.data && grWhen(st.data.builtAt)) || '—'}`)}</div>`;
+  const Lv = st.live || {};
+  const liveBtn = `<div class="gr-req"><button type="button" class="nb-btn sm${Lv.busy ? '' : ' dark'}" data-mk-live${Lv.busy ? ' disabled' : ''}>${Lv.busy ? `명단 받는 중 ${Lv.done || 0}/${Lv.pages || '…'}쪽` : '최신 자료 조회 (현시점)'}</button>`
+    + `<small>주간 집계 ${(st.data && grWhen(st.data.builtAt)) || '—'}${Lv.at ? ` · 현시점 대조 ${grWhen(Lv.at)}` : ''}</small>`
+    + (Lv.err ? `<p class="gr-reqmsg err" role="status">${esc(Lv.err)}</p>`
+      : Lv.at ? `<p class="gr-reqmsg" role="status">식약처 명단 ${Lv.total.toLocaleString()}건(제조 ${Lv.makers.toLocaleString()}곳)을 방금 받아 대조했습니다 — 주간 집계 이후 <b>새 제조업체 ${Lv.added.length}곳</b>${Lv.removed != null ? ` · 빠진 업체 ${Lv.removed}곳` : ''}${Lv.failed ? ` · 못 받은 쪽 ${Lv.failed}개(빠짐은 세지 않음)` : ''}</p>` : '')
+    + '</div>';
+  const head = (sub) => `<div class="gr-head"><div><h2>제조업 등록 현황 <small>식약처 화장품 제조업 허가 명단 누적 관리</small></h2>${sub || ''}</div>${liveBtn}</div>`;
   if (st.err) return head() + `<div class="gr-empty">명단 변동 자료를 불러오지 못했습니다 — ${esc(st.err)}</div>`;
   if (!d) return head() + '<div class="gr-empty">불러오는 중…</div>';
   if (!st.view) st.view = d.base || !d.counts.added ? 'd30' : 'add';
@@ -541,8 +595,8 @@ function mkHtml(st) {
   let h = head(`<p class="gr-sub">${d.prevAt ? `지난 조회 <b>${esc(d.prevAt)}</b> → 이번 조회 <b>${esc(d.at)}</b>` : `첫 조회 <b>${esc(d.at)}</b> — 기준 명단을 저장했습니다`} · 매주 월요일 아침 자동 갱신</p>`);
   h += '<div class="gr-tiles mk-tiles">'
     + `<div class="gr-tile mk-t"><span>누적 관리 업체</span><b>${d.total.toLocaleString()}</b><small>현재 명단 기준</small></div>`
-    + `<button type="button" class="gr-tile mk-t new" data-mk-view="add" aria-selected="${st.view === 'add'}"><span>이번 조회에 추가</span><b>${d.base ? '—' : `+${c.added}`}</b>`
-    + `<small>${d.base ? '다음 조회부터 집계' : '지난 조회 이후 명단에 새로 생김'}</small></button>`
+    + `<button type="button" class="gr-tile mk-t new" data-mk-view="add" aria-selected="${st.view === 'add'}"><span>${Lv.at ? '현시점 기준 추가' : '이번 조회에 추가'}</span><b>${d.base && !Lv.at ? '—' : `+${c.added + ((Lv.added || []).length)}`}</b>`
+    + `<small>${Lv.at ? `주간 집계 ${c.added} + 방금 대조 ${Lv.added.length}` : d.base ? '다음 조회부터 집계' : '지난 조회 이후 명단에 새로 생김'}</small></button>`
     + `<button type="button" class="gr-tile mk-t" data-mk-view="d30" aria-selected="${st.view === 'd30'}"><span>최근 30일 신규 허가</span><b>${c.d30}</b><small>90일 ${c.d90} · 1년 ${c.d365}</small></button>`
     + `<div class="gr-tile mk-t gone"><span>명단에서 빠짐</span><b>${d.base ? '—' : (c.removed ? `−${c.removed}` : '0')}</b><small>${c.renamed ? `상호 변경 ${c.renamed}곳 별도` : '폐업·취소 추정'}</small></div></div>`;
   h += `<div class="mk-sec">월별 신규 허가 <i>허가일 기준 · 최근 13개월 · 이번 달은 ${esc(d.at.slice(8))}일까지</i></div>`
@@ -554,8 +608,8 @@ function mkHtml(st) {
   if (st.sido && !sidoN[st.sido]) st.sido = null;
   let rows = base.filter((r) => (!st.sido || mkSido(r.a) === st.sido) && (!st.npsOnly || r.nps != null));
   h += '<div class="mk-sec">새로 들어온 업체</div><div class="mk-chips">'
-    + MK_VIEWS.filter((v) => !(d.base && v.id === 'add')).map((v) => {
-      const n = v.id === 'add' ? c.added : v.id === 'd30' ? c.d30 : c.d90;
+    + MK_VIEWS.filter((v) => !(d.base && v.id === 'add' && !Lv.at)).map((v) => {
+      const n = v.id === 'add' ? c.added + (Lv.added || []).length : v.id === 'd30' ? c.d30 : c.d90;
       return `<button type="button" class="mk-chip${st.view === v.id ? ' on' : ''}" data-mk-view="${v.id}">${esc(v.label)} ${n}</button>`;
     }).join('')
     + '<span class="mk-sep"></span>'
@@ -598,6 +652,7 @@ function mountMakers() {
   if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(box.clientWidth - lastW) < 24) return; lastW = box.clientWidth; clearTimeout(rt); rt = setTimeout(() => { if (mkState.data) paint(); }, 150); }).observe(box);
   box.addEventListener('click', (e) => {
     const v = e.target.closest('[data-mk-view]'); if (v) { mkState.view = v.dataset.mkView; paint(); return; }
+    if (e.target.closest('[data-mk-live]')) { mkLiveScan(paint); return; }
     const s = e.target.closest('[data-mk-sido]'); if (s) { mkState.sido = mkState.sido === s.dataset.mkSido ? null : s.dataset.mkSido; paint(); return; }
     if (e.target.closest('[data-mk-nps]')) { mkState.npsOnly = !mkState.npsOnly; paint(); return; }
     const sv = e.target.closest('[data-mk-save]');

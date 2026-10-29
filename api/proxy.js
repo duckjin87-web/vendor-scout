@@ -372,6 +372,20 @@ async function handleVworld(url, env) {
   return relay(`${op.url}?${q}`, '브이월드');
 }
 
+// 브이월드 위성영상 타일(3D 규모 비교의 지붕·마당 질감) — 키는 서버에서만 붙이고 이미지만 돌려준다
+async function handleVwTile(url, env) {
+  if (!env.VWORLD_KEY) return jsonRes({ error: 'VWORLD_KEY 미설정' }, 501);
+  const z = Number(url.searchParams.get('z')), x = Number(url.searchParams.get('x')), y = Number(url.searchParams.get('y'));
+  if (![z, x, y].every(Number.isInteger) || z < 6 || z > 19 || x < 0 || y < 0 || x >= 2 ** z || y >= 2 ** z) return jsonRes({ error: '타일 좌표 오류' }, 400);
+  const dom = env.VWORLD_DOMAIN || 'https://vendor-scout-gilt.vercel.app';
+  let r;
+  try { r = await fetch(`https://api.vworld.kr/req/wmts/1.0.0/${env.VWORLD_KEY}/Satellite/${z}/${y}/${x}.jpeg`, { headers: { Referer: `${dom}/` }, signal: AbortSignal.timeout(15000) }); }
+  catch (e) { return jsonRes({ error: '위성영상 상류 호출 실패' }, 502); }
+  const ct = r.headers.get('content-type') || '';
+  if (!r.ok || !/image/.test(ct)) return jsonRes({ error: `위성영상 HTTP ${r.status}`, detail: (await r.text().catch(() => '')).slice(0, 160) }, 502);
+  return new Response(r.body, { status: 200, headers: { ...CORS, 'Content-Type': ct, 'Cache-Control': 'public, max-age=2592000' } });
+}
+
 // ── 급성장 집계 조회 요청 ──
 // 대시보드 버튼 → GitHub Actions growth.yml 실행. 토큰(GH_DISPATCH_TOKEN, 이 저장소 Actions 쓰기 권한만 준
 // fine-grained 토큰)은 Vercel 환경변수에만 둔다. 누구나 누를 수 있는 버튼이라 돌고 있거나 30분 안에 돈 적이
@@ -426,6 +440,7 @@ export default async function handler(req) {
     if (service === 'ntsValidate')     return handleNtsValidate(url, env);
     if (service === 'siteExtract')     return handleSiteExtract(url, env);
     if (service === 'vworld')          return handleVworld(url, env);
+    if (service === 'vwTile')          return handleVwTile(url, env);
     if (service === 'kakaoGeocode')    return handleKakao(url, env, 'geocode');
     if (service === 'kakaoDirections') return handleKakao(url, env, 'directions');
     if (service === 'kakaoKeyword')    return handleKakao(url, env, 'keyword');

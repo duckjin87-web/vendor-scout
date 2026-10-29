@@ -2401,3 +2401,27 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .ac-vol b.k { color: var(--text); font-weight: 600; }
 .ac-vol em { font-style: normal; font-weight: 800; color: var(--text); }
 .ac-vol small { flex-basis: 100%; font-size: 11.5px; color: var(--muted); }
+/* 리포트 머리 — 왼쪽 고정 칸(게이지·판정 문구)과 오른쪽(업체명·근거·연락처)을 겹치지 않게 */
+.vd-head { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 14px; align-items: start; }
+.vd-left { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; min-width: 0; }
+.vd-left .vd-verd { order: initial; white-space: normal; font-size: 12.5px; line-height: 1.35; text-align: center; }
+.vd-left .vd-qwhy, .vd-left .vd-toa { text-align: center; }
+.vd-head .vd-title { order: initial; flex: none; }
+.vd-h2row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.vd-h2row h2 { margin: 0; }
+@media (max-width: 720px) { .vd-head { grid-template-columns: 92px minmax(0, 1fr); gap: 10px; } .vd-left .vd-verd { font-size: 11.5px; } }
+/* 판정 기준 설명 — 「!」 */
+.vd-foot-wrap { display: flex; justify-content: flex-end; margin-top: 8px; flex-wrap: wrap; gap: 6px; }
+.vd-foot-wrap .at-i { margin-left: auto; }
+.vd-foot-wrap .vd-foot { flex-basis: 100%; margin-top: 0; }
+.vd-foot[hidden] { display: none; }
+/* 인력 · 사업장 구성 — 근거 자료는 접어 둔다 */
+.wf-more { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+.wf-more > summary { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--text); }
+.wf-more > summary small { font-weight: 500; color: var(--muted); margin-left: 4px; }
+.wf-more[open] > summary { margin-bottom: 8px; }
+/* 리포트 버튼(경로·인쇄·공유)을 탭 줄 오른쪽에 — 작게 */
+.rtabs .actions.in-tabs { margin: 0 0 0 auto; padding: 4px 0; gap: 6px; flex-wrap: nowrap; flex: none; align-self: center; }
+.rtabs .actions.in-tabs .act { font-size: 12px; padding: 5px 10px; white-space: nowrap; }
+@media print { .rtabs .actions.in-tabs { display: none; } }
+.vd-left > .vd-badge { order: -1; }

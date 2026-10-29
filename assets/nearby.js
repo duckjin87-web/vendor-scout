@@ -1150,6 +1150,9 @@ function mountReportTabs(root, report, actions, areaEl) {
   let n = actions.nextSibling;
   while (n) { const nx = n.nextSibling; panes.report.appendChild(n); n = nx; }
   root.appendChild(bar);
+  // 경로·인쇄·공유 버튼은 탭 줄 오른쪽에 — 따로 한 줄을 차지하지 않게
+  actions.classList.add('in-tabs');
+  bar.appendChild(actions);
   tabs.forEach((t) => root.appendChild(panes[t.id]));
   let first = true;
   const show = (tab) => {

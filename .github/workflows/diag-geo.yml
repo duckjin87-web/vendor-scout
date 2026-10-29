@@ -60,6 +60,8 @@ jobs:
               n(`[${nm}] 재무: ${await page.evaluate(() => JSON.stringify((currentReport.finance || []).filter((f) => f.value).slice(0, 6).map((f) => [f.key, f.value, f.source])) + ' · 금융위: ' + JSON.stringify((currentReport.meta.src_status || []).filter((s) => /금융위/.test(s.name)).map((s) => [s.name, s.ok, s.detail])))}`);
               n(`[${nm}] CGMP: ${await page.evaluate(() => { const c = (currentReport.capacity || []).find((x) => x.key === 'CGMP 적합업소'); return JSON.stringify([c && c.value, c && String(c.note).slice(0, 160), (currentReport.meta.cgmp_news || []).map((x) => x.date + ' ' + x.title.slice(0, 40))]); })}`);
               n(`[${nm}] 채용: ${await page.evaluate(() => { const h = currentReport.hiring || {}; return JSON.stringify({ posts: (h.posts || []).length, affil: h.affil, prof: (h.extProfile || []).map((r) => r.key + '=' + r.value), terms: h.terms }); })}`);
+              n(`[${nm}] 대표·인력: ${await page.evaluate(() => { const r = (currentReport.basic || []).find((x) => x.key === '대표자'); const W = currentReport.meta.workforce; return JSON.stringify({ rep: r && [r.value, r.source], all: W && W.allR, mfg: W && W.mfgR, nps: W && W.nps }); })}`);
+              n(`[${nm}] 위성: ${await page.evaluate(async () => { const r = await fetch(buildProxyUrl({ service: 'vwTile', z: '18', x: '223606', y: '101524' })); return r.status + ' ' + r.headers.get('content-type'); })}`);
               n(`[${nm}] 교차진단: ${await page.evaluate(() => JSON.stringify((currentReport.cross_diag && currentReport.cross_diag.items || []).map((x) => [x.label, x.status, String(x.detail).slice(0, 120)])))}`);
               if (errs.length) n(`[${nm}] 화면 오류: ${[...new Set(errs)].slice(0, 5).join(' | ')}`);
             } catch (e) { n(`[${nm}] 실행 실패 ${e.message}`); }

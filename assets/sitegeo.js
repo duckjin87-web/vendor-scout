@@ -330,21 +330,21 @@ function sg3dData(report, B) {
   const R = G.ref, S = G.site, unit = B && B.unit;
   const open = (ring) => (ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1] ? ring.slice(0, -1) : ring);
   const ro = sgCentroid(R.parcel && R.parcel.ring ? R.parcel.ring : R.bldgs.flatMap((b) => b.ring)), rM = sgM(ro);
-  const ref = { parcel: R.parcel && R.parcel.ring ? open(R.parcel.ring).map(rM) : null,
+  const ref = { o: ro, parcel: R.parcel && R.parcel.ring ? open(R.parcel.ring).map(rM) : null,
     bldgs: R.bldgs.map((b) => ({ pts: open(b.ring).map(rM), floors: b.floors || 1 })) };
   let mine;
   if (unit) {
     const a = unit.area && unit.area.excl;
     if (!a) return null;
     const s = Math.sqrt(a) / 2;
-    mine = { parcel: null, unit: true, bldgs: [{ pts: [[-s, -s], [s, -s], [s, s], [-s, s]], floors: 1 }] };
+    mine = { o: null, parcel: null, unit: true, bldgs: [{ pts: [[-s, -s], [s, -s], [s, s], [-s, s]], floors: 1 }] };
   } else {
     if (!(S.bldgs || []).length) return null;
     const so = sgCentroid(S.parcel && S.parcel.ring ? S.parcel.ring : S.bldgs.flatMap((b) => b.ring)), sM = sgM(so);
     // 브이월드 층수가 비면(전부 1층 이하) 건축물대장의 평균 층수(연면적 ÷ 건축면적)로 채운다
     const avgF = B && B.arch && B.tot ? Math.max(1, Math.min(15, Math.round(B.tot / B.arch))) : 1;
     const noF = S.bldgs.every((b) => !b.floors || b.floors <= 1) && avgF > 1;
-    mine = { parcel: S.parcel && S.parcel.ring ? open(S.parcel.ring).map(sM) : null, estF: noF ? avgF : null,
+    mine = { o: so, parcel: S.parcel && S.parcel.ring ? open(S.parcel.ring).map(sM) : null, estF: noF ? avgF : null,
       bldgs: S.bldgs.map((b) => ({ pts: open(b.ring).map(sM), floors: noF ? avgF : (b.floors || 1) })) };
   }
   const sum = (g) => g.bldgs.reduce((a, b) => a + sgArea(b.pts), 0);
@@ -377,6 +377,41 @@ function sg3dHtml(report, B) {
     D.mine.estF ? `브이월드에 층수가 없어 건축물대장 평균 층수(연면적 ÷ 건축면적 ≈ ${D.mine.estF}층)로 세웠습니다` : ''].filter(Boolean);
   return { html, src, D, badge: sgChip('info', `콜마 대비 ${pct(st.myFoot, st.refFoot)}`) };
 }
+// 위성영상 — 무리(g)의 부지·건물을 덮는 브이월드 위성 타일을 한 장으로 이어 붙인다(프록시 service=vwTile).
+// 지붕과 마당에 실제 사진을 입혀 '상자'가 아니라 그 공장처럼 보이게 한다. 못 받으면 단색으로 그린다.
+async function sg3dSat(g) {
+  if (!g || !g.o || g.unit || typeof buildProxyUrl !== 'function' || !getProxy()) return null;
+  const pts = (g.parcel || []).concat(g.bldgs.flatMap((b) => b.pts));
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const pad = 12, mx0 = Math.min(...xs) - pad, mx1 = Math.max(...xs) + pad, my0 = Math.min(...ys) - pad, my1 = Math.max(...ys) + pad;
+  const kx = Math.cos(g.o[1] * Math.PI / 180) * 111320, ky = 110540;
+  const lonOf = (mx) => g.o[0] + mx / kx, latOf = (my) => g.o[1] + my / ky;
+  const z = Math.max(mx1 - mx0, my1 - my0) > 700 ? 17 : 18;
+  const W2 = 256 * 2 ** z;
+  const wx = (lon) => ((lon + 180) / 360) * W2;
+  const wy = (lat) => { const r = (lat * Math.PI) / 180; return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * W2; };
+  const tx0 = Math.floor(wx(lonOf(mx0)) / 256), tx1 = Math.floor(wx(lonOf(mx1)) / 256);
+  const ty0 = Math.floor(wy(latOf(my1)) / 256), ty1 = Math.floor(wy(latOf(my0)) / 256);
+  const nX = tx1 - tx0 + 1, nY = ty1 - ty0 + 1;
+  if (nX * nY > 40) return null;
+  const cv = document.createElement('canvas'); cv.width = nX * 256; cv.height = nY * 256;
+  const cx = cv.getContext('2d');
+  const jobs = [];
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) jobs.push([tx, ty]);
+  let ok = 0;
+  await mapLimit(jobs, 6, async ([tx, ty]) => {
+    try {
+      const r = await fetch(buildProxyUrl({ service: 'vwTile', z: String(z), x: String(tx), y: String(ty) }));
+      if (!r.ok || !/image/.test(r.headers.get('content-type') || '')) return;
+      const bm = await createImageBitmap(await r.blob());
+      cx.drawImage(bm, (tx - tx0) * 256, (ty - ty0) * 256); ok++;
+    } catch { /* 빈 칸 */ }
+  });
+  if (!ok) return null;
+  // 미터(동·북) → 이미지 픽셀은 이 좁은 범위에서 직선 관계다 — 원점 값과 1m당 변화량만 둔다
+  const X0 = wx(lonOf(0)) - tx0 * 256, Y0 = wy(latOf(0)) - ty0 * 256;
+  return { cv, X0, Y0, ax: wx(lonOf(1)) - wx(lonOf(0)), ay: wy(latOf(1)) - wy(latOf(0)) };
+}
 // 캔버스 그리기 — st: { yaw, pitch, mode }
 function sg3dDraw(cv, D, st) {
   const W = cv.clientWidth, H = cv.clientHeight;
@@ -386,15 +421,23 @@ function sg3dDraw(cv, D, st) {
   const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
   const css = getComputedStyle(cv), col = (v, d) => (css.getPropertyValue(v).trim() || d);
   const rgb = (h) => { const m = String(h).match(/^#([0-9a-f]{6})$/i); return m ? [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16)) : [128, 128, 128]; };
-  const kRGB = rgb(col('--muted', '#6b7280')), mRGB = rgb(col('--accent', '#2f6df6')), line = col('--faint', '#9aa1ab'), txt = col('--text', '#1a1d21');
-  // 배치 — 나란히: 업체를 콜마 오른쪽에 / 겹쳐: 콜마 가운데에
-  const bb = (g) => { const xs = g.bldgs.flatMap((b) => b.pts.map((p) => p[0])).concat((g.parcel || []).map((p) => p[0])); const ys = g.bldgs.flatMap((b) => b.pts.map((p) => p[1])).concat((g.parcel || []).map((p) => p[1])); return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]; };
-  const rb = bb(D.ref), mb = bb(D.mine);
-  // 위아래: 콜마를 위(북쪽), 업체를 아래(남쪽)에 가운데 맞춰 둔다 — 돌리지 않아도 바로 견줘진다
-  const off = st.mode === 'over' ? [0, 0] : [(rb[0] + rb[1]) / 2 - (mb[0] + mb[1]) / 2, rb[2] - mb[3] - Math.max(14, (rb[3] - rb[2]) * 0.12)];
-  const groups = [{ g: D.ref, o: [0, 0], rgbc: kRGB, a: 1, key: 'k' }, { g: D.mine, o: off, rgbc: mRGB, a: st.mode === 'over' ? 0.55 : 0.92, key: 'm' }];
-  // 가운데 맞춤 — 두 무리 전체의 가운데를 원점으로
-  const allX = [rb[0], rb[1], mb[0] + off[0], mb[1] + off[0]], allY = [rb[2], rb[3], mb[2] + off[1], mb[3] + off[1]];
+  const kRGB = [148, 152, 160], mRGB = rgb(col('--accent', '#2f6df6')), line = col('--faint', '#9aa1ab'), txt = col('--text', '#1a1d21');
+  const bb = (pts) => { const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]); return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]; };
+  const all = (g) => g.bldgs.flatMap((b) => b.pts).concat(g.parcel || []);
+  const rb = bb(all(D.ref)), mb = bb(all(D.mine));
+  const over = st.mode === 'over';
+  let off;
+  if (over) {
+    // 겹쳐 보기 — 업체 건물들의 가운데를 한국콜마에서 가장 큰 건물의 가운데에 포갠다
+    const big = D.ref.bldgs.slice().sort((a, b) => sgArea(b.pts) - sgArea(a.pts))[0];
+    const kb = bb(big.pts), vb = bb(D.mine.bldgs.flatMap((b) => b.pts));
+    off = [(kb[0] + kb[1]) / 2 - (vb[0] + vb[1]) / 2, (kb[2] + kb[3]) / 2 - (vb[2] + vb[3]) / 2];
+  } else {
+    // 위아래 — 콜마를 위(북쪽), 업체를 아래(남쪽)에 가운데 맞춰 둔다
+    off = [(rb[0] + rb[1]) / 2 - (mb[0] + mb[1]) / 2, rb[2] - mb[3] - Math.max(14, (rb[3] - rb[2]) * 0.12)];
+  }
+  const groups = [{ g: D.ref, o: [0, 0], rgbc: kRGB, a: 1, key: 'k', sat: D._sat && D._sat.k }, { g: D.mine, o: off, rgbc: mRGB, a: over ? 0.62 : 0.95, key: 'm', sat: D._sat && D._sat.m }];
+  const allX = [rb[0], rb[1], ...(over ? [] : [mb[0] + off[0], mb[1] + off[0]])], allY = [rb[2], rb[3], ...(over ? [] : [mb[2] + off[1], mb[3] + off[1]])];
   const cx0 = (Math.min(...allX) + Math.max(...allX)) / 2, cy0 = (Math.min(...allY) + Math.max(...allY)) / 2;
   const Rxy = Math.max(...allX.map((x) => Math.abs(x - cx0)), ...allY.map((y) => Math.abs(y - cy0))) * 1.08 || 50;
   const maxZ = Math.max(...[D.ref, D.mine].flatMap((g) => g.bldgs.map((b) => (b.floors || 1) * SG_FLOOR_M)));
@@ -402,36 +445,72 @@ function sg3dDraw(cv, D, st) {
   const scale = Math.min(W / (2 * Rxy), H / (2 * Rxy * sp + maxZ * cp)) * 0.96;
   const P = ([x, y, z]) => { const X = x - cx0, Y = y - cy0; const xr = X * ct - Y * sn, yr = X * sn + Y * ct;
     return { x: W / 2 + xr * scale, y: H / 2 - (yr * sp + z * cp - maxZ * cp / 2) * scale, d: yr * cp - z * sp }; };
-  const poly = (pts, fill, stroke, dash) => { c.beginPath(); pts.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y))); c.closePath();
-    if (fill) { c.fillStyle = fill; c.fill(); } if (stroke) { c.setLineDash(dash || []); c.strokeStyle = stroke; c.lineWidth = 1; c.stroke(); c.setLineDash([]); } };
+  const path = (pts) => { c.beginPath(); pts.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y))); c.closePath(); };
+  const poly = (pts, fill, stroke, dash) => { path(pts); if (fill) { c.fillStyle = fill; c.fill(); } if (stroke) { c.setLineDash(dash || []); c.strokeStyle = stroke; c.lineWidth = 1; c.stroke(); c.setLineDash([]); } };
   const shade = (rgbc, k, a) => `rgba(${rgbc.map((v) => Math.round(Math.min(255, v * k))).join(',')},${a})`;
-  // 땅 — 부지 경계
-  groups.forEach(({ g, o, rgbc }) => { if (g.parcel) poly(g.parcel.map(([x, y]) => P([x + o[0], y + o[1], 0])), shade(rgbc, 1.6, 0.08), line, [4, 3]); });
-  // 건물 — 먼 것부터
+  // 위성 사진을 높이 z의 평면에 붙인다 — 이미지 픽셀 → 화면의 아핀 변환을 만들어 clip 안에 그린다
+  const texture = (S, o, z, clipPts, alpha) => {
+    if (!S) return;
+    const mOf = (ix, iy) => [(ix - S.X0) / S.ax + o[0], (iy - S.Y0) / S.ay + o[1]];
+    const p00 = P([...mOf(0, 0), z]), p10 = P([...mOf(1, 0), z]), p01 = P([...mOf(0, 1), z]);
+    c.save(); path(clipPts); c.clip();
+    c.globalAlpha = alpha;
+    c.setTransform(dpr * (p10.x - p00.x), dpr * (p10.y - p00.y), dpr * (p01.x - p00.x), dpr * (p01.y - p00.y), dpr * p00.x, dpr * p00.y);
+    c.drawImage(S.cv, 0, 0);
+    c.restore(); c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  // 땅 — 부지(위성 사진, 없으면 옅은 색)와 경계. 겹쳐 보기에서는 업체 부지는 그리지 않는다(콜마 위에 포개므로)
+  groups.forEach(({ g, o, rgbc, sat, key }) => {
+    if (!g.parcel || (over && key === 'm')) return;
+    const gp = g.parcel.map(([x, y]) => P([x + o[0], y + o[1], 0]));
+    if (sat) texture(sat, o, 0, gp, 0.9); else poly(gp, shade(rgbc, 1.6, 0.1), null);
+    poly(gp, null, key === 'm' ? shade(mRGB, 1, 0.9) : line, [4, 3]);
+  });
+  // 건물 — 먼 것부터. 겹쳐 보기에서는 콜마를 다 그린 뒤 업체를 위에 반투명으로
   const L = [Math.cos(-0.8), Math.sin(-0.8)];
-  const bl = groups.flatMap(({ g, o, rgbc, a, key }) => g.bldgs.map((b) => {
-    const pts = b.pts.map(([x, y]) => [x + o[0], y + o[1]]), h = (b.floors || 1) * SG_FLOOR_M;
+  const mk = ({ g, o, rgbc, a, key, sat }) => g.bldgs.map((b) => {
+    const pts = b.pts.map(([x, y]) => [x + o[0], y + o[1]]), floors = b.floors || 1, h = floors * SG_FLOOR_M;
     const cen = pts.reduce((s, p) => [s[0] + p[0] / pts.length, s[1] + p[1] / pts.length], [0, 0]);
-    return { pts, h, rgbc, a, key, d: P([cen[0], cen[1], 0]).d, dash: key === 'm' && D.mine.unit };
-  })).sort((p, q) => q.d - p.d);
+    return { pts, h, floors, rgbc, a, key, sat, o, d: P([cen[0], cen[1], 0]).d, dash: key === 'm' && D.mine.unit };
+  });
+  const sortD = (arr) => arr.sort((p, q) => q.d - p.d);
+  const bl = over ? [...sortD(mk(groups[0])), ...sortD(mk(groups[1]))] : sortD([...mk(groups[0]), ...mk(groups[1])]);
   bl.forEach((b) => {
+    const edge = shade(b.rgbc, 0.45, Math.min(1, b.a + 0.1));
     const walls = b.pts.map((p, i) => { const q = b.pts[(i + 1) % b.pts.length];
       const quad = [P([p[0], p[1], 0]), P([q[0], q[1], 0]), P([q[0], q[1], b.h]), P([p[0], p[1], b.h])];
       const nx = q[1] - p[1], ny = -(q[0] - p[0]), nl = Math.hypot(nx, ny) || 1;
-      return { quad, d: quad.reduce((s, v) => s + v.d, 0) / 4, k: 0.62 + 0.3 * Math.abs((nx * L[0] + ny * L[1]) / nl) };
+      return { p, q, quad, d: quad.reduce((s, v) => s + v.d, 0) / 4, k: 0.62 + 0.3 * Math.abs((nx * L[0] + ny * L[1]) / nl) };
     }).sort((p, q) => q.d - p.d);
-    walls.forEach((w) => poly(w.quad, shade(b.rgbc, w.k, b.a), shade(b.rgbc, 0.5, Math.min(1, b.a + 0.1)), b.dash ? [4, 3] : null));
-    poly(b.pts.map(([x, y]) => P([x, y, b.h])), shade(b.rgbc, 1.18, b.a), shade(b.rgbc, 0.5, Math.min(1, b.a + 0.1)), b.dash ? [4, 3] : null);
+    walls.forEach((w) => {
+      poly(w.quad, shade(b.rgbc, w.k, b.a), edge, b.dash ? [4, 3] : null);
+      // 층마다 가는 줄 — 몇 층짜리인지 눈으로 센다
+      if (b.floors > 1 && !b.dash) {
+        c.strokeStyle = shade(b.rgbc, 0.55, 0.35 * b.a); c.lineWidth = 0.7; c.beginPath();
+        for (let f = 1; f < b.floors; f++) { const z = f * SG_FLOOR_M, a1 = P([w.p[0], w.p[1], z]), a2 = P([w.q[0], w.q[1], z]); c.moveTo(a1.x, a1.y); c.lineTo(a2.x, a2.y); }
+        c.stroke();
+      }
+    });
+    const roof = b.pts.map(([x, y]) => P([x, y, b.h]));
+    if (b.sat && !b.dash) {
+      poly(roof, shade(b.rgbc, 1.1, b.a), null);
+      texture(b.sat, b.o, b.h, roof, b.key === 'm' && over ? 0.75 : 0.95);
+      // 업체 지붕은 파란 기운을 남겨 콜마와 구분한다
+      if (b.key === 'm') poly(roof, shade(mRGB, 1, over ? 0.35 : 0.22), null);
+      poly(roof, null, edge);
+    } else poly(roof, shade(b.rgbc, 1.18, b.a), edge, b.dash ? [4, 3] : null);
   });
   // 이름표 — 무리마다 가장 높은 건물 위
-  c.font = '600 12px system-ui, sans-serif'; c.textAlign = 'center'; c.fillStyle = txt;
+  c.font = '600 12px system-ui, sans-serif'; c.textAlign = 'center';
   [['k', '한국콜마 세종'], ['m', st.label || '조회 업체']].forEach(([key, t]) => {
     const g = bl.filter((b) => b.key === key); if (!g.length) return;
     const hi = g.reduce((a, b) => (b.h > a.h ? b : a));
     const cen = hi.pts.reduce((s, p) => [s[0] + p[0] / hi.pts.length, s[1] + p[1] / hi.pts.length], [0, 0]);
     const pt = P([cen[0], cen[1], hi.h]);
-    // 겹쳐 보기에서는 두 이름표가 부딪치지 않게 업체 이름을 한 줄 위로
-    c.fillText(t, pt.x, Math.max(14, pt.y - 8 - (st.mode === 'over' && key === 'm' ? 16 : 0)));
+    const y = Math.max(14, pt.y - 8 - (over && key === 'm' ? 18 : 0));
+    const w = c.measureText(t).width + 10;
+    c.fillStyle = 'rgba(255,255,255,.82)'; c.fillRect(pt.x - w / 2, y - 12, w, 16);
+    c.fillStyle = key === 'm' ? shade(mRGB, 0.8, 1) : '#1a1d21'; c.fillText(t, pt.x, y);
   });
   // 축척 막대
   const bar = [10, 20, 50, 100, 200].find((v) => v * scale >= 50) || 200;
@@ -455,4 +534,7 @@ function sgBind3d(root, D, label) {
   // 숨은 탭에서 그리면 크기가 0이다 — 보이게 되면 다시 그린다
   if (window.IntersectionObserver) new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting)) draw(); }).observe(cv);
   draw();
+  // 위성 사진은 한 번만 받아 D에 붙여 둔다(다시 그려도 재사용)
+  if (!D._satP) D._satP = Promise.all([sg3dSat(D.ref), sg3dSat(D.mine)]).then(([k, m]) => { D._sat = { k, m }; }).catch(() => { D._sat = {}; });
+  D._satP.then(() => { if (cv.isConnected) draw(); });
 }

@@ -1071,7 +1071,11 @@ function assembleLiveReport(name, corp, res) {
     const adptHit = !!(x.adpt && insEst.has(x.adpt));
     return { ...x, addrHit: hit ? hit[0] : null, adptHit };
   }) : [];
-  const npsConf = npsAll.filter((x) => x.addrHit || x.adptHit);
+  // 같은 주소의 국민연금 기록이 둘 이상 오면(상호 표기만 다른 같은 사업장·옛 기록) 한 곳으로 본다 —
+  // 그대로 더하면 11명 사업장이 22명이 됐다(그린비코스메틱). 최신 달 → 인원 많은 쪽을 남긴다.
+  const npsDedup = (arr) => { const m = new Map(); arr.forEach((x) => { const k = `${sidoOf(x.addr)}|${roadNm(x.addr) || x.addr}`; const o = m.get(k);
+    if (!o || String(x.ym || '') > String(o.ym || '') || (String(x.ym || '') === String(o.ym || '') && (x.cnt || 0) > (o.cnt || 0))) m.set(k, x); }); return [...m.values()]; };
+  const npsConf = npsDedup(npsAll.filter((x) => x.addrHit || x.adptHit));
   // 확인된 사업장만 합산. 확인 못 했으면 한 곳일 때만 쓰고(약한 근거), 여러 곳이면 가장 큰 곳 + '특정 불가' 표시
   const npsUse = npsConf.length ? npsConf : (npsAll.length ? [npsAll.reduce((a, b) => ((b.cnt || 0) > (a.cnt || 0) ? b : a))] : []);
   const npsBasis = !npsAll.length ? null : npsConf.length ? 'confirmed' : npsAll.length === 1 ? 'weak' : 'ambiguous';
@@ -1406,6 +1410,25 @@ function assembleLiveReport(name, corp, res) {
   // 채용공고 판정 — 공고 건수는 채용 인원이 아니고 마감분은 검색에서 사라지므로 전부 추정이다
   // (재무 조립보다 앞에 둔다 — 아래에서 외부사이트 재무를 붙일 때 필요하다)
   const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
+  // 대표자 마지막 보강 — 금융위·식약처·공장등록 어디에도 없으면(신생·소규모 법인) 지자체 공장정보 → 채용사이트 기업정보
+  // ('대표자 : 최경/이병만') 순으로 채운다. 회사가 직접 올린 값이라 등기보다 낮은 등급으로 둔다.
+  {
+    const ri = basic.findIndex((x) => x.key === '대표자');
+    if (ri >= 0 && !basic[ri].value) {
+      const REP = /대표(?:자|이사)?\s*(?:명|성명)?\s*[:：]\s*([가-힣]{2,4}(?:\s*[,/·]\s*[가-힣]{2,4}){0,2})(?![가-힣])/;
+      const bad = /^(없음|미상|정보|확인|미공개|공개|비공개)$/;
+      let rep = null, src = null, link = null;
+      if (pubBizFacts && pubBizFacts.rep) { rep = pubBizFacts.rep; src = '지자체 공장정보'; link = pubBizFacts.link; }
+      if (!rep && hireRaw) {
+        const texts = [...(hireRaw.posts || []).map((p) => [`${p.title} ${p.desc}`, p.host]), ...((hireRaw.extDiag || []).map((d) => [d.finSample || '', d.host]))];
+        for (const [t, host] of texts) {
+          const m = String(t).replace(/\s+/g, ' ').match(REP);
+          if (m && !m[1].split(/[,/·]/).some((x) => bad.test(x.trim()))) { rep = m[1].replace(/\s+/g, ''); src = `${String(host || '').replace(/^www\./, '')} 기업정보`; break; }
+        }
+      }
+      if (rep) basic[ri] = f('대표자', rep, 'C', src, today, `★ 금융위·식약처·공장등록에 대표자가 없어 ${src}에 게재된 값을 썼습니다 — 회사가 직접 올린 값이라 등기와 다를 수 있습니다. ※ 방문 때 사업자등록증으로 확인하세요.${link ? ` 근거: ${link}` : ''}`);
+    }
+  }
   const hiring = hireRaw && typeof analyzeHiring === 'function'
     ? { ...analyzeHiring(hireRaw.posts, hireRaw.heads, workforce ? workforce.total : empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs), affil: hireRaw.affil || [] }
     : null;
