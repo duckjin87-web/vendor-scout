@@ -221,6 +221,8 @@ async function handleFetchPage(url) {
   let text = '';
   if (buf) { try { text = new TextDecoder(cs, { fatal: false }).decode(buf); } catch { text = new TextDecoder('utf-8', { fatal: false }).decode(buf); } }
   text = text.slice(0, 400000);
+  // 진단용 — 빈 본문이 오면 받은 바이트·머리글을 함께 본다
+  if (url.searchParams.get('dbg')) return jsonRes({ status: up.status, url: up.url, bytes: buf ? buf.byteLength : null, cs, ct: up.headers.get('content-type'), ce: up.headers.get('content-encoding'), len: text.length, head: text.slice(0, 300) });
   return jsonRes({ status: up.status, url: up.url, text });
 }
 
