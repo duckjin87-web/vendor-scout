@@ -204,14 +204,23 @@ async function handleFetchPage(url) {
   const timer = setTimeout(() => ctrl.abort(), 20000);
   let up;
   try {
-    up = await fetch(target, { redirect: 'follow', signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (vendor-scout)' } });
+    // 일반 브라우저처럼 부른다 — 인크루트는 봇 표식이 붙은 요청에 빈 본문(698자)을 줬다
+    up = await fetch(target, { redirect: 'follow', signal: ctrl.signal, headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.6' } });
   } catch (e) {
     clearTimeout(timer);
     return jsonRes({ error: '페이지 호출 실패', detail: String(e && e.message || e) }, 502);
   }
   clearTimeout(timer);
   const buf = await up.arrayBuffer().catch(() => null);
-  const text = buf ? new TextDecoder('utf-8', { fatal: false }).decode(buf).slice(0, 400000) : '';
+  // 문자셋을 따른다 — 인크루트·옛 기업 페이지는 EUC-KR이라 UTF-8로 풀면 글자가 깨졌다
+  let cs = ((up.headers.get('content-type') || '').match(/charset=([\w-]+)/i) || [])[1] || '';
+  if (!cs && buf) cs = (new TextDecoder('latin1').decode(buf.slice(0, 4000)).match(/charset=["']?([\w-]+)/i) || [])[1] || '';
+  cs = /euc-?kr|ks_c_5601|cp949|ms949/i.test(cs) ? 'euc-kr' : 'utf-8';
+  let text = '';
+  if (buf) { try { text = new TextDecoder(cs, { fatal: false }).decode(buf); } catch { text = new TextDecoder('utf-8', { fatal: false }).decode(buf); } }
+  text = text.slice(0, 400000);
   return jsonRes({ status: up.status, url: up.url, text });
 }
 
