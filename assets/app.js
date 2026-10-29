@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 222;
+const BUILD = 223;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3919,16 +3919,34 @@ function fieldRow(fld) {
   // 출처·기준일·설명은 「!」 안으로 — 화면에서는 값만 보이게 줄인다(인쇄에는 출처 열이 그대로 나간다)
   const hasInfo = !!(fld.note || fld.source);
   const info = hasInfo ? ` <button type="button" class="ninfo" aria-expanded="false" aria-label="출처·설명 보기">!</button>` : '';
+  // 대표자 교차 확인 — 출처가 2곳 이상이면 값 옆에 판정 칩, 누르면 출처별 대조표(다르면 처음부터 펼침)
+  const rc = !pending && fld.cross && fld.cross.rows && fld.cross.rows.length >= 2 ? fld.cross : null;
+  const rcLab = rc ? { ok: `${rc.rows.length}곳 일치`, part: '공동대표?', diff: '출처 간 상이' }[rc.verdict] : '';
+  const rcChip = rc ? ` <button type="button" class="rc-chip ${rc.verdict === 'ok' ? 'ok' : 'warn'}" aria-expanded="${rc.verdict !== 'ok'}">${rcLab}</button>` : '';
   const valHtml = Array.isArray(fld.checklist)
     ? checklistHtml(fld.checklist) + info
     : pending ? '<span class="skel-v" aria-label="불러오는 중"></span>'
-      : (isGap ? '해당 없음' : esc(fld.value)) + stale + info;
+      : (isGap ? '해당 없음' : esc(fld.value)) + stale + rcChip + info;
   row.appendChild(el('div', 'v' + (isGap && !fld.checklist && !pending ? ' gap' : ''), valHtml));
 
   const src = el('div', 'src');
   src.innerHTML = esc(fld.source || '—') + (fld.as_of ? `<br><span class="asof">${esc(fld.as_of)}</span>` : '');
   row.appendChild(src);
 
+  if (rc) {
+    const ST = { base: ['info', '기준'], ok: ['ok', '일치'], part: ['warn', '일부'], diff: ['warn', '다름'] };
+    const box = el('div', 'rc-box', '<div class="rc-kv">' + rc.rows.map((r) => `<span class="k">${esc(r.src)}</span>`
+      + `<span class="v">${esc(r.val)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span>`
+      + `<span class="rc-st ${ST[r.st][0]}">${ST[r.st][1]}</span>`).join('') + '</div>'
+      + `<p class="rc-msg ${rc.verdict === 'ok' ? 'ok' : 'warn'}">${rc.verdict === 'ok' ? '' : `<b>${rc.verdict === 'diff' ? '대표 변경 가능성' : '공동대표 가능성'}</b> — `}${esc(rc.msg)}</p>`);
+    box.hidden = rc.verdict === 'ok';
+    row.appendChild(box);
+    row.querySelector('.rc-chip').addEventListener('click', (e) => {
+      e.preventDefault();
+      box.hidden = !box.hidden;
+      e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
+    });
+  }
   if (hasInfo && !pending) {
     const srcLine = fld.source ? `<p class="fsrc">출처 <b>${esc(fld.source)}</b>${fld.as_of ? ` · 기준 ${esc(fld.as_of)}` : ''}</p>` : '';
     const nt = el('div', 'fnote', srcLine + noteLines(fld.note).map((s) => `<p>${esc(s)}</p>`).join(''));

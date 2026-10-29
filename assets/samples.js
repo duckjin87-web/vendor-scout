@@ -54,8 +54,33 @@ function assessFinance(hist) {
 
 // 교차검증 자동진단 — 서로 다른 출처의 같은 항목(인력·주소)을 대조해 정합/불일치를 자동 판정.
 // status: match(일치) / warn(불일치·주의) / na(대조 불가). level: ok / mid / high / na.
+// ── 대표자 교차 확인 ──
+// [출처, 값, 부가설명] 목록을 받아 첫 출처를 기준으로 나머지를 대조한다. 값이 2곳 이상 있어야 판정한다.
+// 공동대표('김A/박B')는 이름 묶음으로, 가림 표기('오*웅', '김○○')는 가린 글자를 아무 글자로 본다.
+function repCross(list) {
+  const names = (v) => String(v || '').split(/[,/·]|\s+및\s+/).map((x) => x.replace(/\s|\(.*?\)|대표(이사)?/g, '')).filter((x) => x.length >= 2);
+  const same = (a, b) => a.length === b.length && [...a].every((c, i) => c === b[i] || /[*○◯●xX＊]/.test(c) || /[*○◯●xX＊]/.test(b[i]));
+  const rows = list.filter(([, v]) => names(v).length).map(([src, v, sub]) => ({ src, val: names(v).join(' / '), n: names(v), sub: sub || null }));
+  if (rows.length < 2) return rows.length ? { verdict: 'one', rows: rows.map(({ n, ...r }) => r) } : null;
+  const base = rows[0];
+  rows.forEach((r, i) => {
+    if (!i) { r.st = 'base'; return; }
+    const hit = r.n.filter((x) => base.n.some((y) => same(x, y))).length;
+    r.st = hit && hit === r.n.length && hit === base.n.length ? 'ok' : hit ? 'part' : 'diff';
+  });
+  const diff = rows.filter((r) => r.st === 'diff'), part = rows.filter((r) => r.st === 'part');
+  const verdict = diff.length ? 'diff' : part.length ? 'part' : 'ok';
+  const msg = verdict === 'ok'
+    ? `공개 자료 ${rows.length}곳의 대표자가 모두 같습니다. 등기상 현재 대표는 사업자등록증으로 확인하세요.`
+    : verdict === 'part'
+      ? `${part.map((r) => r.src).join('·')}에는 ${part.map((r) => r.val).join(', ')}로 올라 있어 공동·각자대표일 수 있습니다. 방문 때 법인등기부로 대표 구성을 확인하세요.`
+      : `${base.src} ${base.val} ↔ ${diff.map((r) => `${r.src} ${r.val}${r.sub ? `(${r.sub})` : ''}`).join(', ')} — 대표가 바뀌었는데 일부 자료가 갱신되지 않았거나, 동명 타법인일 수 있습니다. `
+        + '대표가 바뀌었다면 공장등록 변경 신고 여부와 경영권 변동 사유를 방문 때 물어보세요.';
+  return { verdict, rows: rows.map(({ n, ...r }) => r), base: base.src, msg };
+}
+
 function crossVerify(ctx) {
-  const { empNps, empFct, addrHq, addrNps, addrFct, addrWork, repHq, repPublic, repPublicSrc, repPublicLink } = ctx;
+  const { empNps, empFct, addrHq, addrNps, addrFct, addrWork, repHq, repPublic, repPublicSrc, repPublicLink, repCheck } = ctx;
   const items = [];
   // 주소 정규화 — 행정구역 접미/괄호/공백 제거 후 앞부분만 비교(번지·상세주소 차이 무시)
   const normA = (s) => String(s || '').replace(/특별자치시|특별자치도|특별시|광역시/g, '').replace(/\s|[()]/g, '');
@@ -93,7 +118,13 @@ function crossVerify(ctx) {
 
   // 3) 대표자 정합성 — 등기 대표자 ↔ 지자체 공장정보 게재 대표자
   // 다르면 명의변경·각자대표·자료 노후 중 하나인데, 어느 쪽이든 실체 확인에서 먼저 짚어야 한다.
-  if (repHq && repPublic) {
+  if (repCheck && repCheck.rows.length >= 2) {
+    const vs = repCheck.rows.map((r) => `${r.src} ${r.val}`).join(' · ');
+    items.push(repCheck.verdict === 'ok'
+      ? { label: '대표자 정합성', status: 'match', detail: `${vs} — ${repCheck.rows.length}곳 일치` }
+      : { label: '대표자 정합성', status: 'warn', severe: false,
+          detail: `${repCheck.verdict === 'diff' ? '대표 변경 가능성' : '공동대표 가능성'} — ${repCheck.msg}${repPublicLink ? ` (근거: ${repPublicLink})` : ''}` });
+  } else if (repHq && repPublic) {
     const same = String(repHq).replace(/\s/g, '') === String(repPublic).replace(/\s/g, '');
     items.push(same
       ? { label: '대표자 정합성', status: 'match', detail: `등기(금융위)·${repPublicSrc || '공장정보'} 모두 ${repHq} — 일치` }
@@ -1412,23 +1443,37 @@ function assembleLiveReport(name, corp, res) {
   const hireRaw = R.hiring && R.hiring.ok ? R.hiring.data : null;
   // 대표자 마지막 보강 — 금융위·식약처·공장등록 어디에도 없으면(신생·소규모 법인) 지자체 공장정보 → 채용사이트 기업정보
   // ('대표자 : 최경/이병만') 순으로 채운다. 회사가 직접 올린 값이라 등기보다 낮은 등급으로 둔다.
+  // 채용사이트 기업정보의 대표자 — 보강용이자 교차 확인의 한 출처
+  const hireRep = (() => {
+    if (!hireRaw) return null;
+    const REP = /대표(?:자|이사)?\s*(?:명|성명)?\s*[:：]\s*([가-힣]{2,4}(?:\s*[,/·]\s*[가-힣]{2,4}){0,2})(?![가-힣])/;
+    const bad = /^(없음|미상|정보|확인|미공개|공개|비공개)$/;
+    const texts = [...(hireRaw.posts || []).map((p) => [`${p.title} ${p.desc}`, p.host]), ...((hireRaw.extDiag || []).map((d) => [d.finSample || '', d.host]))];
+    for (const [t, host] of texts) {
+      const m = String(t).replace(/\s+/g, ' ').match(REP);
+      if (m && !m[1].split(/[,/·]/).some((x) => bad.test(x.trim()))) return { rep: m[1].replace(/\s+/g, ''), src: `${String(host || '').replace(/^www\./, '')} 기업정보` };
+    }
+    return null;
+  })();
   {
     const ri = basic.findIndex((x) => x.key === '대표자');
     if (ri >= 0 && !basic[ri].value) {
-      const REP = /대표(?:자|이사)?\s*(?:명|성명)?\s*[:：]\s*([가-힣]{2,4}(?:\s*[,/·]\s*[가-힣]{2,4}){0,2})(?![가-힣])/;
-      const bad = /^(없음|미상|정보|확인|미공개|공개|비공개)$/;
       let rep = null, src = null, link = null;
       if (pubBizFacts && pubBizFacts.rep) { rep = pubBizFacts.rep; src = '지자체 공장정보'; link = pubBizFacts.link; }
-      if (!rep && hireRaw) {
-        const texts = [...(hireRaw.posts || []).map((p) => [`${p.title} ${p.desc}`, p.host]), ...((hireRaw.extDiag || []).map((d) => [d.finSample || '', d.host]))];
-        for (const [t, host] of texts) {
-          const m = String(t).replace(/\s+/g, ' ').match(REP);
-          if (m && !m[1].split(/[,/·]/).some((x) => bad.test(x.trim()))) { rep = m[1].replace(/\s+/g, ''); src = `${String(host || '').replace(/^www\./, '')} 기업정보`; break; }
-        }
-      }
+      if (!rep && hireRep) ({ rep, src } = hireRep);
       if (rep) basic[ri] = f('대표자', rep, 'C', src, today, `★ 금융위·식약처·공장등록에 대표자가 없어 ${src}에 게재된 값을 썼습니다 — 회사가 직접 올린 값이라 등기와 다를 수 있습니다. ※ 방문 때 사업자등록증으로 확인하세요.${link ? ` 근거: ${link}` : ''}`);
     }
   }
+  // 대표자 교차 확인 — 첫 값 하나만 쓰지 않고 받은 출처를 모두 대조한다.
+  // 같으면 믿을 근거, 다르면 대표 변경·공동대표·자료 노후를 의심할 신호다.
+  const repCheck = repCross([
+    ['금융위 등기', corp?.rep],
+    ['식약처 제조업 허가', mkRep],
+    ['산단공 공장등록', fctRep, fctRegDe ? `${fctRegDe.slice(0, 4)} 등록` : null],
+    ['지자체 공장정보', pubBizFacts && pubBizFacts.rep],
+    [hireRep ? hireRep.src.replace(/ 기업정보$/, ' 채용정보') : '채용사이트', hireRep && hireRep.rep],
+  ]);
+  { const ri = basic.findIndex((x) => x.key === '대표자'); if (ri >= 0 && repCheck) basic[ri] = { ...basic[ri], cross: repCheck }; }
   const hiring = hireRaw && typeof analyzeHiring === 'function'
     ? { ...analyzeHiring(hireRaw.posts, hireRaw.heads, workforce ? workforce.total : empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs), affil: hireRaw.affil || [] }
     : null;
@@ -1741,6 +1786,7 @@ function assembleLiveReport(name, corp, res) {
     repHq: repVal, repPublic: fctRep || pubBizFacts.rep,
     repPublicSrc: fctRep ? '산단공 공장등록' : '지자체 공장정보',
     repPublicLink: fctRep ? null : pubBizFacts.link,
+    repCheck,
   });
   cross_diag.items.forEach((c) => {
     if (c.status !== 'warn') return;

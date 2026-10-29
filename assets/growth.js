@@ -536,12 +536,32 @@ async function mkLiveScan(repaint) {
     const complete = !failed && all.length >= total * 0.98;
     const removed = complete ? Object.entries(firms).filter(([id, r]) => !r.g && !cur.has(id)).length : null;
     mkState.live = { at: new Date().toISOString(), added, removed, total, makers: makers.length, failed, ledgerAt: led && led.at };
+    mkLiveKeep(mkState.live);
     if (added.length) mkState.view = 'add';
   } catch (e) {
     mkState.live = { err: e && e.message ? e.message : String(e) };
   }
   repaint();
 }
+// 현시점 대조는 명단 전체를 받느라 20~40초 걸린다. 결과를 그날 하루 이 브라우저에 보관해,
+// 대시보드를 다시 열어도 바로 보이고 다음 날이나 「다시 대조」를 누를 때만 새로 받는다.
+const MK_LIVE_KEY = 'vs_mk_live';
+const mkDayOf = (iso) => new Date(iso).toLocaleDateString('sv-SE');
+function mkLiveKeep(v) { try { localStorage.setItem(MK_LIVE_KEY, JSON.stringify(v)); } catch { /* 보관 못 해도 화면은 그대로 */ } }
+function mkLiveRestore() {
+  try {
+    const v = JSON.parse(localStorage.getItem(MK_LIVE_KEY) || 'null');
+    if (v && v.at && Array.isArray(v.added) && mkDayOf(v.at) === mkDayOf(Date.now())) return { ...v, kept: true };
+    localStorage.removeItem(MK_LIVE_KEY);
+  } catch { /* 읽기 막힘 — 보관분 없이 시작 */ }
+  return null;
+}
+// 보관한 대조 뒤에 주간 집계가 새로 돌았으면 그 결과가 이미 들어 있으니 버린다(신규가 두 번 세어진다)
+function mkLiveStale() {
+  const L = mkState.live, b = mkState.data && Date.parse(mkState.data.builtAt);
+  if (L && L.kept && b && b > Date.parse(L.at)) { mkState.live = null; try { localStorage.removeItem(MK_LIVE_KEY); } catch { /* 무시 */ } }
+}
+const mkHm = (iso) => { const d = new Date(iso); return `${mkDayOf(iso) === mkDayOf(Date.now()) ? '오늘' : `${d.getMonth() + 1}/${d.getDate()}`} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 function mkRows(st) {
   const d = st.data; if (!d) return [];
   const v = MK_VIEWS.find((x) => x.id === st.view) || MK_VIEWS[1];
@@ -582,10 +602,11 @@ function mkBadges(r) {
 function mkHtml(st) {
   const d = st.data;
   const Lv = st.live || {};
-  const liveBtn = `<div class="gr-req"><button type="button" class="nb-btn sm${Lv.busy ? '' : ' dark'}" data-mk-live${Lv.busy ? ' disabled' : ''}>${Lv.busy ? `명단 받는 중 ${Lv.done || 0}/${Lv.pages || '…'}쪽` : '최신 자료 조회 (현시점)'}</button>`
-    + `<small>주간 집계 ${(st.data && grWhen(st.data.builtAt)) || '—'}${Lv.at ? ` · 현시점 대조 ${grWhen(Lv.at)}` : ''}</small>`
+  const liveBtn = `<div class="gr-req"><button type="button" class="nb-btn sm${Lv.busy ? '' : ' dark'}" data-mk-live${Lv.busy ? ' disabled' : ''}>${Lv.busy ? `명단 받는 중 ${Lv.done || 0}/${Lv.pages || '…'}쪽` : Lv.at ? '다시 대조' : '최신 자료 조회 (현시점)'}</button>`
+    + `<small>주간 집계 ${(st.data && grWhen(st.data.builtAt)) || '—'}${Lv.at ? ` · 현시점 대조 ${mkHm(Lv.at)}` : ''}</small>`
     + (Lv.err ? `<p class="gr-reqmsg err" role="status">${esc(Lv.err)}</p>`
-      : Lv.at ? `<p class="gr-reqmsg" role="status">식약처 명단 ${Lv.total.toLocaleString()}건(제조 ${Lv.makers.toLocaleString()}곳)을 방금 받아 대조했습니다 — 주간 집계 이후 <b>새 제조업체 ${Lv.added.length}곳</b>${Lv.removed != null ? ` · 빠진 업체 ${Lv.removed}곳` : ''}${Lv.failed ? ` · 못 받은 쪽 ${Lv.failed}개(빠짐은 세지 않음)` : ''}</p>` : '')
+      : Lv.at ? `<p class="gr-reqmsg" role="status"><b>${mkHm(Lv.at)}</b> 대조 결과 · 식약처 명단 ${Lv.total.toLocaleString()}건(제조 ${Lv.makers.toLocaleString()}곳) — 주간 집계 이후 <b>새 제조업체 ${Lv.added.length}곳</b>${Lv.removed != null ? ` · 빠진 업체 ${Lv.removed}곳` : ''}${Lv.failed ? ` · 못 받은 쪽 ${Lv.failed}개(빠짐은 세지 않음)` : ''}`
+        + ` <span class="mk-kept">(이 브라우저에 오늘 하루 보관${Lv.kept ? ' 중' : ''})</span></p>` : '')
     + '</div>';
   const head = (sub) => `<div class="gr-head"><div><h2>제조업 등록 현황 <small>식약처 화장품 제조업 허가 명단 누적 관리</small></h2>${sub || ''}</div>${liveBtn}</div>`;
   if (st.err) return head() + `<div class="gr-empty">명단 변동 자료를 불러오지 못했습니다 — ${esc(st.err)}</div>`;
@@ -648,6 +669,7 @@ function mountMakers() {
   if (!box) return;
   const paint = () => { if (box.clientWidth) mkState.cw = Math.max(280, Math.round(box.clientWidth - 40)); box.innerHTML = mkHtml(mkState); };
   mkState.repaint = paint;
+  if (!mkState.live) { mkState.live = mkLiveRestore(); if (mkState.live && mkState.live.added.length) mkState.view = 'add'; }
   let lastW = 0, rt = null;
   if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(box.clientWidth - lastW) < 24) return; lastW = box.clientWidth; clearTimeout(rt); rt = setTimeout(() => { if (mkState.data) paint(); }, 150); }).observe(box);
   box.addEventListener('click', (e) => {
@@ -656,14 +678,14 @@ function mountMakers() {
     const s = e.target.closest('[data-mk-sido]'); if (s) { mkState.sido = mkState.sido === s.dataset.mkSido ? null : s.dataset.mkSido; paint(); return; }
     if (e.target.closest('[data-mk-nps]')) { mkState.npsOnly = !mkState.npsOnly; paint(); return; }
     const sv = e.target.closest('[data-mk-save]');
-    if (sv) { const r = (mkState.data.recent || []).find((x) => x.id === sv.dataset.mkSave); if (r) svToggleFirm(r).catch((er) => svToast(`저장하지 못했습니다 — ${er.message}`)); return; }
+    if (sv) { const r = [...((mkState.live && mkState.live.added) || []), ...(mkState.data.recent || [])].find((x) => x.id === sv.dataset.mkSave); if (r) svToggleFirm(r).catch((er) => svToast(`저장하지 못했습니다 — ${er.message}`)); return; }
     const g = e.target.closest('[data-gr-go]');
     if (g) { const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = ''; lookup(g.dataset.grGo, ''); return; }
     if (e.target.closest('[data-gr-req]')) { grRequest(() => { if (growthState.repaint) growthState.repaint(); }); }
     if (e.target.closest('[data-gr-gh]')) grWatchGh();
   });
   paint();
-  mkLoad().then(() => { paint(); dashTabsPaint(); if (growthState.repaint) growthState.repaint(); }).catch((e) => { mkState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
+  mkLoad().then(() => { mkLiveStale(); paint(); dashTabsPaint(); if (growthState.repaint) growthState.repaint(); }).catch((e) => { mkState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
 }
 const mkLoad = (bust) => fetch(`data/growth/makers.json?v=${BUILD}-${bust || new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' })
   .then((r) => { if (r.status === 404) throw new Error('아직 첫 집계 전입니다 — 매주 월요일 아침 또는 「최신 자료 조회 요청」 때 만들어집니다'); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
