@@ -1,0 +1,44 @@
+name: Diagnose web page text
+
+# 외부 페이지(채용사이트 기업정보 등)의 글과 링크 구조를 본다 — 파서 작성용. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      urls: { description: '주소(공백 구분)', required: true, type: string }
+      grep: { description: '이 글자 주변을 보여 줌(| 로 여러 개)', required: false, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          URLS: ${{ inputs.urls }}
+          G: ${{ inputs.grep }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3800));
+          const txt = (h) => String(h || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+          for (const u of process.env.URLS.split(/\s+/).filter(Boolean)) {
+            try {
+              const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36' }, redirect: 'follow', signal: AbortSignal.timeout(30000) });
+              const h = await r.text(); const t = txt(h);
+              n(`${u} · HTTP ${r.status} · html ${h.length} · text ${t.length}`);
+              const links = [...new Set([...h.matchAll(/href=["']([^"']+)["']/g)].map((m) => m[1]).filter((x) => /compan|finan|info|재무/i.test(x)))].slice(0, 40);
+              n(`links: ${links.join(' ')}`);
+              const apis = [...new Set([...h.matchAll(/["'](\/?[a-zA-Z0-9_\/.-]*(?:api|ajax|json)[a-zA-Z0-9_\/.?=&-]*)["']/g)].map((m) => m[1]))].slice(0, 30);
+              n(`api-ish: ${apis.join(' ')}`);
+              for (const g of (process.env.G || '').split('|').map((x) => x.trim()).filter(Boolean)) {
+                let at = 0, k = 0;
+                while ((at = t.indexOf(g, at)) >= 0 && k < 3) { n(`[${g}] …${t.slice(Math.max(0, at - 150), at + 450)}`); at += g.length; k++; }
+                const hi = h.indexOf(g); if (hi >= 0) n(`[${g} html] ${h.slice(Math.max(0, hi - 200), hi + 600).replace(/\s+/g, ' ')}`);
+              }
+            } catch (e) { n(`${u} · 오류 ${e.message}`); }
+          }
+          JS
+          node d.mjs
