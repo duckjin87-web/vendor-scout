@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 224;
+const BUILD = 225;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3961,6 +3961,82 @@ function fieldRow(fld) {
   return row;
 }
 
+// ── 생산 제품군 ──
+// 일반 화장품은 품목 신고 의무가 없어 업체별 공식 제품 목록이 없다. 이미 받은 자료를 제품군별로 모아
+// 근거 등급(실제 생산 / 신고·판매 / 추정)을 붙인다. 등급은 그 제품군에 붙은 근거 중 가장 강한 것이다.
+const PL_CATS = [
+  ['sun', '선케어', /선\s?(크림|스틱|블록|로션|쿠션|밀크|젤|스프레이|에센스|세럼|케어)|썬|자외선|SPF/i],
+  ['hair', '헤어', /샴푸|린스|컨디셔너|헤어|염모|염색|탈모|두피|모발|펌제/],
+  ['body', '바디·핸드', /바디|핸드\s?(크림|워시|로션)|풋\s?(크림|케어)|데오드|입욕|배쓰|바스\s?(솔트|밤)|비누/],
+  ['clean', '클렌징', /클렌징|클렌저|클렌즈|폼\s?클렌|버블\s?폼|리무버|필링|스크럽/],
+  ['makeup', '색조', /립\s?(스틱|밤|글로|틴트|라이너|오일|컬러|크림)|틴트|파운데이션|쿠션|팩트|파우더|섀도|쉐도|마스카라|아이\s?라이너|브로우|블러셔|하이라이터|프라이머|컨실러|BB\s?크림|CC\s?크림|색조|메이크업/i],
+  ['mask', '마스크팩', /마스크\s?팩|시트\s?마스크|마스크\s?시트|모델링\s?팩|워시\s?오프|필\s?오프|하이드로\s?겔\s?패치/],
+  ['nail', '네일', /네일|매니큐어/],
+  ['perfume', '향수·방향', /향수|퍼퓸|오드\s?(뚜왈렛|코롱)|디퓨저|방향제/],
+  ['quasi', '의약외품', /의약외품|치약|구강|가글|손\s?소독|소독제/],
+  ['skin', '기초(스킨케어)', /스킨\s?(케어)?|토너|로션|에멀(전|젼)|에센스|세럼|앰플|크림|미스트|화장수|아이\s?크림|기초/],
+];
+const PL_FUNC = { 자외선차단: 'sun', 미백: 'skin', 주름개선: 'skin', 주름: 'skin', 염모: 'hair', 탈모: 'hair', 여드름: 'clean', 튼살: 'body', 아토피: 'body', 탈색: 'hair', 제모: 'body' };
+const PL_TIER = { made: ['실제 생산', 'ok', 3], sold: ['신고·판매', 'info', 2], guess: ['추정', 'dim', 1] };
+const plCatOf = (t) => { const s = String(t || ''); const hit = PL_CATS.find(([, , re]) => re.test(s)); return hit ? hit[0] : null; };
+function productLines(report) {
+  const P = (report.meta && report.meta.prod_src) || null;
+  const deep = (report._siteDeep && report._siteDeep.data) || null;
+  if (!P && !deep) return null;
+  const cats = {};
+  const add = (id, tier, src, ex) => {
+    if (!id) return;
+    const c = cats[id] || (cats[id] = { id, tier, ev: {} });
+    if (PL_TIER[tier][2] > PL_TIER[c.tier][2]) c.tier = tier;
+    const e = c.ev[src] || (c.ev[src] = { tier, n: 0, ex: [] });
+    e.n++; if (ex && e.ex.length < 3 && !e.ex.includes(ex)) e.ex.push(ex);
+  };
+  if (P) {
+    // 공장등록 생산품 — '화장품(기초, 색조)'처럼 쉼표로 여러 품목이 오기도 한다
+    if (P.fct) String(P.fct).split(/[,·/()]|및/).map((x) => x.trim()).filter(Boolean).forEach((x) => add(plCatOf(x) || (/기초/.test(x) ? 'skin' : null), 'made', '공장등록 생산품', P.fct));
+    (P.rpt || []).forEach((r) => add(plCatOf(r.n), r.m ? 'made' : 'sold', r.m ? '기능성 보고품목(제조원)' : '기능성 보고품목', r.n));
+    (P.func || []).forEach((k) => { const id = Object.entries(PL_FUNC).find(([w]) => String(k).includes(w)); if (id) add(id[1], 'sold', '기능성 종류', k); });
+    (P.recall || []).forEach((n) => add(plCatOf(n), 'sold', '회수·판매중지 품목', n));
+    (P.hire || []).forEach((t) => { const seen = new Set(); PL_CATS.forEach(([id, , re]) => { const m = String(t).match(re); if (m && !seen.has(id)) { seen.add(id); add(id, 'guess', '채용공고 문구', m[0]); } }); });
+  }
+  if (deep) {
+    [...(deep.product_categories || []), ...(deep.production_items || [])].forEach((x) => add(plCatOf(x), 'guess', '홈페이지', String(x).slice(0, 30)));
+  }
+  const list = PL_CATS.map(([id, name]) => cats[id] && { ...cats[id], name }).filter(Boolean)
+    .sort((a, b) => PL_TIER[b.tier][2] - PL_TIER[a.tier][2] || Object.values(b.ev).reduce((s, e) => s + e.n, 0) - Object.values(a.ev).reduce((s, e) => s + e.n, 0));
+  return { list, fct: P && P.fct, forms: (P && P.forms) || [], rptN: P ? (P.rpt || []).length : 0, hasDeep: !!deep };
+}
+function productLineBlock(report) {
+  if (!report.meta || !report.meta.live) return null;
+  const R = productLines(report);
+  const b = el('div', 'block cat-pl');
+  b.id = 'prodLines';
+  b.appendChild(el('h3', null, `생산 제품군<span class="cnt">${R && R.list.length ? `${R.list.length}개 제품군` : '근거 없음'}</span>`));
+  if (!R || !R.list.length) {
+    b.appendChild(el('p', 'pl-empty', '공장등록 생산품·기능성 보고품목·회수 품목·채용공고에서 제품군을 가늠할 단서를 찾지 못했습니다. 일반 화장품은 품목 신고 의무가 없어 공개 목록이 없습니다 — 방문 때 주력 제품과 생산 라인을 물어보세요.'));
+    return b;
+  }
+  const rows = R.list.map((c) => {
+    const [tl, tc] = PL_TIER[c.tier];
+    const ev = Object.entries(c.ev).sort((a, b) => PL_TIER[b[1].tier][2] - PL_TIER[a[1].tier][2])
+      .map(([src, e]) => `<span class="pl-ev ${PL_TIER[e.tier][1]}"><b>${esc(src)}</b>${e.n > 1 ? ` ${e.n}건` : ''}${e.ex.length ? ` · ${e.ex.map((x) => `「${esc(x.length > 26 ? `${x.slice(0, 25)}…` : x)}」`).join(' ')}` : ''}</span>`).join('');
+    return `<div class="pl-row"><span class="pl-nm">${esc(c.name)}</span><span class="pl-t ${tc}">${tl}</span><div class="pl-evs">${ev}</div></div>`;
+  }).join('');
+  const extra = [R.fct ? `공장등록 생산품 원문: ${R.fct}` : '', R.forms.length ? `기능성 신고 제형: ${R.forms.join(', ')}` : ''].filter(Boolean);
+  b.appendChild(el('div', 'pl-body', `<div class="pl-chips">${R.list.map((c) => `<span class="pl-chip ${PL_TIER[c.tier][1]}">${esc(c.name)}</span>`).join('')}</div>`
+    + `<div class="pl-rows">${rows}</div>`
+    + (extra.length ? `<p class="pl-raw">${extra.map(esc).join('<br>')}</p>` : '')
+    + '<p class="pl-foot"><b>실제 생산</b> 공장등록 생산품·제조원으로 올라간 보고품목 · <b>신고·판매</b> 이 업체 이름이 붙은 기능성 보고·회수 품목(책임판매로 판 것일 수 있음) · <b>추정</b> 채용공고·홈페이지 문구. '
+    + `일반 화장품은 품목 신고 의무가 없어 공식 목록이 없습니다 — 주력 제품과 라인별 생산 품목은 방문 때 확인하세요.${R.hasDeep ? '' : ' 홈페이지 심층분석이 끝나면 그 제품 분류도 추정 근거로 더합니다.'}</p>`));
+  return b;
+}
+function refreshProductLines(report) {
+  const old = document.getElementById('prodLines');
+  if (!old || currentReport !== report) return;
+  const nb = productLineBlock(report);
+  if (nb) old.replaceWith(nb);
+}
+
 function block(title, icon, fields, cat) {
   const b = el('div', 'block' + (cat ? ' cat-' + cat : ''));
   // 값이 없는 항목은 접어 둔다. 씨앤티드림 조회에서 '생산역량·인원' 9개 중 4개가 빈칸이었고
@@ -6652,7 +6728,7 @@ function renderAreaTab(report) {
       air = air.replace(/^<div class="at-sec at-air">/, '<div class="at-air">');
     }
     // 면적과 입지·부지는 한 카드로 — 건물 칸 아래에 용도지역·도로·공시가·증설 여력과 주소 대조를 잇는다
-    const areaPlace = { html: area.html + `<h4 class="at-sub">입지 · 부지</h4>${placePart.html}`,
+    const areaPlace = { html: area.html + (placePart.titled ? placePart.html : `<h4 class="at-sub">입지 · 부지</h4>${placePart.html}`),
       src: [...area.src, ...placePart.src], badge: `${area.badge || ''}${placePart.badge || ''}` };
     wrap.innerHTML = `<div class="at-head">${headHtml()}</div>`
       + cat('area', '면적 · 입지', areaPlace)
@@ -6958,6 +7034,8 @@ function render(report, opts = {}) {
   const areaTab = renderAreaTab(report);
   core.appendChild(block('생산역량 · 인원', '',
     visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod'));
+  const plB = productLineBlock(report);
+  if (plB) core.appendChild(plB);
   const wfB = workforceBlock(report);
   if (wfB) core.appendChild(wfB);
   if (!excl.has('finance')) core.appendChild(financeBlock(report));
@@ -7104,6 +7182,7 @@ function render(report, opts = {}) {
           report._siteDeep = reconcileDeep(state, report);   // 공식 API와 대조해 모순을 표시
 
           paintDeep(report._siteDeep);
+          refreshProductLines(report);   // 홈페이지 제품 분류를 생산 제품군 카드의 '추정' 근거로
           refreshVisitChecklist(report); // 인증·제형·설비 확인항목을 체크리스트에 반영
           saveLastReport(report);
         })

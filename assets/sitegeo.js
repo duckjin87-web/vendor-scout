@@ -263,10 +263,10 @@ function sgPlace(report, B) {
   }
   const lim = Z.limits.length ? `<p class="sg-warn">⚠ ${esc(Z.limits.join(', '))} 저촉 — 증설·폐수 배출에 제약이 있을 수 있습니다</p>` : '';
   const rows = (G.addrs || []).filter((r) => !/^제조업 허가/.test(r.label));      // 예전 저장분에 섞인 다른 제조소
-  // 주소 위치 대조는 짧은 막대로 줄여 칸들 오른쪽에 붙인다(좁은 화면에서는 아래로 내려간다)
-  const addr = rows.length ? `<div class="sg-addr"><h4 class="at-sub">주소 위치 대조 <small>공장 좌표 기준 거리</small></h4><div class="sg-dist">`
+  // 주소 위치 대조는 짧은 막대로 줄여 「입지 · 부지」 제목 옆(칸들 위)에 둔다. 거리가 크게 벌어진 줄은 음영
+  const addr = rows.length ? `<div class="sg-addr"><p class="sg-addrh">주소 위치 대조 <small>공장 좌표 기준 거리</small></p><div class="sg-dist">`
     + rows.map((r) => { const t = SG_TIER(r.m); const w = r.m == null ? 0 : Math.max(2, Math.min(100, (Math.log10(Math.max(r.m, 1)) / 5) * 100));
-      return `<div class="sg-drow" title="${esc(r.addr)}"><span>${esc(r.label)}</span><span class="sg-dbar"><i class="${t.lv}" style="width:${w.toFixed(0)}%"></i></span><span class="sg-dm">${sgFmtM(r.m)}</span>${sgChip(t.lv, t.t)}</div>`; }).join('')
+      return `<div class="sg-drow${t.lv === 'warn' || t.lv === 'bad' ? ` hl ${t.lv}` : ''}" title="${esc(r.addr)}"><span>${esc(r.label)}</span><span class="sg-dbar"><i class="${t.lv}" style="width:${w.toFixed(0)}%"></i></span><span class="sg-dm">${sgFmtM(r.m)}</span>${sgChip(t.lv, t.t)}</div>`; }).join('')
     + '</div></div>' : '';
   const uses = S.uses && S.uses.length ? `<details class="sg-uses"><summary>토지이용계획 전체 ${S.uses.length}건</summary><p>${S.uses.map((u) => `${esc(u.name)}<small>(${esc(u.rel)})</small>`).join(' · ')}</p></details>` : '';
   const src = [
@@ -276,7 +276,8 @@ function sgPlace(report, B) {
     rows.length ? '주소 위치 대조: 후보 주소를 브이월드 지오코딩(못 찾으면 카카오)으로 좌표로 바꿔 거리를 쟀습니다 · 50m 이내 일치 / 1km 미만 같은 단지 / 10km 미만 분리 의심 / 그 이상 본사·공장 분리 · 막대는 로그 눈금' : '',
     `좌표 출처: ${esc(G.src || '브이월드')}`,
   ].filter(Boolean);
-  return { html: `<p class="sg-lead ${Z.level}">${esc(Z.text)}</p><div class="sg-top${addr ? ' has-addr' : ''}"><div class="sg-facts">${facts.join('')}</div>${addr}</div>${lim}${uses}`, src,
+  return { html: `<div class="sg-top"><div class="sg-ttl"><h4 class="at-sub">입지 · 부지</h4><p class="sg-lead ${Z.level}">${esc(Z.text)}</p></div>${addr}</div>`
+      + `<div class="sg-facts">${facts.join('')}</div>${lim}${uses}`, src, titled: true,
     badge: sgChip(Z.level, Z.zone || '용도 미확인') };
 }
 

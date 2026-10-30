@@ -1841,7 +1841,20 @@ function assembleLiveReport(name, corp, res) {
       bld: R.bld ? (R.bld.ok ? R.bld.data : { err: R.bld.err, queried: R.bld.queried }) : null,
       site: R.site && R.site.ok ? R.site.data : null,          // 실제 공장 소재지 선정 결과(후보·근거)
       mfds_sites: nedSites.length ? nedSites : null,
-      cgmp_news: cgmpNews.length ? cgmpNews : null,            // CGMP 인증 기사(이른 순) — 연혁의 취득 시점            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
+      cgmp_news: cgmpNews.length ? cgmpNews : null,
+      // 생산 제품군 카드의 재료 — 이미 받은 자료에서 제품명·품목 문구만 추린다(분류는 화면에서)
+      prod_src: {
+        // 보고품목은 이 업체가 제조원으로 올라 있는지(제조 칸 일치) 따로 표시한다 — 아니면 책임판매로 본다
+        rpt: rl.slice(0, 300).map((r) => {
+          const n = pickByKey(r, /ITEM_?NAME|PRDLST_?NM|PRDUCT_?NM|PRODUCT|품목명|제품명/i);
+          const made = Object.entries(r).some(([k, v]) => /MANUF|MNFCT|MNFTR|MAKER|MNF_|제조/i.test(k) && stripCorp(String(v || '')).replace(/\s/g, '').includes(rptKey));
+          return n ? { n: String(n), m: made ? 1 : 0 } : null;
+        }).filter(Boolean),
+        func: funcKinds, forms: allForms,
+        fct: fctProduct || null, fctInduty: fctInduty || null,
+        recall: recalls.map((x) => x.product).filter(Boolean).slice(0, 30),
+        hire: hireRaw ? (hireRaw.posts || []).slice(0, 40).map((p) => `${p.title || ''} ${p.desc || ''}`.slice(0, 300)) : [],
+      },            // CGMP 인증 기사(이른 순) — 연혁의 취득 시점            // 의약품안전나라 등록 제조소(공장 면적 탭 합산용)
       lookup: (corp && corp._lookup) || null,                   // 어떤 입력으로, 무엇을 근거로 이 업체를 조회했는지
       workforce,                                                // 고용·산재보험 사업장별 인원·역할
       // 인력 표에 함께 싣는 참고값 — 국민연금 월별 추이, 공장등록 신고 종업원수
