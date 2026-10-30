@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 225;
+const BUILD = 226;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4008,6 +4008,8 @@ function productLines(report) {
 }
 function productLineBlock(report) {
   if (!report.meta || !report.meta.live) return null;
+  // 이 카드 이전에 저장된 리포트는 재료(prod_src)가 없다 — '근거 없음'으로 오해하지 않게 카드를 빼고, 다시 조회하면 생긴다
+  if (!report.meta.prod_src && !(report._siteDeep && report._siteDeep.data)) return null;
   const R = productLines(report);
   const b = el('div', 'block cat-pl');
   b.id = 'prodLines';
@@ -4031,10 +4033,12 @@ function productLineBlock(report) {
   return b;
 }
 function refreshProductLines(report) {
+  if (currentReport !== report) return;
   const old = document.getElementById('prodLines');
-  if (!old || currentReport !== report) return;
   const nb = productLineBlock(report);
-  if (nb) old.replaceWith(nb);
+  if (!nb) return;
+  if (old) old.replaceWith(nb);
+  else { const wf = document.querySelector('.core-blocks .cat-prod'); if (wf) wf.after(nb); }
 }
 
 function block(title, icon, fields, cat) {
