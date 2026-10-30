@@ -263,10 +263,11 @@ function sgPlace(report, B) {
   }
   const lim = Z.limits.length ? `<p class="sg-warn">⚠ ${esc(Z.limits.join(', '))} 저촉 — 증설·폐수 배출에 제약이 있을 수 있습니다</p>` : '';
   const rows = (G.addrs || []).filter((r) => !/^제조업 허가/.test(r.label));      // 예전 저장분에 섞인 다른 제조소
-  const addr = rows.length ? `<h4 class="at-sub">주소 위치 대조 <small>공장 좌표 기준 거리</small></h4><div class="sg-dist">`
+  // 주소 위치 대조는 짧은 막대로 줄여 칸들 오른쪽에 붙인다(좁은 화면에서는 아래로 내려간다)
+  const addr = rows.length ? `<div class="sg-addr"><h4 class="at-sub">주소 위치 대조 <small>공장 좌표 기준 거리</small></h4><div class="sg-dist">`
     + rows.map((r) => { const t = SG_TIER(r.m); const w = r.m == null ? 0 : Math.max(2, Math.min(100, (Math.log10(Math.max(r.m, 1)) / 5) * 100));
       return `<div class="sg-drow" title="${esc(r.addr)}"><span>${esc(r.label)}</span><span class="sg-dbar"><i class="${t.lv}" style="width:${w.toFixed(0)}%"></i></span><span class="sg-dm">${sgFmtM(r.m)}</span>${sgChip(t.lv, t.t)}</div>`; }).join('')
-    + '</div>' : '';
+    + '</div></div>' : '';
   const uses = S.uses && S.uses.length ? `<details class="sg-uses"><summary>토지이용계획 전체 ${S.uses.length}건</summary><p>${S.uses.map((u) => `${esc(u.name)}<small>(${esc(u.rel)})</small>`).join(' · ')}</p></details>` : '';
   const src = [
     `용도지역·도로·산업단지: 브이월드 토지이용계획 (필지 ${esc((S.parcel && S.parcel.addr) || '미확인')})`,
@@ -275,7 +276,7 @@ function sgPlace(report, B) {
     rows.length ? '주소 위치 대조: 후보 주소를 브이월드 지오코딩(못 찾으면 카카오)으로 좌표로 바꿔 거리를 쟀습니다 · 50m 이내 일치 / 1km 미만 같은 단지 / 10km 미만 분리 의심 / 그 이상 본사·공장 분리 · 막대는 로그 눈금' : '',
     `좌표 출처: ${esc(G.src || '브이월드')}`,
   ].filter(Boolean);
-  return { html: `<p class="sg-lead ${Z.level}">${esc(Z.text)}</p><div class="sg-facts">${facts.join('')}</div>${lim}${addr}${uses}`, src,
+  return { html: `<p class="sg-lead ${Z.level}">${esc(Z.text)}</p><div class="sg-top${addr ? ' has-addr' : ''}"><div class="sg-facts">${facts.join('')}</div>${addr}</div>${lim}${uses}`, src,
     badge: sgChip(Z.level, Z.zone || '용도 미확인') };
 }
 
@@ -364,7 +365,8 @@ function sg3dHtml(report, B) {
   };
   const html = `<div class="s3"><div class="s3-stage"><canvas class="s3-cv" role="img" aria-label="${esc(nm)} 건물과 한국콜마 세종 건물을 같은 축척 3D로 나란히 세운 그림"></canvas>`
     + `<div class="s3-ctl"><button type="button" class="nb-btn sm" data-s3="side" aria-pressed="true">위아래로</button><button type="button" class="nb-btn sm" data-s3="over" aria-pressed="false">겹쳐 보기</button><button type="button" class="nb-btn sm" data-s3="reset">처음 시점</button></div>`
-    + `<span class="s3-hint">끌어서 돌리기 · 위아래로 끌면 각도</span></div>`
+    + `<div class="s3-zoom"><button type="button" class="nb-btn sm" data-s3="in" aria-label="확대">+</button><button type="button" class="nb-btn sm" data-s3="out" aria-label="축소">−</button></div>`
+    + `<span class="s3-hint">끌어서 돌리기 · 위아래로 끌면 각도 · +− 확대</span></div>`
     + `<div class="s3-side"><p class="s3-head"><b>${esc(nm)}</b>의 바닥 면적은 한국콜마 세종의 <em>${pct(st.myFoot, st.refFoot)}</em>${unit ? ' (호실 전용)' : ''}</p>`
     + `<div class="s3-legend"><span><i class="s3-sw m"></i>${esc(nm)}${unit ? ' 호실' : ` ${D.mine.bldgs.length}동`}</span><span><i class="s3-sw k"></i>한국콜마 세종 ${D.ref.bldgs.length}동</span></div>`
     + bar('바닥 면적', st.myFoot, st.refFoot, (v) => `${sgPy(v)}평`)
@@ -412,7 +414,7 @@ async function sg3dSat(g) {
   const X0 = wx(lonOf(0)) - tx0 * 256, Y0 = wy(latOf(0)) - ty0 * 256;
   return { cv, X0, Y0, ax: wx(lonOf(1)) - wx(lonOf(0)), ay: wy(latOf(1)) - wy(latOf(0)) };
 }
-// 캔버스 그리기 — st: { yaw, pitch, mode }
+// 캔버스 그리기 — st: { yaw, pitch, mode, zoom }
 function sg3dDraw(cv, D, st) {
   const W = cv.clientWidth, H = cv.clientHeight;
   if (!W || !H) return;
@@ -438,11 +440,14 @@ function sg3dDraw(cv, D, st) {
   }
   const groups = [{ g: D.ref, o: [0, 0], rgbc: kRGB, a: 1, key: 'k', sat: D._sat && D._sat.k }, { g: D.mine, o: off, rgbc: mRGB, a: over ? 0.62 : 0.95, key: 'm', sat: D._sat && D._sat.m }];
   const allX = [rb[0], rb[1], ...(over ? [] : [mb[0] + off[0], mb[1] + off[0]])], allY = [rb[2], rb[3], ...(over ? [] : [mb[2] + off[1], mb[3] + off[1]])];
-  const cx0 = (Math.min(...allX) + Math.max(...allX)) / 2, cy0 = (Math.min(...allY) + Math.max(...allY)) / 2;
-  const Rxy = Math.max(...allX.map((x) => Math.abs(x - cx0)), ...allY.map((y) => Math.abs(y - cy0))) * 1.08 || 50;
+  const fx = (Math.min(...allX) + Math.max(...allX)) / 2, fy = (Math.min(...allY) + Math.max(...allY)) / 2;
+  const Rxy = Math.max(...allX.map((x) => Math.abs(x - fx)), ...allY.map((y) => Math.abs(y - fy))) * 1.08 || 50;
+  // 확대할수록 화면 가운데를 조회 업체 쪽으로 옮긴다 — 크게 볼 때 보고 싶은 건 업체 건물이다
+  const zm = st.zoom || 1, pull = zm > 1 ? Math.min(1, (zm - 1) * 1.2) : 0;
+  const cx0 = fx + ((mb[0] + mb[1]) / 2 + off[0] - fx) * pull, cy0 = fy + ((mb[2] + mb[3]) / 2 + off[1] - fy) * pull;
   const maxZ = Math.max(...[D.ref, D.mine].flatMap((g) => g.bldgs.map((b) => (b.floors || 1) * SG_FLOOR_M)));
   const ct = Math.cos(st.yaw), sn = Math.sin(st.yaw), cp = Math.cos(st.pitch), sp = Math.sin(st.pitch);
-  const scale = Math.min(W / (2 * Rxy), H / (2 * Rxy * sp + maxZ * cp)) * 0.96;
+  const scale = Math.min(W / (2 * Rxy), H / (2 * Rxy * sp + maxZ * cp)) * 0.96 * zm;
   const P = ([x, y, z]) => { const X = x - cx0, Y = y - cy0; const xr = X * ct - Y * sn, yr = X * sn + Y * ct;
     return { x: W / 2 + xr * scale, y: H / 2 - (yr * sp + z * cp - maxZ * cp / 2) * scale, d: yr * cp - z * sp }; };
   const path = (pts) => { c.beginPath(); pts.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y))); c.closePath(); };
@@ -518,7 +523,7 @@ function sg3dDraw(cv, D, st) {
 }
 function sgBind3d(root, D, label) {
   const cv = root.querySelector('.s3-cv'); if (!cv || !D) return;
-  const st = { yaw: -0.18, pitch: 0.95, mode: 'side', label };
+  const st = { yaw: -0.18, pitch: 0.95, mode: 'side', label, zoom: 1 };
   const draw = () => sg3dDraw(cv, D, st);
   let drag = null;
   cv.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, yaw: st.yaw, pitch: st.pitch }; cv.setPointerCapture(e.pointerId); cv.classList.add('drag'); });
@@ -527,7 +532,8 @@ function sgBind3d(root, D, label) {
   cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
   root.querySelectorAll('[data-s3]').forEach((b) => b.addEventListener('click', () => {
     const k = b.dataset.s3;
-    if (k === 'reset') { st.yaw = -0.18; st.pitch = 0.95; } else { st.mode = k; root.querySelectorAll('[data-s3="side"],[data-s3="over"]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.s3 === k))); }
+    if (k === 'in' || k === 'out') st.zoom = Math.max(0.6, Math.min(6, st.zoom * (k === 'in' ? 1.4 : 1 / 1.4)));
+    else if (k === 'reset') { st.yaw = -0.18; st.pitch = 0.95; st.zoom = 1; } else { st.mode = k; root.querySelectorAll('[data-s3="side"],[data-s3="over"]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.s3 === k))); }
     draw();
   }));
   if (window.ResizeObserver) new ResizeObserver(draw).observe(cv);

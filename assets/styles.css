@@ -2337,8 +2337,13 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .sg-uses summary { cursor: pointer; }
 .sg-uses p { margin: 6px 0 0; line-height: 1.7; }
 .sg-uses small { margin-left: 2px; }
+/* 칸들과 주소 위치 대조를 한 줄에 — 대조는 짧은 막대로 오른쪽에 붙는다 */
+.sg-top.has-addr { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.sg-top.has-addr .sg-facts { flex: 1 1 520px; min-width: 0; }
+.sg-addr { flex: 0 1 auto; min-width: 0; }
+.sg-addr .at-sub { margin: 0 0 6px; }
 .sg-dist { display: grid; gap: 6px; }
-.sg-drow { display: grid; grid-template-columns: 9em minmax(0, 1fr) 4.6em auto; gap: 8px; align-items: center; font-size: 12.5px; }
+.sg-drow { display: grid; grid-template-columns: max-content 56px 3.6em auto; gap: 8px; align-items: center; font-size: 12.5px; }
 .sg-drow.base b { font-weight: 800; }
 .sg-dbar { height: 8px; border-radius: 4px; background: var(--rule); position: relative; overflow: hidden; }
 .sg-dbar i { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--gA); }
@@ -2385,6 +2390,8 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 @media (max-width: 560px) { .s3-cv { height: 380px; } }
 .s3-ctl { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .s3-ctl .nb-btn[aria-pressed="true"] { background: var(--text); color: var(--panel); border-color: var(--text); }
+.s3-zoom { position: absolute; bottom: 28px; right: 8px; display: flex; flex-direction: column; gap: 4px; }
+.s3-zoom .nb-btn { width: 30px; padding: 2px 0; font-size: 16px; font-weight: 800; line-height: 1.3; }
 .s3-hint { position: absolute; right: 10px; bottom: 8px; font-size: 11px; color: var(--faint); pointer-events: none; }
 .s3-side { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 16px; min-width: 0; }
 .s3-side .s3-head, .s3-side .s3-legend { grid-column: 1 / -1; }
