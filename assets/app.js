@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 227;
+const BUILD = 228;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -6722,7 +6722,7 @@ function renderAreaTab(report) {
         src: [...s3.src, ...boxSrc], badge: s3.badge }
       : { html: '<div data-slot="cmp"></div>', src: ['건물 윤곽(브이월드)을 아직 받지 못해 건축물대장 면적의 육면체로만 비교합니다', ...boxSrc] };
     const place = sg ? sgPlace(report, B) : null;
-    const placePart = { html: `${place ? place.html : ''}<div data-slot="rv"></div>`, src: place ? place.src : [], badge: place ? place.badge : '' };
+    const placePart = { html: `${place ? place.html : ''}<div data-slot="rv"></div>`, src: place ? place.src : [], badge: place ? place.badge : '', titled: !!(place && place.titled) };
     const tk = truckPart();
     // 대기배출 — 제목줄의 출처는 「!」 안으로
     let air = airSecHtml(M), airSrc = [];

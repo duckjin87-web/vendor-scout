@@ -2343,7 +2343,10 @@ details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
 .sg-chip.warn { color: var(--gC); background: var(--gC-bg); }
 .sg-chip.bad { color: var(--risk); background: var(--risk-bg); }
 .sg-chip.unk { color: var(--muted); background: var(--gD-bg); }
-.sg-ttl .sg-lead { margin: 6px 0 10px; }
+/* 제목 옆에 판정 문구를 한 줄로 — 세로 공간을 아낀다 */
+.sg-ttl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin: 4px 0 8px; }
+.sg-ttl .at-sub { margin: 0; }
+.sg-ttl .sg-lead { margin: 0; }
 .sg-lead { margin: 0 0 10px; font-size: 13.5px; font-weight: 700; line-height: 1.55; }
 .sg-lead.ok { color: var(--gA); } .sg-lead.warn { color: var(--gC); } .sg-lead.bad { color: var(--risk); } .sg-lead.unk { color: var(--muted); }
 .sg-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
