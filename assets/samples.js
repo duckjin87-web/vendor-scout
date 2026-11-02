@@ -1283,6 +1283,8 @@ function assembleLiveReport(name, corp, res) {
       return { title, link: it.link || '', desc, tag: oemTag(host, title + ' ' + desc), rel: it._rel || null };
     });
 
+  // 화면에는 120자로 줄인 설명을 싣지만, 대표자 같은 값은 잘리기 전 원문에서 읽는다
+  const oemFull = new Map(oemItems.map((it) => [it.link || '', `${String(it.title || '')} ${String(it.description || '')}`.replace(/<\/?b>/g, '')]));
   // 지자체 공장정보 페이지에서 대표자·연락처·종업원수를 발췌한다(있으면)
   const pubBizFacts = publicBizFacts(oem_trace);
 
@@ -1455,8 +1457,35 @@ function assembleLiveReport(name, corp, res) {
     }
     return null;
   })();
+  // 웹 사업자정보 페이지(bizdang 등)의 대표자 — 관련성 검증을 통과했고 사업자번호까지 맞은 언급에서만 읽는다.
+  // 국세청 자료를 옮겨 적은 집계 사이트라 '대표자는 오세웅입니다' 같은 문장으로 나온다(어니프: 공식 API 어디에도 대표자 없음).
+  const webRep = (() => {
+    const REPS = [
+      /대표(?:자|이사)?(?:는|은)\s*([가-힣]{2,4})(?:\s*(?:입니다|이며|이고|씨|님))/,
+      /대표(?:자|이사)?\s*(?:명|성명)?\s*[:：]\s*([가-힣]{2,4}(?:\s*[,/·]\s*[가-힣]{2,4}){0,2})(?![가-힣])/,
+    ];
+    const bad = /^(없음|미상|정보|확인|미공개|공개|비공개|번호|전화|주소|소재지|업종|업태|설립|개업|상호|사업자|홈페이지)$/;
+    // 'A / B' 공동대표만 받고, 뒤에 붙은 다른 칸 이름(주소·업종 등)에서 끊는다
+    const names = (v) => { const out = []; for (const x of v.split(/[,/·]/).map((y) => y.trim())) { if (bad.test(x)) break; out.push(x); } return out; };
+    for (const t of oem_trace || []) {
+      if (!/사업자번호/.test(String(t.rel || ''))) continue;
+      const txt = (oemFull.get(t.link || '') || `${t.title || ''} ${t.desc || ''}`).replace(/\s+/g, ' ');
+      for (const re of REPS) {
+        const m = txt.match(re);
+        const nm = m ? names(m[1]) : [];
+        if (nm.length) {
+          let host = ''; try { host = new URL(t.link).hostname.replace(/^www\./, ''); } catch { /* 링크 없음 */ }
+          return { rep: nm.join('/'), src: `${host || '웹'} 사업자정보`, link: t.link || null };
+        }
+      }
+    }
+    return null;
+  })();
   {
     const ri = basic.findIndex((x) => x.key === '대표자');
+    if (ri >= 0 && !basic[ri].value && webRep && !(pubBizFacts && pubBizFacts.rep) && !hireRep) {
+      basic[ri] = f('대표자', webRep.rep, 'C', webRep.src, today, `★ 금융위·식약처·공장등록·채용사이트에 대표자가 없어, 사업자번호가 일치한 웹 사업자정보 페이지(${webRep.src.replace(/ 사업자정보$/, '')})의 값을 썼습니다 — 국세청 자료를 옮겨 적은 집계 사이트라 갱신이 늦을 수 있습니다. ※ 방문 때 사업자등록증으로 확인하세요.${webRep.link ? ` 근거: ${webRep.link}` : ''}`);
+    }
     if (ri >= 0 && !basic[ri].value) {
       let rep = null, src = null, link = null;
       if (pubBizFacts && pubBizFacts.rep) { rep = pubBizFacts.rep; src = '지자체 공장정보'; link = pubBizFacts.link; }
@@ -1472,6 +1501,7 @@ function assembleLiveReport(name, corp, res) {
     ['산단공 공장등록', fctRep, fctRegDe ? `${fctRegDe.slice(0, 4)} 등록` : null],
     ['지자체 공장정보', pubBizFacts && pubBizFacts.rep],
     [hireRep ? hireRep.src.replace(/ 기업정보$/, ' 채용정보') : '채용사이트', hireRep && hireRep.rep],
+    [webRep ? webRep.src : '웹 사업자정보', webRep && webRep.rep],
   ]);
   { const ri = basic.findIndex((x) => x.key === '대표자'); if (ri >= 0 && repCheck) basic[ri] = { ...basic[ri], cross: repCheck }; }
   const hiring = hireRaw && typeof analyzeHiring === 'function'
