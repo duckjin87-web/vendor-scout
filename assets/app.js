@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 229;
+const BUILD = 230;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2723,6 +2723,42 @@ async function ntsValidate(bzno, repNm, startDt) {
   };
 }
 
+// ── 웹 사업자정보(bizwiki) ──
+// 국세청·공정위 자료를 옮겨 적은 집계 페이지. 공식 API에 대표자·법인등록번호가 없는 소규모 법인(어니프 등)도
+// 사업자번호 하나로 대표자·법인등록번호·주소가 나온다. 사업자번호가 본문에 있는지 확인한 뒤에만 쓴다.
+// (bizdang은 서버 요청을 막아 검색 요약문으로만 읽는다)
+async function bizWebLookup(bzno) {
+  const b = String(bzno || '').replace(/\D/g, '');
+  if (b.length !== 10) return null;
+  const link = `https://bizwiki.co.kr/biz/${b}`;
+  const p = await proxyOnlyGet('fetchPage', { url: link });
+  const t = htmlToText((p && p.text) || '').replace(/\s+/g, ' ');
+  if (!t.includes(`${b.slice(0, 3)}-${b.slice(3, 5)}-${b.slice(5)}`) && !t.includes(b)) return null;
+  const pick = (re) => { const m = t.match(re); return m ? m : null; };
+  const rep = pick(/대표자\s+([가-힣]{2,4}(?:\s*[,/·]\s*[가-힣]{2,4}){0,2})\s+(?:사업자번호|법인등록번호|회사주소)/);
+  const crno = pick(/법인등록번호\s+(\d{6})-?(\d{7})/);
+  const open = pick(/(?:개업일|개업일자|사업\s*개시일)\s*[:：]?\s*((?:19|20)\d{2})[.\-년\s]+(\d{1,2})[.\-월\s]+(\d{1,2})/);
+  const addr = pick(/회사주소\s+(.+?)\s+(?:광고|사업정보|납세자상태)/);
+  const ecom = pick(/통신판매번호\s+(\d{4}-[가-힣]+-\d+)/);
+  return {
+    src: 'bizwiki.co.kr', link,
+    rep: rep ? rep[1].replace(/\s+/g, '') : null,
+    crno: crno ? crno[1] + crno[2] : null,
+    openDt: open ? `${open[1]}-${open[2].padStart(2, '0')}-${open[3].padStart(2, '0')}` : null,
+    addr: addr ? addr[1] : null, ecom: ecom ? ecom[1] : null,
+  };
+}
+// 웹 문구에서 개업일(정확한 날짜)과 사업자등록 시점(월)을 읽는다 — 검색 요약문·사업자정보 페이지 공용
+function webOpenFacts(texts) {
+  let openDt = null, regYm = null;
+  for (const raw of texts || []) {
+    const t = String(raw || '').replace(/\s+/g, ' ');
+    if (!openDt) { const m = t.match(/(?:개업일|개업일자|사업\s*개시일)\s*(?:은|는|:|：)?\s*((?:19|20)\d{2})[.\-년\s]+(\d{1,2})[.\-월\s]+(\d{1,2})/); if (m) openDt = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`; }
+    if (!regYm) { const m = t.match(/((?:19|20)\d{2})년\s*(\d{1,2})월에?\s*(?:사업자\s*등록|개업)/); if (m) regYm = `${m[1]}-${m[2].padStart(2, '0')}`; }
+  }
+  return { openDt, regYm: regYm || (openDt ? openDt.slice(0, 7) : null) };
+}
+
 // ── 채용공고 추적 (다개년) ──
 // 왜 필요한가: 이 시스템의 대상은 대부분 뉴스도 홈페이지도 없는 영세 제조업체다. 그런 업체도
 //   사람은 뽑기 때문에, 채용공고는 거의 유일하게 꾸준히 남는 활동 흔적이다.
@@ -3624,8 +3660,12 @@ setInterval(() => { if (liveProg.stage === 'src' && document.querySelector('[dat
 
 async function finishLive(name, corp) {
   const nm = stripCorp(corp.corpNm || name);
+  // 웹 사업자정보 — 법인등록번호·대표자·개업일이 공식 자료에 없을 때의 보강(재무·진위확인이 이 값을 기다린다)
+  const bizWebP = corp.bzno ? bizWebLookup(corp.bzno).catch(() => null) : Promise.resolve(null);
   const calls = {
-    finance: corp.crno ? financeLookup(corp.crno) : Promise.reject(new Error('법인등록번호 없음')),
+    bizWeb: bizWebP.then((w) => { if (!w) throw new Error('웹 사업자정보 없음'); return w; }),
+    finance: corp.crno ? financeLookup(corp.crno)
+      : bizWebP.then((w) => (w && w.crno ? financeLookup(w.crno) : Promise.reject(new Error('법인등록번호 없음')))),
     rpt: proxyGet('rpt', { name: nm, rows: '100' }),
     nps: npsLookup(nm, corp.bzno),
     maker: makerLookup(nm),
@@ -3645,10 +3685,21 @@ async function finishLive(name, corp) {
     // 채용공고 추적 — 뉴스도 홈페이지도 없는 영세업체의 거의 유일한 활동 흔적
     hiring: hiringTrace(nm),
     // 국세청 진위확인 — 사업자번호·대표자·개업일 3요소 대조(상태조회와 동일 서비스)
-    ntsVal: ntsValidate(corp.bzno, corp.rep, corp.estbDt),
+    // 금융위에 대표자·설립일이 없으면 웹 사업자정보·검색 요약문의 대표자·개업일(정확한 날짜일 때만)로 대조한다
+    ntsVal: corp.rep && corp.estbDt ? ntsValidate(corp.bzno, corp.rep, corp.estbDt)
+      : null,
     // 고용·산재보험 — 사업자번호 정확 조회(사업장별 상시인원·업종·성립일)
     insure: corp.bzno ? insureLookup(corp.bzno) : Promise.reject(new Error('사업자번호 없음')),
   };
+  if (!calls.ntsVal) {
+    calls.ntsVal = Promise.all([bizWebP, Promise.resolve(calls.oemTrace).catch(() => null)]).then(([w, oem]) => {
+      const items = (oem && oem.items) || [];
+      const f = webOpenFacts([...items.map((it) => `${it.title || ''} ${it.description || ''}`.replace(/<\/?b>/g, '')), w && w.openDt ? `개업일 ${w.openDt}` : '']);
+      const rep = corp.rep || (w && w.rep) || null;
+      const dt = f.openDt || corp.estbDt || null;
+      return ntsValidate(corp.bzno, rep, dt).then((v) => (v ? { ...v, via: { rep: corp.rep ? '금융위' : 'bizwiki.co.kr', dt: f.openDt ? '웹 사업자정보 개업일' : '금융위 설립일' } } : v));
+    });
+  }
   // 대기배출시설 — 의약품안전나라 제조소 주소로도 찾아야 해서 그 결과를 기다렸다가 부른다
   calls.air = Promise.resolve(calls.nedrug).catch(() => null)
     .then((ned) => airLookup(corp.bzno, nm, ned && ned.found ? ned.sites.map((x) => x.addr) : []));
@@ -5128,6 +5179,7 @@ function bizEvents(report) {
   const push = (d, label, kind, extra) => { if (d && !ev.some((e) => e.d === d && e.label === label)) ev.push({ d, label, kind, ...(extra || {}) }); };
   push(dOf(bv('제조업 등록')), '제조업 허가', 'lic');
   push(dOf(bv('설립일 / 등록일')), '법인 설립', 'corp');
+  push(dOf(bv('사업자등록 시점 (웹 참고)')), '사업자등록(웹 참고)', 'corp');
   push(dOf(bv('책임판매업 등록')), '책임판매업', 'sale');
   const W = M.workforce;
   (W && W.sites ? W.sites : []).filter((x) => x.atSite && x.est).forEach((x) => {
@@ -7271,7 +7323,7 @@ function render(report, opts = {}) {
 // 먼저 그린 리포트(finishLive의 _late)가 완성되면 같은 업체를 보고 있을 때만 바꿔 그린다.
 // 그 사이 사용자가 한 일(홈페이지 추적·심층분석·면적 수정·직접 입력)은 새 리포트로 옮긴다.
 const LIVE_SRC_NAME = { finance: '금융위 재무', rpt: '식약처 보고품목', nps: '국민연금', maker: '식약처 제조업', nedrug: '의약품안전나라 제조소', gmp: '식약처 CGMP',
-  factory: '산단공 공장등록', recall: '식약처 회수·판매중지', nts: '국세청 사업자상태', naverNews: '뉴스', cgmpNews: 'CGMP 기사', oemTrace: '웹 언급',
+  factory: '산단공 공장등록', recall: '식약처 회수·판매중지', nts: '국세청 사업자상태', bizWeb: '웹 사업자정보', naverNews: '뉴스', cgmpNews: 'CGMP 기사', oemTrace: '웹 언급',
   hiring: '채용공고', ntsVal: '국세청 진위확인', insure: '고용·산재보험', air: '대기배출시설' };
 function hookLateReport(report) {
   if (!report || !report._late || report._lateHooked) return;

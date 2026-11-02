@@ -1459,7 +1459,8 @@ function assembleLiveReport(name, corp, res) {
   })();
   // 웹 사업자정보 페이지(bizdang 등)의 대표자 — 관련성 검증을 통과했고 사업자번호까지 맞은 언급에서만 읽는다.
   // 국세청 자료를 옮겨 적은 집계 사이트라 '대표자는 오세웅입니다' 같은 문장으로 나온다(어니프: 공식 API 어디에도 대표자 없음).
-  const webRep = (() => {
+  const bizW = R.bizWeb && R.bizWeb.ok ? R.bizWeb.data : null;     // bizwiki 사업자정보(사업자번호 확인됨)
+  const snipRep = (() => {
     const REPS = [
       /대표(?:자|이사)?(?:는|은)\s*([가-힣]{2,4})(?:\s*(?:입니다|이며|이고|씨|님))/,
       /대표(?:자|이사)?\s*(?:명|성명)?\s*[:：]\s*([가-힣]{2,4}(?:\s*[,/·]\s*[가-힣]{2,4}){0,2})(?![가-힣])/,
@@ -1481,6 +1482,8 @@ function assembleLiveReport(name, corp, res) {
     }
     return null;
   })();
+  const bizRep = bizW && bizW.rep ? { rep: bizW.rep, src: `${bizW.src} 사업자정보`, link: bizW.link } : null;
+  const webRep = bizRep || snipRep;
   {
     const ri = basic.findIndex((x) => x.key === '대표자');
     if (ri >= 0 && !basic[ri].value && webRep && !(pubBizFacts && pubBizFacts.rep) && !hireRep) {
@@ -1501,9 +1504,43 @@ function assembleLiveReport(name, corp, res) {
     ['산단공 공장등록', fctRep, fctRegDe ? `${fctRegDe.slice(0, 4)} 등록` : null],
     ['지자체 공장정보', pubBizFacts && pubBizFacts.rep],
     [hireRep ? hireRep.src.replace(/ 기업정보$/, ' 채용정보') : '채용사이트', hireRep && hireRep.rep],
-    [webRep ? webRep.src : '웹 사업자정보', webRep && webRep.rep],
+    [bizRep ? bizRep.src : 'bizwiki', bizRep && bizRep.rep],
+    [snipRep ? snipRep.src : '웹 사업자정보', snipRep && (!bizRep || snipRep.src !== bizRep.src) ? snipRep.rep : null],
   ]);
   { const ri = basic.findIndex((x) => x.key === '대표자'); if (ri >= 0 && repCheck) basic[ri] = { ...basic[ri], cross: repCheck }; }
+
+  // 법인등록번호 — 금융위에 없으면 웹 사업자정보 값으로(재무 조회도 이 번호로 다시 했다)
+  {
+    const ci = basic.findIndex((x) => x.key === '법인등록번호');
+    if (ci >= 0 && !basic[ci].value && bizW && bizW.crno) {
+      basic[ci] = f('법인등록번호', `${bizW.crno.slice(0, 6)}-${bizW.crno.slice(6)}`, 'C', `${bizW.src} 사업자정보`, today,
+        `★ 금융위 기업기본정보에 이 법인이 없어 사업자번호가 일치한 웹 사업자정보의 값을 썼습니다 — 이 번호로 금융위 재무를 다시 조회했습니다. ※ 법인등기부로 확인하세요. 근거: ${bizW.link}`);
+    }
+  }
+  // 개업일 · 사업자등록 시점 (웹 참고) — 검색 요약문('2025년 12월에 사업자등록')과 사업자정보 페이지에서.
+  // 제조업 허가보다 한참 늦게 등록됐다면 법인 전환·재설립·양수도로 사업자번호가 새로 났을 수 있다.
+  const openF = typeof webOpenFacts === 'function'
+    ? webOpenFacts([...oem_trace.filter((t) => /사업자번호/.test(String(t.rel || ''))).map((t) => oemFull.get(t.link || '') || `${t.title} ${t.desc}`), bizW && bizW.openDt ? `개업일 ${bizW.openDt}` : ''])
+    : { openDt: null, regYm: null };
+  let regGap = null;
+  if (openF.regYm) {
+    const srcT = openF.openDt && bizW && bizW.openDt === openF.openDt ? `${bizW.src} 사업자정보` : '웹 사업자정보(검색 요약)';
+    const permit = String((basic.find((x) => x.key === '제조업 등록') || {}).value || '').match(/((?:19|20)\d{2})-(\d{2})/);
+    const estb = String((basic.find((x) => x.key === '설립일 / 등록일') || {}).value || '').match(/((?:19|20)\d{2})-(\d{2})/);
+    const ym = (m) => (m ? Number(m[1]) * 12 + Number(m[2]) : null);
+    const r0 = ym(openF.regYm.match(/(\d{4})-(\d{2})/));
+    const pm = ym(permit);
+    if (pm != null && r0 - pm >= 12) regGap = { permit: `${permit[1]}-${permit[2]}`, reg: openF.regYm, years: Math.floor((r0 - pm) / 12) };
+    const notes = [
+      openF.openDt ? `개업일 ${openF.openDt}` : `${openF.regYm.replace('-', '년 ')}월 사업자등록 (월 단위 — 정확한 개업일은 아님)`,
+      regGap ? `⚠ 제조업 허가(${regGap.permit})보다 사업자등록이 약 ${regGap.years}년 늦습니다 — 법인 전환·재설립·사업 양수도로 사업자번호가 새로 났을 수 있습니다. 방문 때 이전 사업자와의 관계, 허가 승계 여부를 확인하세요.`
+        : estb ? `설립일/등록일(${estb[1]}-${estb[2]})과 대조용 참고값입니다.` : '공식 자료의 설립일이 없어 업력 참고값으로 씁니다.',
+      '국세청 자료를 옮겨 적은 집계 사이트 값이라 공식 자료가 아닙니다 — 사업자등록증의 개업연월일로 확인하세요.',
+    ];
+    const ei = basic.findIndex((x) => x.key === '설립일 / 등록일');
+    basic.splice(ei >= 0 ? ei + 1 : basic.length, 0,
+      f('사업자등록 시점 (웹 참고)', openF.openDt ? `개업일 ${openF.openDt}` : `${openF.regYm} 사업자등록`, 'C', srcT, today, notes.join(' ')));
+  }
   const hiring = hireRaw && typeof analyzeHiring === 'function'
     ? { ...analyzeHiring(hireRaw.posts, hireRaw.heads, workforce ? workforce.total : empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs), affil: hireRaw.affil || [] }
     : null;
@@ -1797,8 +1834,10 @@ function assembleLiveReport(name, corp, res) {
       // 불일치는 '경고'가 아니라 '대조 불가'로 표기 — 개업일을 못 구해 설립일로 대신한 구조적 한계
       return { key: 'ntsval', name: '국세청 진위확인', ok: v.valid, warn: false,
         detail: v.valid
-          ? '사업자번호·대표자·개업일 일치'
-          : '대조 불가 — 등록증상 개업일이 필요하나 법인 설립일로 조회(정상 업체도 불일치). 휴·폐업은 사업자상태 참고' };
+          ? `사업자번호·대표자·개업일 일치${v.via ? ` (대표자 ${v.via.rep} · 개업일 ${v.via.dt} 기준)` : ''}`
+          : v.via && /개업일/.test(v.via.dt)
+            ? `불일치 — 웹 사업자정보의 대표자·개업일로 조회했습니다(대표자 ${v.via.rep}). 웹 값이 틀렸을 수 있으니 사업자등록증으로 확인하세요`
+            : '대조 불가 — 등록증상 개업일이 필요하나 법인 설립일로 조회(정상 업체도 불일치). 휴·폐업은 사업자상태 참고' };
     })(),
   ].filter(Boolean);
 
@@ -1818,7 +1857,13 @@ function assembleLiveReport(name, corp, res) {
     repPublicLink: fctRep ? null : pubBizFacts.link,
     repCheck,
   });
+  if (regGap) {
+    cross_diag.items.push({ label: '업력 정합성', status: 'warn', severe: false,
+      detail: `제조업 허가 ${regGap.permit} ↔ 사업자등록 ${regGap.reg}(웹 참고) — 허가보다 약 ${regGap.years}년 늦게 사업자등록. 법인 전환·재설립·사업 양수도 가능성 — 이전 사업자와의 관계와 허가 승계 여부를 확인하세요.` });
+    cross_diag.warnCount = (cross_diag.warnCount || 0) + 1;
+  }
   cross_diag.items.forEach((c) => {
+    if (c.label === '업력 정합성' && c.status === 'warn') risk_flags.push({ type: '사업자 재등록 의심', detail: c.detail });
     if (c.status !== 'warn') return;
     if (c.label === '주소 정합성') risk_flags.push({ type: '주소 상이', detail: `${c.detail}` });
     if (c.label === '인력 정합성' && c.severe) risk_flags.push({ type: '인력 불일치', detail: `${c.detail}` });
