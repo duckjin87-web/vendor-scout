@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 230;
+const BUILD = 232;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3917,7 +3917,9 @@ function setProxyUI() {
   const btn = $('#proxyBtn');
   if (!btn) return;
   const on = isConnected();
-  btn.textContent = on ? '🟢 프록시 연결됨' : '🔌 실데이터 연결';
+  // 연결된 상태는 작은 점 하나로 — 일반 사용자에게 '프록시'라는 말은 의미가 없다
+  btn.innerHTML = on ? '<i class="pdot" aria-hidden="true"></i>실데이터' : '실데이터 연결';
+  btn.title = on ? '공공데이터 실시간 조회 연결됨 (눌러서 설정 변경)' : '공공데이터 실시간 조회를 연결합니다 — 연결 전에는 예시 데이터만 보입니다';
   btn.classList.toggle('on', on);
 }
 
@@ -3949,6 +3951,8 @@ function checklistHtml(list) {
 // 3열 압축 행: [등급+항목] | [값] | [출처(우측 소형)]
 // 설명문을 읽기 좋게 자른다. 원문은 '★ 핵심 … ※ 단서 … ▣ 보완' 식으로 여러 문단이 한 줄에
 // 이어 붙어 있어, 통째로 뿌리면 문단이 흐른다. 표식 앞에서 끊어 줄로 나눈다.
+const WEB_SRC_RE = /웹|사업자정보|채용|홈페이지|검색|기업정보|bizwiki|bizdang|카카오맵 등록|블로그/;
+const isWebSource = (fld) => fld && fld.grade !== 'A' && WEB_SRC_RE.test(String(fld.source || ''));
 function noteLines(note) {
   return String(note || '').split(/\s*(?=[★※▣])/).map((s) => s.trim()).filter(Boolean);
 }
@@ -3974,11 +3978,16 @@ function fieldRow(fld) {
   const rc = !pending && fld.cross && fld.cross.rows && fld.cross.rows.length >= 2 ? fld.cross : null;
   const rcLab = rc ? { ok: `${rc.rows.length}곳 일치`, part: '공동대표?', diff: '출처 간 상이' }[rc.verdict] : '';
   const rcChip = rc ? ` <button type="button" class="rc-chip ${rc.verdict === 'ok' ? 'ok' : 'warn'}" aria-expanded="${rc.verdict !== 'ok'}">${rcLab}</button>` : '';
+  // 공식 원부가 아닌 웹·집계 사이트에서 채운 값은 값 옆에 표시한다 — 등급 점만으로는 놓치기 쉽다
+  const webTag = !isGap && !pending && isWebSource(fld) ? ' <span class="ftag web" title="공식 자료에 없어 웹·집계 사이트에서 보강한 값">웹 보강</span>' : '';
   const valHtml = Array.isArray(fld.checklist)
     ? checklistHtml(fld.checklist) + info
     : pending ? '<span class="skel-v" aria-label="불러오는 중"></span>'
-      : (isGap ? '해당 없음' : esc(fld.value)) + stale + rcChip + info;
+      : (isGap ? '해당 없음' : esc(fld.value)) + stale + webTag + rcChip + info;
   row.appendChild(el('div', 'v' + (isGap && !fld.checklist && !pending ? ' gap' : ''), valHtml));
+  // 판단을 바꾸는 경고(⚠ 문장)는 「!」 안에 숨기지 않고 값 아래에 바로 보인다
+  const warns = !pending && !isGap ? (String(fld.note || '').match(/⚠[^⚠★※▣]*?(?:[.。](?=\s|$)|$)/g) || []).map((x) => x.trim()).filter(Boolean) : [];
+  if (warns.length) row.appendChild(el('div', 'fwarn', warns.map((w) => `<p>${esc(w)}</p>`).join('')));
 
   const src = el('div', 'src');
   src.innerHTML = esc(fld.source || '—') + (fld.as_of ? `<br><span class="asof">${esc(fld.as_of)}</span>` : '');
@@ -4383,6 +4392,156 @@ function sparkCard(se, years) {
 }
 
 // 재무 블록(전폭) = 지표별 스파크 카드 6개(각자 스케일) + 자본금 행
+function finAltHtml(report) {
+  const M = report.meta || {}, MP = M.manpower || {}, W = M.workforce;
+  const cap = report.capacity || [];
+  const v = (k) => { const x = cap.find((y) => y.key === k); return x && x.value != null ? String(x.value) : null; };
+  const tr = MP.trend || [];
+  const npsTrend = tr.length >= 2 ? `${tr[0].cnt}→${tr[tr.length - 1].cnt}명(${tr[0].ym.slice(2, 4)}.${tr[0].ym.slice(4)}~${tr[tr.length - 1].ym.slice(2, 4)}.${tr[tr.length - 1].ym.slice(4)})` : (MP.nps != null ? `${MP.nps}명` : null);
+  const hires = report.hiring && report.hiring.posts ? report.hiring.posts.length : 0;
+  const bits = [
+    npsTrend ? `국민연금 ${npsTrend}` : '',
+    W && W.total != null ? `고용·산재 상시 ${W.total}명` : '',
+    v('기능성 보고품목 수') ? `기능성 보고 ${v('기능성 보고품목 수')}건` : '',
+    hires ? `채용공고 ${hires}건` : '',
+  ].filter(Boolean);
+  if (!bits.length) return '';
+  return `<b>대신 볼 활동 지표</b> ${bits.map(esc).join(' · ')} <small>— 인원 추이가 꺾이지 않았는지, 최근에도 신고·채용이 있는지로 영업 상태를 가늠하세요. 거래 규모가 크면 신용조회를 권합니다.</small>`;
+}
+
+// ── 조회 기록(업체별 핵심값 스냅샷) ── 재조회 때 바뀐 점과 여러 업체 비교에 쓴다. 이 브라우저에만 남는다.
+const SNAP_KEY = 'vs_snaps';
+const SNAP_FIELDS = ['대표자', '사업자 상태', '본점주소', '제조업 등록', '공장/제조소 소재지', 'CGMP 적합업소', '제조소 추정 근무 인원', '공장 건축면적 (건평)', '기능성 보고품목 수', '매출액', '영업이익'];
+const snapKeyOf = (report) => { const bz = ((report.basic || []).find((x) => x.key === '사업자등록번호') || {}).value; return bz ? `b${String(bz).replace(/\D/g, '')}` : `n${svKey(report.meta.vendor_name || '')}`; };
+function snapOf(report) {
+  const all = [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])];
+  const vals = {};
+  SNAP_FIELDS.forEach((k) => { const x = all.find((y) => y.key === k); vals[k] = x && x.value != null ? String(x.value) : null; });
+  const M = report.meta || {};
+  return { at: M.query_at, name: M.vendor_name, vals, nps: M.manpower ? M.manpower.nps : null,
+    risks: (report.risk_flags || []).map((r) => r.type), recalls: (report.recalls || []).length };
+}
+function snapLoad() { try { return JSON.parse(_ls(SNAP_KEY) || '{}') || {}; } catch { return {}; } }
+function snapSave(report) {
+  if (!report.meta || !report.meta.live || report._savedAt || !report.meta.query_at) return;
+  const st = snapLoad(), key = snapKeyOf(report), cur = snapOf(report);
+  const list = (st[key] || []).filter((x) => x.at !== cur.at);
+  list.unshift(cur); list.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  st[key] = list.slice(0, 5);
+  // 업체 수가 너무 많아지면 오래 안 본 업체부터 지운다
+  const ks = Object.keys(st).sort((a, b) => String(st[b][0].at).localeCompare(String(st[a][0].at)));
+  ks.slice(80).forEach((k) => delete st[k]);
+  try { _sls(SNAP_KEY, JSON.stringify(st)); } catch { /* 용량 초과 — 기록 없이 동작 */ }
+}
+// 같은 업체의 직전 조회(1시간 이상 이전)와 비교한다
+function snapDiff(report) {
+  const list = snapLoad()[snapKeyOf(report)] || [];
+  const at = Date.parse(report.meta.query_at);
+  const prev = list.find((x) => Date.parse(x.at) < at - 36e5);
+  if (!prev) return null;
+  const cur = snapOf(report);
+  const nz = (v) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+  const rows = SNAP_FIELDS.filter((k) => nz(prev.vals[k]) !== nz(cur.vals[k]) && (prev.vals[k] || cur.vals[k]))
+    .map((k) => ({ key: k, before: prev.vals[k] || '—', after: cur.vals[k] || '—' }));
+  if (prev.nps != null && cur.nps != null && prev.nps !== cur.nps) rows.push({ key: '국민연금 가입자', before: `${prev.nps}명`, after: `${cur.nps}명` });
+  if (prev.recalls !== cur.recalls) rows.push({ key: '회수·판매중지', before: `${prev.recalls}건`, after: `${cur.recalls}건` });
+  const added = cur.risks.filter((x) => !prev.risks.includes(x)), gone = prev.risks.filter((x) => !cur.risks.includes(x));
+  return { prevAt: prev.at, rows, added, gone };
+}
+function diffBlockHtml(D) {
+  const when = new Date(D.prevAt).toLocaleDateString('ko-KR');
+  if (!D.rows.length && !D.added.length && !D.gone.length) return `<p class="pd-none">지난 조회(${esc(when)})와 비교해 바뀐 핵심 항목이 없습니다.</p>`;
+  return `<h4>지난 조회(${esc(when)}) 대비 변화 <small>${D.rows.length + D.added.length + D.gone.length}건</small></h4>`
+    + (D.added.length ? `<p class="pd-risk add">새 리스크 · ${D.added.map(esc).join(' · ')}</p>` : '')
+    + (D.gone.length ? `<p class="pd-risk gone">사라진 리스크 · ${D.gone.map(esc).join(' · ')}</p>` : '')
+    + (D.rows.length ? `<div class="pd-rows">${D.rows.map((r) => `<div class="pd-row"><span class="k">${esc(r.key)}</span><span class="b">${esc(r.before)}</span><span class="ar">→</span><b>${esc(r.after)}</b></div>`).join('')}</div>` : '');
+}
+
+// ── 근거 링크 모음 ── 감사·보고용. 리포트 곳곳(웹 언급·뉴스·설명 속 '근거:' 주소)에 흩어진 원문 주소를 한곳에.
+function evidenceLinks(report) {
+  const out = [], seen = new Set();
+  const add = (kind, title, url) => { const u = String(url || '').trim(); if (!/^https?:\/\//.test(u) || seen.has(u)) return; seen.add(u); out.push({ kind, title: String(title || '').replace(/<\/?b>/g, '').slice(0, 90), url: u }); };
+  (report.web_risk || []).forEach((w) => add('위험 신호', w.title, w.link));
+  (report.oem_trace || []).forEach((t) => add('웹 언급', t.title, t.link));
+  (report.news || []).forEach((n) => add('뉴스', n.title, n.originallink || n.link));
+  ((report.meta || {}).cgmp_news || []).forEach((n) => add('CGMP 기사', n.title, n.link));
+  const hp = report._homepage && report._homepage.proposed; if (hp) add('홈페이지', hp.title || hp.host, hp.origLink || hp.url);
+  [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])].forEach((f) => {
+    (String(f.note || '').match(/https?:\/\/[^\s)\]」]+/g) || []).forEach((u) => add(f.key, f.source, u.replace(/[.,]$/, '')));
+  });
+  return out;
+}
+
+// ── 엑셀(CSV) 내보내기 ── 사내 보고는 결국 엑셀이다. 한글이 깨지지 않게 BOM을 붙인다.
+const csvCell = (v) => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+function csvDownload(rows, filename) {
+  const blob = new Blob(['\ufeff' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = el('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function downloadCSV(report) {
+  const m = report.meta || {};
+  const rows = [['구분', '항목', '값', '신뢰도', '출처', '기준일', '설명']];
+  const G = { A: '공식', B: '공공DB 간접', C: '추정·웹', D: '공백' };
+  const sec = (name, list) => (list || []).forEach((f) => rows.push([name, f.key, f.value == null ? '' : f.value, `${G[f.grade] || f.grade || ''}${isWebSource(f) ? ' (웹 보강)' : ''}`, f.source || '', f.as_of || '', f.note || '']));
+  sec('기업 기본정보', report.basic); sec('생산역량', report.capacity); sec('재무', report.finance);
+  (report.finance_history || []).forEach((d) => rows.push(['재무 추이', `${d.year}년`, ['매출', d.rev, '영업이익', d.op, '순이익', d.net, '자산', d.asset, '부채', d.debt].filter((x) => x != null).join(' '), d.src === 'ext' ? '외부사이트' : '공시', '', '', '']));
+  (report.risk_flags || []).forEach((r) => rows.push(['리스크', r.type, r.detail || '', r.web ? '웹 문구' : '', '', '', '']));
+  ((report.cross_diag || {}).items || []).forEach((c) => rows.push(['교차검증', c.label, c.detail || '', c.status, '', '', '']));
+  if (typeof buildVisitChecklist === 'function') buildVisitChecklist(report).forEach((i) => rows.push(['방문 전 확인', i.cat, i.text, i.pri === 'high' ? '필수' : i.pri === 'mid' ? '권장' : '참고', i.src || '', '', i.why || '']));
+  evidenceLinks(report).forEach((l) => rows.push(['근거 링크', l.kind, l.title, '', l.url, '', '']));
+  const d = (m.query_at || new Date().toISOString()).slice(0, 10);
+  csvDownload(rows, `${String(m.vendor_name || '업체').replace(/[\\/:*?"<>|]/g, '_')}_사전검증_${d}.csv`);
+}
+
+// ── 업체 비교 ── 조회 기록이 있는 업체 가운데 최대 4곳을 나란히. 방문 후보를 고를 때 쓴다.
+function openCompare(report) {
+  const st = snapLoad();
+  const all = Object.entries(st).map(([k, l]) => ({ k, s: l[0] })).filter((x) => x.s).sort((a, b) => String(b.s.at).localeCompare(String(a.s.at)));
+  const curK = report ? snapKeyOf(report) : null;
+  const pick = new Set(all.filter((x) => x.k === curK).map((x) => x.k));
+  all.filter((x) => x.k !== curK).slice(0, 3 - pick.size + 1).forEach((x) => { if (pick.size < 3) pick.add(x.k); });
+  const dlg = document.createElement('dialog');
+  dlg.className = 'vwhy cmp-dlg';
+  dlg.setAttribute('aria-labelledby', 'cmpTitle');
+  const table = () => {
+    const sel = all.filter((x) => pick.has(x.k));
+    if (sel.length < 2) return '<p class="cmp-empty">비교할 업체를 2곳 이상 고르세요. 조회한 적이 있는 업체만 나옵니다(이 브라우저 기록).</p>';
+    const rowsDef = [['조회일', (s) => new Date(s.at).toLocaleDateString('ko-KR')], ['리스크', (s) => (s.risks.length ? `${s.risks.length}건 · ${s.risks.slice(0, 3).join(', ')}` : '없음')],
+      ...SNAP_FIELDS.map((k) => [k, (s) => s.vals[k] || '—']), ['국민연금 가입자', (s) => (s.nps != null ? `${s.nps}명` : '—')], ['회수·판매중지', (s) => `${s.recalls}건`]];
+    return `<div class="cmp-wrap"><table class="cmp-tbl"><thead><tr><th></th>${sel.map((x) => `<th>${esc(x.s.name)}</th>`).join('')}</tr></thead><tbody>`
+      + rowsDef.map(([k, g]) => `<tr><th>${esc(k)}</th>${sel.map((x) => { const v = g(x.s); return `<td class="${k === '리스크' && x.s.risks.length ? 'warn' : ''}">${esc(v)}</td>`; }).join('')}</tr>`).join('')
+      + '</tbody></table></div>';
+  };
+  const paint = () => {
+    dlg.innerHTML = '<div class="vwhy-in">'
+      + '<div class="vwhy-head"><h3 id="cmpTitle">업체 비교</h3><button type="button" class="vwhy-x" aria-label="닫기">✕</button></div>'
+      + `<div class="cmp-pick">${all.length ? all.slice(0, 30).map((x) => `<label class="cmp-chip${pick.has(x.k) ? ' on' : ''}"><input type="checkbox" data-k="${esc(x.k)}"${pick.has(x.k) ? ' checked' : ''}>${esc(x.s.name)}</label>`).join('') : '<span class="cmp-empty">아직 조회 기록이 없습니다.</span>'}</div>`
+      + table()
+      + `<div class="cmp-foot"><small>최대 4곳 · 각 업체의 마지막 조회 기준</small><button type="button" class="nb-btn sm" data-cmp-csv${pick.size < 2 ? ' disabled' : ''}>엑셀로 받기</button></div></div>`;
+    dlg.querySelector('.vwhy-x').addEventListener('click', () => dlg.close());
+  };
+  dlg.addEventListener('change', (e) => {
+    const c = e.target.closest('input[data-k]'); if (!c) return;
+    if (c.checked && pick.size >= 4) { c.checked = false; return; }
+    if (c.checked) pick.add(c.dataset.k); else pick.delete(c.dataset.k);
+    paint();
+  });
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg) { dlg.close(); return; }
+    if (e.target.closest('[data-cmp-csv]')) {
+      const sel = all.filter((x) => pick.has(x.k));
+      const rows = [['항목', ...sel.map((x) => x.s.name)], ['조회일', ...sel.map((x) => x.s.at.slice(0, 10))], ['리스크', ...sel.map((x) => x.s.risks.join(' / ') || '없음')],
+        ...SNAP_FIELDS.map((k) => [k, ...sel.map((x) => x.s.vals[k] || '')]), ['국민연금 가입자', ...sel.map((x) => (x.s.nps != null ? x.s.nps : ''))], ['회수·판매중지', ...sel.map((x) => x.s.recalls)]];
+      csvDownload(rows, `업체비교_${new Date().toISOString().slice(0, 10)}.csv`);
+    }
+  });
+  dlg.addEventListener('close', () => dlg.remove());
+  paint();
+  document.body.appendChild(dlg);
+  if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+}
+
 function financeBlock(report) {
   const fields = report.finance;
   const hist = report.finance_history || [];
@@ -4422,6 +4581,9 @@ function financeBlock(report) {
     b.appendChild(w);
   } else {
     b.appendChild(el('div', 'finmiss', '공식 재무 미제출 법인 — 추이 그래프 생략'));
+    // 영세 업체일수록 재무가 빈다 — 그때 대신 볼 활동 지표를 한 줄로 모아 준다
+    const alt = finAltHtml(report);
+    if (alt) b.appendChild(el('div', 'finalt', alt));
   }
   const rows = el('div', 'finrows');
   const capRow = fields.find((f) => f.key === '자본금');
@@ -5037,6 +5199,10 @@ function qualityGrade(report) {
   const debtHigh = !!(fh && fh.debtRatio != null && fh.debtRatio > 400);
   add('재무 건전성', capImpair ? false : (debtHigh ? null : true),
     capImpair ? '자본잠식(자본총계 ≤ 0)' : debtHigh ? `부채비율 ${fh.debtRatio}%` : fh ? `부채비율 ${fh.debtRatio != null ? fh.debtRatio + '%' : '—'}` : '공시 재무 없음(판정에 쓰지 않음)', 'risk');
+  // 웹 위험 신호(회생·파산·영업정지 등) — 공식 확인 전이라 C로 내리지는 않지만, A는 막고 '중대 위험 없음'이라고 쓰지 않는다
+  const webHigh = (report.web_risk || []).filter((w) => w.sev === 'high');
+  if ((report.web_risk || []).length) add('웹 위험 신호', webHigh.length ? null : true,
+    webHigh.length ? `${webHigh.map((w) => w.kind).join(' · ')} — 웹 문구, 공식 확인 필요` : `${report.web_risk.map((w) => w.kind).join(' · ')}(경미) — 확인사항으로 올림`, 'risk');
   // ③ 우수 기준
   add('CGMP', cgmp, cgmp ? '식약처 CGMP 적합업소' : '미등재', 'plus');
   add('공장 소재지', isFullAddr(site) ? true : null, isFullAddr(site) ? '번지까지 확인' : '번지까지 확인 못 함', 'plus');
@@ -5061,9 +5227,10 @@ function qualityGrade(report) {
   else if (rcBad || capImpair) { grade = 'C'; why = [rcBad ? '최근 3년 중대 회수' : '', capImpair ? '자본잠식' : ''].filter(Boolean).join(' · '); }
   else {
     const cautions = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회 불가' : '', !isFullAddr(site) ? '공장 번지 미확인' : '',
-      wfWarn ? '보험상 제조 인력 없음' : '', airWarn ? '제조소 배출시설 폐업·휴업' : ''].filter(Boolean);
+      wfWarn ? '보험상 제조 인력 없음' : '', airWarn ? '제조소 배출시설 폐업·휴업' : '', webHigh.length ? `웹 위험 신호(${webHigh.map((w) => w.kind).join('·')})` : ''].filter(Boolean);
+    const head = webHigh.length ? '웹 위험 신호 확인 전' : '중대 위험 없음';
     if (cgmp && !cautions.length) { grade = 'A'; why = 'CGMP 적합 · 중대 위험 없음'; }
-    else { grade = 'B'; why = cgmp ? `CGMP 적합이나 주의: ${cautions.join(' · ')}` : `중대 위험 없음 · CGMP 미등재${cautions.length ? ` · 주의: ${cautions.join(' · ')}` : ''}`; }
+    else { grade = 'B'; why = cgmp ? `CGMP 적합이나 주의: ${cautions.join(' · ')}` : `${head} · CGMP 미등재${cautions.length ? ` · 주의: ${cautions.join(' · ')}` : ''}`; }
   }
   // 자료 신뢰도(참고) — 예전 판정 방식. 확인된 항목들의 출처 등급 가운데 값
   const ord = { A: 0, B: 1, C: 2, D: 3 };
@@ -5071,7 +5238,7 @@ function qualityGrade(report) {
   const dataGrade = gs.length ? ['A', 'B', 'C', 'D'][gs[Math.floor(gs.length / 2)]] : 'D';
   // A까지 남은 조건 — 게이지 아래에 '무엇이 있으면 한 단계 오르는지'를 적는다
   const caut = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회' : '', !isFullAddr(site) ? '공장 번지 확인' : '',
-    wfWarn ? '보험상 제조 인력' : '', airWarn ? '제조소 배출시설 가동' : ''].filter(Boolean);
+    wfWarn ? '보험상 제조 인력' : '', airWarn ? '제조소 배출시설 가동' : '', webHigh.length ? '웹 위험 신호 해소' : ''].filter(Boolean);
   const toA = grade === 'A' ? [] : grade === 'D' ? [why] : [...(grade === 'C' ? [why] : []), ...(cgmp ? [] : ['CGMP 적합']), ...caut];
   return { grade, why, checks, dataGrade, toA };
 }
@@ -5179,7 +5346,7 @@ function bizEvents(report) {
   const push = (d, label, kind, extra) => { if (d && !ev.some((e) => e.d === d && e.label === label)) ev.push({ d, label, kind, ...(extra || {}) }); };
   push(dOf(bv('제조업 등록')), '제조업 허가', 'lic');
   push(dOf(bv('설립일 / 등록일')), '법인 설립', 'corp');
-  push(dOf(bv('사업자등록 시점 (웹 참고)')), '사업자등록(웹 참고)', 'corp');
+  push(dOf(bv('사업자등록 시점')), '사업자등록(웹)', 'corp');
   push(dOf(bv('책임판매업 등록')), '책임판매업', 'sale');
   const W = M.workforce;
   (W && W.sites ? W.sites : []).filter((x) => x.atSite && x.est).forEach((x) => {
@@ -7010,12 +7177,33 @@ function render(report, opts = {}) {
 
   // 방문 리포트 저장/인쇄 툴바
   const actions = el('div', 'actions');
-  const dlBtn = el('button', 'act', '⬇ JSON 다운로드');
-  dlBtn.addEventListener('click', downloadJSON);
-  const printBtn = el('button', 'act primary', '🖨 인쇄 / PDF로 저장');
+  // 내보내기 — 엑셀(CSV)이 기본, JSON은 메뉴 안으로
+  const dlBtn = el('div', 'act-menu');
+  dlBtn.innerHTML = '<button type="button" class="act" aria-haspopup="menu" aria-expanded="false">내보내기 ▾</button>'
+    + '<div class="act-pop" role="menu" hidden><button type="button" role="menuitem" data-x="csv">엑셀(CSV) — 항목·리스크·확인사항·근거 링크</button><button type="button" role="menuitem" data-x="json">JSON 원본</button></div>';
+  {
+    const tg = dlBtn.querySelector('.act'), pop = dlBtn.querySelector('.act-pop');
+    // 탭 줄이 가로 스크롤(overflow)이라 그 안에서 펼치면 잘린다 — 화면 기준(fixed)으로 버튼 바로 아래에 띄운다
+    const set = (o) => {
+      pop.hidden = !o; tg.setAttribute('aria-expanded', String(o));
+      if (o) {
+        const r = tg.getBoundingClientRect(), w = pop.offsetWidth;
+        pop.style.top = `${Math.round(r.bottom + 6)}px`;
+        pop.style.left = `${Math.round(Math.min(Math.max(8, r.right - w), window.innerWidth - w - 8))}px`;
+      }
+    };
+    window.addEventListener('scroll', () => { if (!pop.hidden) set(false); }, { passive: true });
+    tg.addEventListener('click', (e) => { e.stopPropagation(); set(pop.hidden); });
+    pop.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; set(false); if (b.dataset.x === 'csv') downloadCSV(report); else downloadJSON(); });
+    document.addEventListener('click', (e) => { if (!dlBtn.contains(e.target)) set(false); });
+  }
+  const cmpBtn = el('button', 'act', '업체 비교');
+  cmpBtn.title = '조회한 적 있는 업체를 최대 4곳 나란히 비교합니다';
+  cmpBtn.addEventListener('click', () => openCompare(report));
+  const printBtn = el('button', 'act primary', '인쇄 / PDF');
   printBtn.addEventListener('click', () => window.print());
   // 기본정보만 공유 — 받은 사람이 링크를 열면 같은 업체를 새로 조회한다(리포트 전체를 보내지 않는다)
-  const shareBtn = el('button', 'act', '🔗 기본정보 공유');
+  const shareBtn = el('button', 'act', '기본정보 공유');
   shareBtn.title = '업체 기본정보(대표·사업자번호·주소·제조업 허가 등)와 다시 조회 링크를 공유합니다';
   shareBtn.addEventListener('click', () => shareBasic(report, shareBtn));
   // 🗺 카카오맵에서 공장 위치 보기 (제조소 주소 우선) — 별도 키 불필요, 새 탭에서 로드맵 표시
@@ -7030,7 +7218,7 @@ function render(report, opts = {}) {
     const refAddr = (m && m.ref_point && m.ref_point.addr) || '';
     const dest = routeAddr || visitAddr;
     const canRoute = !!refAddr;
-    const mapBtn = el('button', 'act', canRoute ? '🗺 카카오맵 경로' : '🗺 카카오맵에서 공장 위치');
+    const mapBtn = el('button', 'act', canRoute ? '카카오맵 경로' : '카카오맵 위치');
     mapBtn.title = canRoute
       ? `${refName}(${refAddr}) → 「${dest}」 카카오맵 길찾기`
       : `카카오맵에서 「${visitAddr}」 위치를 로드맵으로 표시`;
@@ -7043,13 +7231,14 @@ function render(report, opts = {}) {
   // 🚗 티맵 길찾기 (앱 스킴) — 정확 좌표가 있을 때만. 모바일 티맵 앱에서 경로 안내.
   if (coord && isFinite(coord.lat) && isFinite(coord.lng)) {
     const rp = (m && m.ref_point) || {};
-    const tmapBtn = el('button', 'act', '🚗 티맵 길찾기');
+    const tmapBtn = el('button', 'act', '티맵');
     tmapBtn.title = `${refName} → 「${routeAddr || '방문지'}」 자동차 경로 (티맵 앱)`;
     const tmapUrl = `tmap://route?goalname=${encodeURIComponent(routeAddr || '방문지')}&goalx=${coord.lng}&goaly=${coord.lat}`
       + (isFinite(rp.lat) && isFinite(rp.lng) ? `&startname=${encodeURIComponent(refName)}&startx=${rp.lng}&starty=${rp.lat}` : '');
     tmapBtn.addEventListener('click', () => { window.location.href = tmapUrl; });
     actions.appendChild(tmapBtn);
   }
+  actions.appendChild(cmpBtn);
   actions.appendChild(dlBtn);
   actions.appendChild(printBtn);
   actions.appendChild(shareBtn);
@@ -7065,6 +7254,12 @@ function render(report, opts = {}) {
   // 사업자 상태)이 카드의 기본 현황 칩과 같은 말이었다. 겹치지 않던 회수·판매중지와
   // 방문 거리만 칩으로 옮기고 타일 줄은 걷어 냈다.
   root.appendChild(renderVerdict(report));
+  // 재조회 비교 — 같은 업체를 전에 조회했으면 무엇이 바뀌었는지 판정 바로 아래에
+  if (m.live && !report._savedAt) {
+    if (report._diff === undefined) Object.defineProperty(report, '_diff', { configurable: true, value: snapDiff(report) });
+    if (report._diff) root.appendChild(el('div', 'pdiff' + (report._diff.added.length ? ' has-risk' : ''), diffBlockHtml(report._diff)));
+    snapSave(report);
+  }
 
   // 조회 메타는 판단에 쓰이지 않으니 아래로 내리고 한 줄로 줄인다
   const qDate = new Date(m.query_at).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
@@ -7097,7 +7292,12 @@ function render(report, opts = {}) {
   if (!excl.has('finance')) core.appendChild(financeBlock(report));
   const allF = [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])];
   const gapN = allF.filter((x) => x.data_gap || x.value == null).length;
-  const fbar = el('div', 'rfold-bar', '<span>상세 자료</span><button type="button" class="nb-btn sm" data-fold-all="1">모두 펼치기</button><button type="button" class="nb-btn sm" data-fold-all="0">모두 접기</button>');
+  // 범례도 '표기 없음 = 믿을 수 있는 자료'부터 밝힌다 — 안 붙은 이유를 모르면 빠진 것처럼 보인다
+  const legendHtml = '<span class="legend">'
+    + `<span class="item"><em class="rel-none">표기 없음</em> ${GRADE_LABEL.A}</span>`
+    + ['B', 'C', 'D'].map((g) => `<span class="item">${relDots(g)} ${GRADE_LABEL[g]}</span>`).join('')
+    + '<span class="item"><span class="ftag web">웹 보강</span> 웹·집계 사이트 값</span></span>';
+  const fbar = el('div', 'rfold-bar', `<span>상세 자료</span>${legendHtml}<button type="button" class="nb-btn sm" data-fold-all="1">모두 펼치기</button><button type="button" class="nb-btn sm" data-fold-all="0">모두 접기</button>`);
   fbar.addEventListener('click', (e) => { const b = e.target.closest('[data-fold-all]'); if (b) foldAll(root, b.dataset.foldAll === '1'); });
   root.appendChild(fbar);
   root.appendChild(foldSec('core', '기업 정보 · 생산역량 · 재무', `항목 ${allF.length - gapN}개 확인${gapN ? ` · 공백 ${gapN}` : ''}`, core));
@@ -7287,18 +7487,19 @@ function render(report, opts = {}) {
     }
   }
 
-  const diffBlock = renderDiff(report.diff_from_prev);
-  if (diffBlock) blocks.appendChild(diffBlock);
-  root.appendChild(foldSec('more', '채용공고 · 홈페이지 · 심층분석', '', blocks));
+  // 예시 리포트의 '직전 버전 대비' — 실데이터는 판정 아래 재조회 비교로 대신한다
+  if (!m.live) { const diffBlock = renderDiff(report.diff_from_prev); if (diffBlock) blocks.appendChild(diffBlock); }
+  // 근거 링크 모음 — 보고·감사용으로 원문 주소를 한곳에
+  const evl = m.live ? evidenceLinks(report) : [];
+  if (evl.length) {
+    const eb = el('div', 'block evlinks');
+    eb.appendChild(el('h3', null, `근거 링크 모음<span class="cnt">${evl.length}건</span>`));
+    eb.appendChild(el('ul', 'ev-list', evl.map((l) => `<li><span class="ev-k">${esc(l.kind)}</span><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a><small>${esc((() => { try { return new URL(l.url).hostname.replace(/^www\./, ''); } catch { return ''; } })())}</small></li>`).join('')));
+    blocks.appendChild(eb);
+  }
+  root.appendChild(foldSec('more', '채용공고 · 홈페이지 · 근거 링크', '', blocks));
 
-  // Legend
-  const lg = el('div', 'legend');
-  // 범례도 '표기 없음 = 믿을 수 있는 자료'부터 밝힌다 — 안 붙은 이유를 모르면 빠진 것처럼 보인다
-  lg.innerHTML =
-    '<span class="item"><b>항목 신뢰도</b></span>' +
-    `<span class="item"><em class="rel-none">표기 없음</em> ${GRADE_LABEL.A}로 확인</span>` +
-    ['B', 'C', 'D'].map((g) => `<span class="item">${relDots(g)} ${GRADE_LABEL[g]}</span>`).join('');
-  root.appendChild(lg);
+  // 범례는 상세 자료 머리(접기 막대 옆)로 옮겼다 — 맨 아래에 있으면 등급을 읽을 때 이미 지나가 있다
   // 출처 — 맨 아래 한 줄로 간략히
   if (report.meta && report.meta.live) {
     const at = report.meta.query_at ? new Date(report.meta.query_at) : null;

@@ -1343,9 +1343,19 @@ function assembleLiveReport(name, corp, res) {
       const key = '제조소 추정 근무 인원';
       if (W && W.mfgSiteN) {
         const R = W.mfgR;
-        const val = `${R.one ? `${R.lo}명` : `${R.lo}~${R.hi}명`} · 제조소 ${W.mfgSiteN}곳`;
+        // 출처는 공식이어도 해석이 불확실하면 A로 두지 않는다 — 산재 상시가 국민연금보다 훨씬 적거나(어니프 1명 vs 8명),
+        // 보험이 막 성립한 사업장이면 '제조소 인원'이 아직 다 잡히지 않은 것이다. 범위로 보여 주고 B로 내린다.
+        const npsAll = W.allR && !W.allR.one ? W.allR.hi : null;
+        const wide = R.one && W.npsUnsplit && npsAll && npsAll >= Math.max(R.lo * 2, R.lo + 3);
+        const estD = (W.mfgSites[0] && W.sites.find((x) => x.atSite && x.role === 'mfg' && x.est)) || null;
+        const young = estD && (Date.now() - Date.parse(estD.est)) < 183 * 864e5;
+        const unsure = wide || young;
+        const val = `${R.one ? (wide ? `${R.lo}~${npsAll}명` : `${R.lo}명`) : `${R.lo}~${R.hi}명`} · 제조소 ${W.mfgSiteN}곳`;
         const per = W.mfgSites.map((x) => `${x.short} ${x.cnt}명${x.npsCnt != null ? `(연금 ${x.npsCnt})` : ''}`).join(' · ');
-        return f(key, val, W.matched ? 'A' : 'B', '근로복지공단 고용·산재보험 + 국민연금', today,
+        const why2 = [wide ? `⚠ 산재 상시 ${R.lo}명과 국민연금 ${npsAll}명이 크게 달라 범위로 적었습니다 — 국민연금은 본점 일괄 신고라 제조소 몫을 가를 수 없습니다.` : '',
+          young ? `⚠ 보험 사업장 성립(${estD.est})이 6개월 안이라 인원이 아직 다 신고되지 않았을 수 있습니다.` : ''].filter(Boolean).join(' ');
+        return f(key, val, W.matched && !unsure ? 'A' : 'B', '근로복지공단 고용·산재보험 + 국민연금', today,
+          (why2 ? `${why2} ` : '') +
           `${per} — ${W.matched ? '제조업 허가 제조소와 같은 주소의 보험 사업장' : '화장품 제조 업종 보험 사업장(제조소 주소와는 대조 못 함)'}. `
           + (R.one
             ? (W.mfgR.lo === W.mfg && W.npsSplit ? '산재 상시와 국민연금 가입자가 같습니다.' : '산재보험 상시근로자 기준입니다 — 국민연금은 본점 일괄 신고라 제조소 몫을 가를 수 없습니다.')
@@ -1533,13 +1543,13 @@ function assembleLiveReport(name, corp, res) {
     if (pm != null && r0 - pm >= 12) regGap = { permit: `${permit[1]}-${permit[2]}`, reg: openF.regYm, years: Math.floor((r0 - pm) / 12) };
     const notes = [
       openF.openDt ? `개업일 ${openF.openDt}` : `${openF.regYm.replace('-', '년 ')}월 사업자등록 (월 단위 — 정확한 개업일은 아님)`,
-      regGap ? `⚠ 제조업 허가(${regGap.permit})보다 사업자등록이 약 ${regGap.years}년 늦습니다 — 법인 전환·재설립·사업 양수도로 사업자번호가 새로 났을 수 있습니다. 방문 때 이전 사업자와의 관계, 허가 승계 여부를 확인하세요.`
+      regGap ? `⚠ 제조업 허가(${regGap.permit})와 웹에 적힌 사업자등록(${regGap.reg}) 시점이 약 ${regGap.years}년 다릅니다 — 법인 전환·재설립·사업 양수도였는지, 웹 값이 틀린 것인지 방문 때 물어보세요.`
         : estb ? `설립일/등록일(${estb[1]}-${estb[2]})과 대조용 참고값입니다.` : '공식 자료의 설립일이 없어 업력 참고값으로 씁니다.',
       '국세청 자료를 옮겨 적은 집계 사이트 값이라 공식 자료가 아닙니다 — 사업자등록증의 개업연월일로 확인하세요.',
     ];
     const ei = basic.findIndex((x) => x.key === '설립일 / 등록일');
     basic.splice(ei >= 0 ? ei + 1 : basic.length, 0,
-      f('사업자등록 시점 (웹 참고)', openF.openDt ? `개업일 ${openF.openDt}` : `${openF.regYm} 사업자등록`, 'C', srcT, today, notes.join(' ')));
+      f('사업자등록 시점', openF.openDt ? `개업일 ${openF.openDt}` : `${openF.regYm} 사업자등록`, 'C', srcT, today, notes.join(' ')));
   }
   const hiring = hireRaw && typeof analyzeHiring === 'function'
     ? { ...analyzeHiring(hireRaw.posts, hireRaw.heads, workforce ? workforce.total : empVal, npsYm ? npsYm.replace('.', '-') : null, hireRaw.extDiag, hireRaw.extProfile, hireRaw.hpHints, hireRaw.workAddrs), affil: hireRaw.affil || [] }
@@ -1859,11 +1869,11 @@ function assembleLiveReport(name, corp, res) {
   });
   if (regGap) {
     cross_diag.items.push({ label: '업력 정합성', status: 'warn', severe: false,
-      detail: `제조업 허가 ${regGap.permit} ↔ 사업자등록 ${regGap.reg}(웹 참고) — 허가보다 약 ${regGap.years}년 늦게 사업자등록. 법인 전환·재설립·사업 양수도 가능성 — 이전 사업자와의 관계와 허가 승계 여부를 확인하세요.` });
+      detail: `제조업 허가 ${regGap.permit} ↔ 사업자등록 ${regGap.reg}(웹 참고) — 약 ${regGap.years}년 차이. 법인 전환·재설립·양수도로 사업자번호가 바뀌었는지, 허가가 승계됐는지 확인하세요(웹 값 오류일 수도 있음).` });
     cross_diag.warnCount = (cross_diag.warnCount || 0) + 1;
   }
   cross_diag.items.forEach((c) => {
-    if (c.label === '업력 정합성' && c.status === 'warn') risk_flags.push({ type: '사업자 재등록 의심', detail: c.detail });
+    if (c.label === '업력 정합성' && c.status === 'warn') risk_flags.push({ type: '사업자등록 시점 확인', detail: c.detail });
     if (c.status !== 'warn') return;
     if (c.label === '주소 정합성') risk_flags.push({ type: '주소 상이', detail: `${c.detail}` });
     if (c.label === '인력 정합성' && c.severe) risk_flags.push({ type: '인력 불일치', detail: `${c.detail}` });
@@ -1909,6 +1919,36 @@ function assembleLiveReport(name, corp, res) {
     }
   }
 
+  // 웹 위험 신호 — 관련성 검증을 통과한 웹 언급·뉴스에서 회생·파산·소송·행정처분 같은 말을 잡아 리스크로 올린다.
+  // 어니프: marketbz 요약문의 「#회생기업」이 웹 자료 목록에 묻혀 리스크로 안 올라갔다.
+  // 집계 사이트의 안내 문구('휴·폐업 조회', '폐업 여부')는 업체 얘기가 아니라 뺀다.
+  const WEB_RISK = [
+    ['회생·파산', 'high', /기업\s*회생|회생\s*(?:기업|절차|신청|개시|인가|계획)|#회생|법정\s*관리|파산|부도|워크\s*아웃/],
+    ['영업 정지·허가 취소', 'high', /영업\s*정지|업무\s*정지|제조\s*정지|허가\s*취소|등록\s*취소|제조업\s*취소/],
+    ['수사·형사', 'high', /압수\s*수색|횡령|배임|구속\s*(?:기소|영장)|검찰\s*(?:송치|기소)|불구속\s*기소/],
+    ['소송·압류', 'mid', /소송|가압류|압류|체납|손해\s*배상\s*청구/],
+    ['행정처분·제재', 'mid', /행정\s*처분|과징금|과태료|시정\s*명령|판매\s*정지|광고\s*정지|회수\s*명령|적발/],
+  ];
+  const riskNoise = /휴\s*[·ㆍ.]?\s*폐업|폐업\s*(?:여부|조회|상태)|체납\s*(?:여부|조회)|소송\s*(?:여부|조회)/g;
+  const web_risk = [];
+  [...oem_trace.map((t) => ({ src: '웹 언급', title: t.title, link: t.link, txt: oemFull.get(t.link || '') || `${t.title} ${t.desc}` })),
+    ...(news || []).map((n) => ({ src: '뉴스', title: String(n.title || '').replace(/<\/?b>/g, ''), link: n.originallink || n.link || '', txt: `${n.title || ''} ${n.description || ''}`.replace(/<\/?b>/g, '') }))]
+    .forEach((it) => {
+      const txt = String(it.txt || '').replace(riskNoise, ' ');
+      WEB_RISK.forEach(([kind, sev, re]) => {
+        const m = txt.match(re);
+        if (m && !web_risk.some((w) => w.kind === kind)) web_risk.push({ kind, sev, kw: m[0].replace(/\s+/g, ' ').replace(/^#/, ''), src: it.src, title: it.title, link: it.link });
+      });
+    });
+  web_risk.forEach((w) => {
+    risk_flags.push({ type: `웹 위험 신호 · ${w.kind}`, web: true, sev: w.sev, link: w.link,
+      detail: `「${w.kw}」 — ${w.src} 「${String(w.title || '').slice(0, 60)}」에 나옵니다. 웹 문구라 오탐일 수 있습니다 — `
+        + (w.kind === '회생·파산' ? '대법원 회생·파산 공고와 신용조회로 사실 여부를 먼저 확인하세요.'
+          : w.kind === '소송·압류' ? '진행 중인 소송·압류가 거래(선급금·납기)에 영향을 주는지 확인하세요.'
+            : '처분 내용·시점과 재발 방지 조치를 확인하세요.')
+        + (w.link ? ` 근거: ${w.link}` : '') });
+  });
+
   const reportOut = {
     meta: {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
@@ -1946,7 +1986,7 @@ function assembleLiveReport(name, corp, res) {
       visit_addr: (kkTravel && kkTravel.destAddr) || fctAddr || corp?.addr || npsAddr || null,
       visit_coord: (kkTravel && kkTravel.dest && isFinite(kkTravel.dest.lat) && isFinite(kkTravel.dest.lng)) ? { lat: kkTravel.dest.lat, lng: kkTravel.dest.lng } : null,
     },
-    basic, capacity, finance, finance_history, finance_health, cross_diag, recalls, oem_trace, crosscheck, risk_flags, diff_from_prev: [],
+    basic, capacity, finance, finance_history, finance_health, cross_diag, recalls, oem_trace, crosscheck, risk_flags, web_risk, diff_from_prev: [],
     news, insights,
     // 관련성 검증에서 걸러낸 뉴스·웹 언급(사유 포함)과 판정에 쓴 근거 — 화면에서 접어 보여 준다
     rel_check: { excluded: rel_excluded.slice(0, 40), regions: relCtx.regions, rep: !!relCtx.rep, bzno: !!relCtx.bzno },

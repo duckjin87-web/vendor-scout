@@ -147,7 +147,7 @@ function grHtml(st) {
     return `<button type="button" role="tab" class="gr-tile" data-gr-period="${p.id}" aria-selected="${st.period === p.id}">`
       + `<span>${esc(p.label)}</span><b>${n.toLocaleString()}곳</b><small>${esc(grYmS(cy))} → ${esc(grYmS(d.ym))} · +${Math.round(p.rate * 100)}%↑</small></button>`;
   }).join('') + grJobsTile(st) + nhTile(st) + '</div>';
-  if (st.period === 'jobs') return h + grJobsHtml(st);
+  if (st.period === 'jobs' && grJobsTile(st)) return h + grJobsHtml(st);
   if (st.period === 'newhire') return h + nhHtml(st);
   // 업종 전체 추이 — 13개월이 모두 잡힌 사업장만 합한 가입자수
   const IND = grIndustry(d);
@@ -209,6 +209,8 @@ const grJobRows = (j) => ((j && j.rows) || []).filter((r) => r.cur >= GRJ.MIN &&
 function grJobsTile(st) {
   const j = st.jobs;
   const ready = j && j.rows && Object.values(j.sources || {}).some((x) => x && x.ok);
+  // 집계원(사람인·고용24)이 아직 연결되지 않았으면 칸을 아예 숨긴다 — '— / API 키 등록 필요'는 사용자에게 의미가 없다
+  if (!ready) return '';
   return `<button type="button" role="tab" class="gr-tile jobs" data-gr-period="jobs" aria-selected="${st.period === 'jobs'}">`
     + `<span>채용공고 급증 (최근 30일)</span><b>${ready ? `${grJobRows(j).length.toLocaleString()}곳` : '—'}</b>`
     + `<small>${ready ? `${esc(j.window.from.slice(5))} ~ ${esc(j.window.to.slice(5))} · 직전 30일의 ${GRJ.RATIO}배↑` : '사람인·고용24 API 키 등록 필요'}</small></button>`;
@@ -705,6 +707,7 @@ function dashSync() {
   const rep = document.getElementById('report');
   const open = !!(rep && !rep.classList.contains('hidden'));
   const nav = document.getElementById('dashTabs'); if (nav) nav.hidden = open;
+  const lead = document.getElementById('heroLead'); if (lead) lead.hidden = open;   // 리포트를 보는 중에는 소개 문구를 접는다
   DASH_TABS.forEach((t) => { const el = document.getElementById(t.id); if (el) el.hidden = open || dashTab !== t.id; });
 }
 function mountDash() {
