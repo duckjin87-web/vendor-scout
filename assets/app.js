@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 232;
+const BUILD = 233;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2122,8 +2122,11 @@ function regionKeyOf(addr) {
 // 훨씬 빠르다(후보 단계 9초 → 1초 안팎). 명단을 못 읽으면 null → 예전 방식으로.
 async function ledgerCandidates(name) {
   if (typeof nbLedger !== 'function') return null;
-  const led = await nbLedger().catch(() => null);
+  let led = await nbLedger().catch(() => null);
   if (!led || !led.length) return null;
+  // 주간 명단 뒤에 들어온 업체 — 대시보드 「최신 자료 조회(현시점)」로 찾은 신규를 후보 명단에 더한다
+  const liveAdd = (typeof mkState !== 'undefined' && mkState.live && mkState.live.added) || [];
+  if (liveAdd.length) led = [...led, ...liveAdd.map((r) => ({ n: r.n, a: r.a, bz: r.bz || null, p: r.p, live: true }))];
   const key = nbNorm(name);
   if (key.length < 2) return [];
   const seen = new Set(), out = [];
@@ -2144,7 +2147,7 @@ async function ledgerCandidates(name) {
     seen.add(dk);
     out.push({ corpNm: r.n, addr: r.ad || r.a || '', bzno: r.bz || null,
       pdate: fmtDate(String(r.p || '').replace(/\D/g, '')) || null, mfds: true, ledger: true,
-      _exact: score === 1, _score: score, _why: why });
+      _exact: score === 1, _score: score, _why: r.live ? `${why} · 주간 집계 이후 신규(현시점 대조)` : why });
   });
   return out.sort((a2, b2) => b2._score - a2._score).slice(0, 12);
 }
@@ -2265,6 +2268,9 @@ async function liveLookup(name) {
       const exact = byName.filter((c) => String(c.bzno || '').replace(/\D/g, '') === bno);
       if (exact.length) byBno = exact;
       else if (byName.length) {
+        // 금융위에 이 번호가 없어도 식약처 제조업 명단(주간 + 현시점 신규)에 같은 번호가 있으면 그 업체로 바로 간다
+        const ledHit = ((await ledgerCandidates(nameOnly).catch(() => null)) || []).find((c) => String(c.bzno || '').replace(/\D/g, '') === bno);
+        if (ledHit) return { report: await finishLiveMfds(nameOnly, ledHit) };
         // bzno가 후보에 없으면(금융위 미수록) 상호 후보를 그대로 제시 — 사용자가 선택
         return byName.length === 1
           ? { report: await finishLive(nameOnly, { ...byName[0], bzno: byName[0].bzno || bno }) }
@@ -2324,9 +2330,21 @@ async function liveLookup(name) {
       const f = fscOf(one) || (await fscByBz(one.corpNm, one.bzno).catch(() => ({}))).pick;
       return { report: await finishLive(one.corpNm, f ? { ...f, _lookup: lookup } : { corpNm: one.corpNm, bzno: one.bzno, addr: one.addr, _lookup: lookup }) };
     }
-    if (ledC.length) return { candidates: [...ledC, ...noLic], name, source: 'ledger', similar: !exactL.length };
+    // 주간 명단에 이름이 딱 맞는 업체가 없으면, 명단 반영 전 신규 허가일 수 있다 — 식약처 공개 API·의약품안전나라를 한 번 더 본다.
+    // 예전에는 비슷한 이름이 하나라도 있으면 거기서 멈춰, 이번 주 허가 업체(제이티코스)는 후보에도 안 나왔다.
+    const mf = !exactL.length ? await mfdsCandidates(name).catch(() => []) : [];
+    const nkey = (v) => stripCorp(v || '').replace(/\s/g, '');
+    const fresh = mf.filter((m) => !ledC.some((l) => (dg(l.bzno).length === 10 && dg(l.bzno) === dg(m.bzno)) || nkey(l.corpNm) === nkey(m.corpNm)))
+      .map((m) => ({ ...m, _why: '주간 명단 반영 전 — 식약처 공개 API에서 확인', _exact: nkey(m.corpNm) === nkey(name) }));
+    const freshExact = fresh.filter((m) => m._exact);
+    if (freshExact.length === 1) {
+      const one = freshExact[0];
+      one._lookup = { typed: name, via: 'mfds', matched: one.corpNm, bzno: one.bzno || null, why: one._why,
+        basis: `식약처 화장품 제조업 공개 API의 「${one.corpNm}」${one.bzno ? `(사업자 ${one.bzno})` : ''}${one.pdate ? ` · ${one.pdate} 허가` : ''} — 주간 명단 반영 전` };
+      return { report: await finishLiveMfds(name, one) };
+    }
+    if (ledC.length || fresh.length) return { candidates: [...fresh, ...ledC, ...noLic], name, source: 'ledger', similar: !exactL.length && !freshExact.length };
     // 명단에 비슷한 이름도 없다 — 최근 허가일 수 있어 식약처·의약품안전나라를 한 번 더 본다
-    const mf = await mfdsCandidates(name).catch(() => []);
     if (mf.length) return { candidates: [...mf.map((c) => ({ ...c, _why: '의약품안전나라 화장품 제조업 검색' })), ...noLic], name, source: 'ledger', similar: true };
     return { candidates: noLic, name, source: 'none', similar: true };
   }

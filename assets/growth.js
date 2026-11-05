@@ -524,6 +524,7 @@ async function mkLiveScan(repaint) {
     got.forEach((g) => all.push(...g));
     const led = await ledP;
     const firms = (led && led.firms) || {};
+    mkState.ledger = firms;
     const known = new Set(Object.keys(firms));
     const nk = (v) => String(v || '').replace(/\(주\)|㈜|주식회사|\s/g, '');
     const d8 = (v) => String(v || '').replace(/\D/g, '').slice(0, 8);
@@ -532,7 +533,7 @@ async function mkLiveScan(repaint) {
     const idOf = (x) => String(x.ENTP_SEQ || '') || `${String(x.BIZRNO || '').replace(/\D/g, '')}|${nk(x.ENTP_NAME)}`;
     const cur = new Set(makers.map(idOf));
     const added = makers.filter((x) => !known.has(idOf(x)) || (firms[idOf(x)] && firms[idOf(x)].g))
-      .map((x) => ({ id: idOf(x), n: String(x.ENTP_NAME || '').trim(), a: String(x.FACTORY_ADDR || '').trim(), p: iso(d8(x.ENTP_PERMIT_DATE)), add: true, live: true }))
+      .map((x) => ({ id: idOf(x), n: String(x.ENTP_NAME || '').trim(), a: String(x.FACTORY_ADDR || '').trim(), p: iso(d8(x.ENTP_PERMIT_DATE)), bz: String(x.BIZRNO || '').replace(/\D/g, '') || null, add: true, live: true }))
       .sort((a, b) => String(b.p || '').localeCompare(String(a.p || '')));
     // 빠짐은 명단을 거의 다 받았을 때만 센다 — 한 쪽이라도 못 받으면 그 쪽 업체가 전부 빠진 것처럼 보인다
     const complete = !failed && all.length >= total * 0.98;
@@ -564,6 +565,9 @@ function mkLiveStale() {
   if (L && L.kept && b && b > Date.parse(L.at)) { mkState.live = null; try { localStorage.removeItem(MK_LIVE_KEY); } catch { /* 무시 */ } }
 }
 const mkHm = (iso) => { const d = new Date(iso); return `${mkDayOf(iso) === mkDayOf(Date.now()) ? '오늘' : `${d.getMonth() + 1}/${d.getDate()}`} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+// 사전검증으로 넘길 사업자번호 — 현시점 신규는 API가 준 값, 주간 집계분은 누적 명단(ENTP_SEQ → bz)에서.
+// 이름만 넘기면 주간 명단에 아직 없는 신규 업체는 비슷한 이름 후보만 뜨고 정작 그 업체는 안 나왔다(제이티코스).
+const mkBzOf = (r) => r.bz || (mkState.ledger && mkState.ledger[r.id] && mkState.ledger[r.id].bz) || '';
 function mkRows(st) {
   const d = st.data; if (!d) return [];
   const v = MK_VIEWS.find((x) => x.id === st.view) || MK_VIEWS[1];
@@ -645,7 +649,7 @@ function mkHtml(st) {
       + rows.slice(0, 80).map((r) => `<tr><td class="mk-d">${esc(mkDay(r.p))}</td>`
         + `<td><b class="mk-nm">${esc(r.n)}</b><small>${esc(grRegion(r.a) || r.a || '')}</small></td>`
         + `<td class="mk-addr">${esc(r.ad || r.a || '')}</td><td class="mk-bs">${mkBadges(r)}</td>`
-        + `<td class="mk-acts"><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}">사전검증</button>`
+        + `<td class="mk-acts"><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}" data-gr-bz="${esc(mkBzOf(r))}">사전검증</button>`
         + `<button type="button" class="nb-btn sm mk-sv${svKeys.has(svKey(r.n)) ? ' on' : ''}" data-mk-save="${esc(r.id)}" title="${svKeys.has(svKey(r.n)) ? '저장 해제' : '저장 — 상단 「저장업체」에서 나중에 조회'}">${svKeys.has(svKey(r.n)) ? '★ 저장됨' : '☆ 저장'}</button></td></tr>`).join('')
       + '</tbody></table>' + (rows.length > 80 ? `<p class="gr-foot">상위 80곳만 표시 — 전체 ${rows.length}곳</p>` : '');
   }
@@ -682,7 +686,7 @@ function mountMakers() {
     const sv = e.target.closest('[data-mk-save]');
     if (sv) { const r = [...((mkState.live && mkState.live.added) || []), ...(mkState.data.recent || [])].find((x) => x.id === sv.dataset.mkSave); if (r) svToggleFirm(r).catch((er) => svToast(`저장하지 못했습니다 — ${er.message}`)); return; }
     const g = e.target.closest('[data-gr-go]');
-    if (g) { const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = ''; lookup(g.dataset.grGo, ''); return; }
+    if (g) { const bz = g.dataset.grBz || ''; const q = $('#q'); if (q) q.value = g.dataset.grGo; const bno = $('#bno'); if (bno) bno.value = bz; lookup(g.dataset.grGo, bz); return; }
     if (e.target.closest('[data-gr-req]')) { grRequest(() => { if (growthState.repaint) growthState.repaint(); }); }
     if (e.target.closest('[data-gr-gh]')) grWatchGh();
   });
