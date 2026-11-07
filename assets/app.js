@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 233;
+const BUILD = 234;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4475,6 +4475,143 @@ function diffBlockHtml(D) {
     + (D.rows.length ? `<div class="pd-rows">${D.rows.map((r) => `<div class="pd-row"><span class="k">${esc(r.key)}</span><span class="b">${esc(r.before)}</span><span class="ar">→</span><b>${esc(r.after)}</b></div>`).join('')}</div>` : '');
 }
 
+// ── 판정 근거 카드 ── 같은 자리에서 「근거 · 출처 · 원문」만 갈아 끼운다(세그먼트).
+// 블록을 늘어놓으면 스크롤이 길어진다. 목록 한 줄 = 항목 하나, 상태는 배지, 출처는 i를 눌러 팝오버로.
+const EV_KEYS = ['제조업 등록', '사업자 상태', '대표자', '제조소 추정 근무 인원', '공장 건축면적 (건평)', 'CGMP 적합업소', '매출액', '사업자등록 시점'];
+function evBadge(f) {
+  if (!f || f.data_gap || f.value == null) return '<span class="ev-b chk">확인 필요</span>';
+  if (isWebSource(f)) return '<span class="ev-b web">웹 보강</span>';
+  return f.grade === 'C' ? '<span class="ev-b web">추정</span>' : '<span class="ev-b of">공식</span>';
+}
+function evidenceCard(report) {
+  const all = [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])];
+  const box = el('div', 'evc');
+  const views = {
+    why: () => {
+      const items = ((report.cross_diag || {}).items || []).filter((c) => c.status !== 'na');
+      const rf = (report.risk_flags || []).filter((r) => r.web);
+      const rows = [...items.map((c) => [c.label, c.detail, c.status === 'match' ? '<span class="ev-b of">일치</span>' : '<span class="ev-b chk">확인</span>', null]),
+        ...rf.map((r) => [r.type.replace(/^웹 위험 신호 · /, '웹 위험 · '), r.detail, '<span class="ev-b risk">웹 위험</span>', r.link || null])];
+      if (!rows.length) return '<p class="evc-empty">대조할 근거가 아직 없습니다.</p>';
+      return rows.map((r, i) => `<div class="evc-row" style="--i:${i}"><span class="k">${esc(r[0])}</span><span class="v">${esc(String(r[1] || '').replace(/ 근거: https?:\/\/\S+/, '').slice(0, 140))}</span><span class="b">${r[2]}</span></div>`).join('');
+    },
+    src: () => EV_KEYS.map((k) => all.find((f) => f.key === k)).filter(Boolean).map((f, i) => {
+      const url = (String(f.note || '').match(/https?:\/\/[^\s)\]」]+/) || [])[0];
+      const note = noteLines(f.note).map((x) => x.replace(/https?:\/\/\S+/g, '').trim()).filter(Boolean)[0] || '';
+      return `<div class="evc-row" style="--i:${i}"><span class="k">${esc(f.key)}</span><span class="v">${f.value == null ? '<span class="evc-gap">확인 안 됨</span>' : esc(String(f.value))}</span>`
+        + `<span class="b">${evBadge(f)}<span class="evc-info"><button type="button" aria-expanded="false" aria-label="${esc(f.key)} 출처">i</button>`
+        + `<span class="evc-pop" hidden><b>${esc(f.source || '출처 없음')}</b>${f.as_of ? `기준 ${esc(f.as_of)}` : ''}${note ? `<br>${esc(note.slice(0, 120))}` : ''}${url ? `<br><a href="${esc(url)}" target="_blank" rel="noopener">원문 열기 →</a>` : ''}</span></span></span></div>`;
+    }).join(''),
+    raw: () => {
+      const L = evidenceLinks(report);
+      if (!L.length) return '<p class="evc-empty">원문 링크가 없습니다 — 공공 API 값만으로 확인한 리포트입니다.</p>';
+      return L.slice(0, 8).map((l, i) => `<div class="evc-row" style="--i:${i}"><span class="k">${esc(l.kind)}</span><a class="v" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a><span class="b"><small>${esc((() => { try { return new URL(l.url).hostname.replace(/^www\./, ''); } catch { return ''; } })())}</small></span></div>`).join('')
+        + (L.length > 8 ? `<p class="evc-more">나머지 ${L.length - 8}건은 아래 「근거 링크 모음」에 있습니다.</p>` : '');
+    },
+  };
+  box.innerHTML = '<div class="evc-h"><b>판정 근거</b><div class="seg" role="group" aria-label="보기 전환"><span class="seg-k" aria-hidden="true"></span>'
+    + '<button type="button" aria-pressed="true" data-v="why">근거</button><button type="button" aria-pressed="false" data-v="src">출처</button><button type="button" aria-pressed="false" data-v="raw">원문</button></div></div>'
+    + '<div class="evc-body"></div>'
+    + '<div class="evc-foot"><button type="button" class="lnk" data-evc-all>상세 자료 전체 보기 ↓</button><button type="button" class="evc-btn" data-evc-csv>엑셀로 받기</button></div>';
+  const body = box.querySelector('.evc-body'), seg = box.querySelector('.seg'), knob = seg.querySelector('.seg-k');
+  const bs = [...seg.querySelectorAll('button')];
+  const place = () => { const on = bs.find((b) => b.getAttribute('aria-pressed') === 'true'); if (!on || !on.offsetWidth) return; knob.style.width = `${on.offsetWidth}px`; knob.style.transform = `translateX(${on.offsetLeft}px)`; };
+  const show = (v) => { body.innerHTML = `<div class="evc-list">${views[v]()}</div>`; };
+  bs.forEach((b) => b.addEventListener('click', () => { bs.forEach((x) => x.setAttribute('aria-pressed', String(x === b))); place(); show(b.dataset.v); }));
+  if (window.ResizeObserver) new ResizeObserver(place).observe(seg);
+  requestAnimationFrame(place);
+  body.addEventListener('click', (e) => {
+    const b = e.target.closest('.evc-info > button'); if (!b) return;
+    const pop = b.nextElementSibling, open = pop.hidden;
+    box.querySelectorAll('.evc-pop').forEach((p) => { p.hidden = true; p.previousElementSibling.setAttribute('aria-expanded', 'false'); });
+    pop.hidden = !open; b.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', (e) => { if (!box.contains(e.target)) box.querySelectorAll('.evc-pop').forEach((p) => { p.hidden = true; }); });
+  box.querySelector('[data-evc-csv]').addEventListener('click', () => downloadCSV(report));
+  box.querySelector('[data-evc-all]').addEventListener('click', () => { const t = document.querySelector('.rfold-bar'); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  show('why');
+  return box;
+}
+
+// ── 현장 모드 ── 방문 당일 휴대폰용. 리포트 전체 대신 '무엇을 확인할지'만, 엄지로 다루기 쉽게.
+// 확인 표시는 리포트의 「방문 전 확인필요」 체크와 같은 저장소를 쓴다(어느 쪽에서 눌러도 같이 바뀐다).
+function openFieldMode(report) {
+  const m = report.meta || {}, vid = m.vendor_id || null;
+  const items = [...buildVisitChecklist(report), ...getCustomChecks(vid).map((c) => ({ ...c, uid: c.id, mine: true }))];
+  const PR = { high: 0, mid: 1, low: 2 };
+  items.sort((a, b) => (PR[a.pri] ?? 3) - (PR[b.pri] ?? 3));
+  const Q = qualityGrade(report), V = VERDICT[Q.grade] || VERDICT.D;
+  const all = [...(report.basic || []), ...(report.capacity || [])];
+  const visit = m.visit_addr || ((all.find((f) => f.key === '공장/제조소 소재지') || {}).value) || '';
+  let tab = 'chk', scope = 'high', cur = null;
+  const ov = el('div', 'fm');
+  ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true'); ov.setAttribute('aria-label', '현장 모드');
+  const isDone = (it) => getCheckedSet(vid).has(checkKeyOf(it));
+  const left = () => items.filter((i) => i.pri === 'high' && !isDone(i)).length;
+  const bodyHtml = () => {
+    if (tab === 'sum') {
+      return '<div class="fm-lst">' + EV_KEYS.map((k) => all.find((f) => f.key === k) || (report.finance || []).find((f) => f.key === k)).filter(Boolean)
+        .map((f) => `<div class="fm-kv"><span>${esc(f.key)}</span><b>${f.value == null ? '확인 안 됨' : esc(String(f.value))}</b>${evBadge(f)}</div>`).join('') + '</div>';
+    }
+    const shown = items.filter((i) => scope === 'all' || i.pri === 'high' || i.mine);
+    return `<div class="fm-verd v-${esc(V.tone)}"><span class="g">${Q.grade === 'D' ? '불가' : esc(Q.grade)}</span><div><b>${esc(V.label)}</b><span>필수 남은 일 <b class="num" data-fm-left>${left()}</b>건</span></div></div>`
+      + `<div class="fm-scope seg" role="group" aria-label="보기"><span class="seg-k" aria-hidden="true"></span><button type="button" aria-pressed="${scope === 'high'}" data-sc="high">필수</button><button type="button" aria-pressed="${scope === 'all'}" data-sc="all">전체 ${items.length}</button></div>`
+      + (shown.length ? `<div class="fm-lst">${shown.map((it) => { const i = items.indexOf(it);
+        return `<button type="button" class="fm-li${isDone(it) ? ' done' : ''}" data-i="${i}"><span class="st" aria-hidden="true"></span><span class="t">${esc(String(it.text || '').slice(0, 64))}${String(it.text || '').length > 64 ? '…' : ''}<small>${esc(it.cat || '')} · ${esc(PRI_LABEL[it.pri] || '')}</small></span><span class="chev" aria-hidden="true">›</span></button>`; }).join('')}</div>`
+        : '<p class="fm-empty">확인할 항목이 없습니다.</p>');
+  };
+  ov.innerHTML = `<div class="fm-ph">`
+    + `<div class="fm-bar"><button type="button" class="fm-back" aria-label="현장 모드 닫기">‹</button><div><b>${esc(m.vendor_name || '')}</b><small>${esc(String(visit).slice(0, 40))}</small></div></div>`
+    + `<div class="fm-body"></div>`
+    + `<nav class="fm-tabs" aria-label="영역"><button type="button" data-t="chk" aria-current="page"><i class="fi-chk"></i>확인</button><button type="button" data-t="sum"><i class="fi-sum"></i>요약</button><button type="button" data-t="area"><i class="fi-area"></i>면적</button><button type="button" data-t="nearby"><i class="fi-near"></i>주변</button></nav>`
+    + `<div class="fm-scrim"></div>`
+    + `<div class="fm-sheet" role="dialog" aria-modal="true" aria-labelledby="fmT"><span class="grab" aria-hidden="true"></span><h4 id="fmT"></h4><p class="fm-tx"></p><p class="fm-why"></p>`
+    + `<div class="fm-tog"><span>확인함</span><button type="button" class="tog" role="switch" aria-checked="false" aria-label="확인함"></button></div></div>`
+    + `<div class="fm-toast" role="status"></div></div>`;
+  const body = ov.querySelector('.fm-body'), sheet = ov.querySelector('.fm-sheet'), scrim = ov.querySelector('.fm-scrim'), tog = ov.querySelector('.tog'), toast = ov.querySelector('.fm-toast');
+  const segPlace = () => { const sg = body.querySelector('.seg'); if (!sg) return; const on = sg.querySelector('[aria-pressed="true"]'), k = sg.querySelector('.seg-k'); if (on && on.offsetWidth) { k.style.width = `${on.offsetWidth}px`; k.style.transform = `translateX(${on.offsetLeft}px)`; } };
+  const paint = () => { body.innerHTML = bodyHtml(); requestAnimationFrame(segPlace); };
+  const closeSheet = () => { sheet.classList.remove('on'); scrim.classList.remove('on'); };
+  let tt;
+  const say = (t) => { toast.textContent = t; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), 1600); };
+  const close = () => { ov.classList.remove('on'); document.body.style.overflow = ''; setTimeout(() => ov.remove(), 260); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key !== 'Escape') return; if (sheet.classList.contains('on')) closeSheet(); else close(); };
+  document.addEventListener('keydown', onKey);
+  ov.querySelector('.fm-back').addEventListener('click', close);
+  scrim.addEventListener('click', closeSheet);
+  ov.querySelector('.fm-tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-t]'); if (!b) return;
+    if (b.dataset.t === 'area' || b.dataset.t === 'nearby') { close(); const t = document.getElementById(`rtab-${b.dataset.t}`); if (t) t.click(); return; }
+    tab = b.dataset.t; ov.querySelectorAll('.fm-tabs button').forEach((x) => (x === b ? x.setAttribute('aria-current', 'page') : x.removeAttribute('aria-current'))); paint();
+  });
+  body.addEventListener('click', (e) => {
+    const sc = e.target.closest('[data-sc]'); if (sc) { scope = sc.dataset.sc; paint(); return; }
+    const li = e.target.closest('.fm-li'); if (!li) return;
+    cur = items[Number(li.dataset.i)];
+    ov.querySelector('#fmT').textContent = `${cur.cat || '확인'} · ${PRI_LABEL[cur.pri] || ''}`;
+    ov.querySelector('.fm-tx').textContent = cur.text || '';
+    ov.querySelector('.fm-why').textContent = [cur.why, cur.ins].filter(Boolean).join(' / ');
+    tog.setAttribute('aria-checked', String(isDone(cur)));
+    sheet.classList.add('on'); scrim.classList.add('on'); tog.focus({ preventScroll: true });
+  });
+  tog.addEventListener('click', () => {
+    if (!cur) return;
+    const on = tog.getAttribute('aria-checked') !== 'true', k = checkKeyOf(cur);
+    tog.setAttribute('aria-checked', String(on));
+    // 리포트 표의 체크박스가 있으면 그쪽을 바꿔 진행률·링까지 같이 움직이게 한다
+    const main = document.querySelector(`.vc-tbl .vr[data-key="${CSS.escape(k)}"] .vr-ck`);
+    if (main) { main.checked = on; main.dispatchEvent(new Event('change')); } else toggleChecked(vid, k, on);
+    setTimeout(() => { closeSheet(); paint(); }, on ? 360 : 0);
+    const l = left();
+    say(on ? (l ? `확인으로 표시했어요 · 필수 ${l}건 남음` : '필수 확인을 모두 마쳤어요') : '확인 표시를 지웠어요');
+  });
+  paint();
+  document.body.appendChild(ov);
+  document.body.style.overflow = 'hidden';
+  requestAnimationFrame(() => ov.classList.add('on'));
+  ov.querySelector('.fm-back').focus({ preventScroll: true });
+}
+
 // ── 근거 링크 모음 ── 감사·보고용. 리포트 곳곳(웹 언급·뉴스·설명 속 '근거:' 주소)에 흩어진 원문 주소를 한곳에.
 function evidenceLinks(report) {
   const out = [], seen = new Set();
@@ -5693,6 +5830,48 @@ document.addEventListener('click', (e) => {
   lookup(b.dataset.alt, '');
 });
 
+// 판정 카드 결론 한 줄 — 판정 기준과 같은 말로만 쓴다
+function conclusionOf(g, ups, its) {
+  const hi = its.filter((i) => i.pri === 'high').length;
+  if (g === 'D') return '지금 자료로는 방문 여부를 정할 수 없습니다. 허가·영업 상태부터 확인하세요.';
+  if (g === 'C') return `중대 위험이 있습니다. 원인과 재발 방지 조치를 먼저 받고 방문 여부를 정하세요.`;
+  const base = ups.some((u) => /제조업/.test(u)) ? '허가·영업은 확인됐습니다.' : '기본 자료는 확인됐습니다.';
+  return hi ? `${base} 방문 때 필수 ${hi}건만 확인하면 됩니다.` : `${base} 필수로 확인할 항목은 없습니다.`;
+}
+// 업계 기준선 — 국민연금 월간 집계(급성장 신호와 같은 자료)에서 화장품 제조업 허가 사업장의 최근 인원을 모아
+// 중앙값과 같은 시·도 안 순위를 낸다. 이 업체를 사업자번호 앞 6자리 + 상호로 찾지 못하면 그 줄은 뺀다.
+function industryRef(report) {
+  const d = typeof growthState !== 'undefined' && growthState.data;
+  if (!d || !Array.isArray(d.rows)) return null;
+  const rows = d.rows.filter((r) => r.mfds && Array.isArray(r.s) && r.s.length);
+  if (rows.length < 30) return null;
+  const last = (r) => r.s[r.s.length - 1] || 0;
+  const vals = rows.map(last).sort((a, b) => a - b);
+  const med = vals[Math.floor(vals.length / 2)];
+  const bz = String(((report.basic || []).find((x) => x.key === '사업자등록번호') || {}).value || '').replace(/\D/g, '');
+  const nk = (v) => stripCorp(v || '').replace(/\s/g, '');
+  const me = bz.length === 10 ? rows.find((r) => r.bz6 === bz.slice(0, 6) && (nk(r.nm) === nk(report.meta.vendor_name) || nk(r.mfdsName) === nk(report.meta.vendor_name))) : null;
+  let rank = null;
+  if (me) {
+    const sido = String(me.addr || '').slice(0, 2);
+    const peers = rows.filter((r) => String(r.addr || '').slice(0, 2) === sido).map(last).sort((a, b) => b - a);
+    const pos = peers.indexOf(last(me));
+    if (peers.length >= 10 && pos >= 0) rank = { sido: (String(me.addr).match(/^[가-힣]+/) || [''])[0].replace(/(특별자치시|특별자치도|특별시|광역시|도)$/, ''), n: peers.length, top: Math.max(1, Math.round(((pos + 1) / peers.length) * 100)), cnt: last(me) };
+  }
+  return { med, n: rows.length, ym: d.ym, rank };
+}
+function anchorHtml(report) {
+  const R = industryRef(report);
+  const cap = report.capacity || [];
+  const emp = (() => { const x = cap.find((y) => y.key === '제조소 추정 근무 인원'); const m = String(x && x.value || '').match(/^\s*([\d,]+)(?:\s*~\s*([\d,]+))?/); return m ? Number((m[2] || m[1]).replace(/,/g, '')) : null; })();
+  if (!R || emp == null) return '';
+  const max = Math.max(emp, R.med) * 1.6;
+  const pct = (v) => Math.max(2, Math.min(100, (v / max) * 100)).toFixed(1);
+  const rows = [`<div class="anc-row"><span class="anc-l">제조소 인원</span><span class="anc-trk"><i style="--w:${pct(emp)}%"></i><em style="left:${pct(R.med)}%" data-l="업계 중앙값 ${R.med}명"></em></span><b class="anc-v"><span data-cu="${emp}">${emp}</span>명</b></div>`];
+  if (R.rank) rows.push(`<div class="anc-row"><span class="anc-l">${esc(R.rank.sido)} 안 순위</span><span class="anc-trk dots" style="--p:${100 - R.rank.top}%"><i class="me"></i></span><b class="anc-v">상위 ${R.rank.top}%</b></div>`);
+  return `<div class="vd-anchor"><div class="anc-h">규모 <small>국민연금 ${esc(String(R.ym || '').replace('-', '.'))} · 화장품 제조업 허가 사업장 ${R.n.toLocaleString()}곳 기준${R.rank ? ` · ${esc(R.rank.sido)} ${R.rank.n}곳` : ''}</small></div>${rows.join('')}</div>`;
+}
+
 function renderVerdict(report) {
   const m = report.meta || {};
   const Q = qualityGrade(report);
@@ -5726,12 +5905,15 @@ function renderVerdict(report) {
     + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
     + '</div>';
   // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
+  // 「공백 20」처럼 빠진 것만 세지 않고, 확인된 것과 남은 것을 같은 무게로 센다(프레이밍)
   if (ups.length || downs.length) {
     html += `<div class="vd-why">`
-      + (ups.length ? `<div class="vw up"><i>확인됨</i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
-      + (downs.length ? `<div class="vw down"><i>확인필요</i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
+      + (ups.length ? `<div class="vw up"><i>확인됨 <b data-cu="${ups.length}">${ups.length}</b></i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
+      + (downs.length ? `<div class="vw down"><i>확인필요 <b data-cu="${downs.length}">${downs.length}</b></i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
       + `</div>`;
   }
+  // 규모 기준선 — 인원만 덩그러니 있으면 큰지 작은지 모른다. 업계 중앙값·같은 시·도 순위를 같은 막대에(앵커링)
+  if (m.live) html += anchorHtml(report);
   // 방문 때 꼭 확인할 것 — 확인사항 표에서 중요도 순 3개(전체는 아래 '방문 전 확인필요')
   if (m.live) {
     const its = buildVisitChecklist(report);
@@ -5742,7 +5924,9 @@ function renderVerdict(report) {
         + `<button type="button" class="vd-todo-all" data-act="todo-all">확인사항 전체 ${its.length}건 보기 ↓</button></div>`
         // 한 줄 요약만 — 긴 항목(미확인 항목 나열 등)은 앞부분만 보이고 전체는 아래 표와 말풍선에서
         + `<ol>${top.map((t) => { const tx = String(t.text || ''); const cut = tx.length > 90 ? `${tx.slice(0, 88).replace(/[\s·,]+$/, '')}…` : tx;
-          return `<li title="${esc(tx)}"><span class="vd-todo-cat ${esc(t.pri)}">${esc(t.cat || '확인')}</span><span>${esc(cut)}</span></li>`; }).join('')}</ol></div>`;
+          return `<li title="${esc(tx)}"><span class="vd-todo-cat ${esc(t.pri)}">${esc(t.cat || '확인')}</span><span>${esc(cut)}</span></li>`; }).join('')}</ol>`
+        // 카드는 결론 한 줄로 끝낸다 — 다 읽고 남는 인상이 '그래서 가도 되나'에 대한 답이어야 한다(피크엔드)
+        + `<p class="vd-concl"><svg class="vd-ck" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>${esc(conclusionOf(g, ups, its))}</p></div>`;
     }
   }
   // ── 기본 현황 ──
@@ -6136,6 +6320,16 @@ function refreshVisitChecklist(report, opts = {}) {
     if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
   }
 }
+const _vcRestOpen = new Set();   // 업체별 '권장·참고 더 보기'를 펼쳤는지(다시 그려도 유지)
+function vcProgPaint(box) {
+  const pg = box.querySelector('[data-vc-prog]'); if (!pg) return;
+  const hi = [...box.querySelectorAll('.vc-tbl .vr')].filter((r) => r.querySelector('.vc-pri-high'));
+  const done = hi.filter((r) => r.querySelector('.vr-ck') && r.querySelector('.vr-ck').checked).length;
+  const pct = hi.length ? Math.round((done / hi.length) * 100) : 0;
+  pg.querySelector('.vp-pct').textContent = `${pct}%`;
+  pg.querySelector('.vp-bar i').style.width = `${pct}%`;
+  pg.querySelector('.vp-left').textContent = hi.length - done ? `필수 ${hi.length - done}건이 남았습니다` : '필수 확인을 모두 마쳤습니다';
+}
 function renderVisitChecklist(report) {
   const vid = (report.meta && report.meta.vendor_id) || null;
   const auto = buildVisitChecklist(report);
@@ -6204,10 +6398,24 @@ function renderVisitChecklist(report) {
       (SRC_ORDER[x.src || '기타'] ?? 9) - (SRC_ORDER[y.src || '기타'] ?? 9)
       || (PRI_ORDER[x.pri] ?? 9) - (PRI_ORDER[y.pri] ?? 9)
       || String(x.cat || '').localeCompare(String(y.cat || '')));
+    // 방문 준비 진행률 — 필수 항목 기준. 끝나지 않은 일이 남아 있다는 것을 숫자로 계속 보여 준다
+    const hiAll = items.filter((i) => i.pri === 'high');
+    const hiDone = hiAll.filter((i) => checked.has(checkKeyOf(i))).length;
+    if (hiAll.length) {
+      const pct = Math.round((hiDone / hiAll.length) * 100);
+      html += `<div class="vc-prog" data-vc-prog><div class="vp-top"><b>방문 준비</b><span class="vp-pct">${pct}%</span></div>`
+        + `<div class="vp-bar"><i style="width:${pct}%"></i></div>`
+        + `<span class="vp-left">${hiAll.length - hiDone ? `필수 ${hiAll.length - hiDone}건이 남았습니다` : '필수 확인을 모두 마쳤습니다'}</span></div>`;
+    }
+    // 처음엔 필수만 펼친다 — 12건을 한 번에 보면 어디서 시작할지 막힌다(선택 과부하)
+    const firstRows = hiAll.length ? sorted.filter((i) => i.pri === 'high' || i.mine) : sorted;
+    const restRows = hiAll.length ? sorted.filter((i) => !(i.pri === 'high' || i.mine)) : [];
     html += `<div class="vc-tbl">`
       + `<div class="vr vr-head"><span></span><span>출처</span><span>중요도</span><span>분류</span>`
       + `<span>확인 내용 · 메모</span><span></span><span></span><span></span></div>`
-      + sorted.map(rowHtml).join('')
+      + firstRows.map(rowHtml).join('')
+      + (restRows.length ? `<div class="vc-rest"${_vcRestOpen.has(vid) ? '' : ' hidden'}>${restRows.map(rowHtml).join('')}</div>`
+        + `<button type="button" class="vc-more" aria-expanded="${_vcRestOpen.has(vid)}">${_vcRestOpen.has(vid) ? '권장·참고 접기' : `권장·참고 ${restRows.length}건 더 보기`}</button>` : '')
       + `</div>`;
   } else {
     html += '<div class="vc-empty">자동 도출된 항목이 없습니다 — 자료를 보다가 확인할 것이 생기면 아래에서 추가하세요.</div>';
@@ -6252,6 +6460,7 @@ function renderVisitChecklist(report) {
       const row = cb.closest('.vr');
       toggleChecked(vid, row.dataset.key, cb.checked);
       row.classList.toggle('vc-done', cb.checked);
+      vcProgPaint(box);
       const ring = document.querySelector('details.rsec[data-fold="check"] [data-vc-ring]');
       if (ring) {
         const all = [...box.querySelectorAll('.vc-tbl .vr-ck')];
@@ -6259,6 +6468,13 @@ function renderVisitChecklist(report) {
         ring.outerHTML = vcRingHtml(all.filter((c) => c.checked).length, all.length, hiLeft);
       }
     });
+  });
+  const more = box.querySelector('.vc-more');
+  if (more) more.addEventListener('click', () => {
+    const rest = box.querySelector('.vc-rest'), open = rest.hidden;
+    rest.hidden = !open; more.setAttribute('aria-expanded', String(open));
+    if (open) _vcRestOpen.add(vid); else _vcRestOpen.delete(vid);
+    more.textContent = open ? '권장·참고 접기' : `권장·참고 ${rest.querySelectorAll('.vr').length}건 더 보기`;
   });
   // 메모 저장 — 입력하다 말고 다른 데를 눌러도 남아야 하므로 포커스가 빠질 때 저장한다.
   // 목록을 다시 그리지는 않는다(입력 도중 커서가 튀면 쓰던 문장을 잃는다).
@@ -7215,6 +7431,9 @@ function render(report, opts = {}) {
     pop.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; set(false); if (b.dataset.x === 'csv') downloadCSV(report); else downloadJSON(); });
     document.addEventListener('click', (e) => { if (!dlBtn.contains(e.target)) set(false); });
   }
+  const fieldBtn = el('button', 'act', '현장 모드');
+  fieldBtn.title = '방문 당일 휴대폰으로 확인할 것만 보는 화면';
+  fieldBtn.addEventListener('click', () => openFieldMode(report));
   const cmpBtn = el('button', 'act', '업체 비교');
   cmpBtn.title = '조회한 적 있는 업체를 최대 4곳 나란히 비교합니다';
   cmpBtn.addEventListener('click', () => openCompare(report));
@@ -7256,6 +7475,7 @@ function render(report, opts = {}) {
     tmapBtn.addEventListener('click', () => { window.location.href = tmapUrl; });
     actions.appendChild(tmapBtn);
   }
+  if (m && m.live) actions.appendChild(fieldBtn);
   actions.appendChild(cmpBtn);
   actions.appendChild(dlBtn);
   actions.appendChild(printBtn);
@@ -7277,6 +7497,7 @@ function render(report, opts = {}) {
     if (report._diff === undefined) Object.defineProperty(report, '_diff', { configurable: true, value: snapDiff(report) });
     if (report._diff) root.appendChild(el('div', 'pdiff' + (report._diff.added.length ? ' has-risk' : ''), diffBlockHtml(report._diff)));
     snapSave(report);
+    root.appendChild(evidenceCard(report));
   }
 
   // 조회 메타는 판단에 쓰이지 않으니 아래로 내리고 한 줄로 줄인다

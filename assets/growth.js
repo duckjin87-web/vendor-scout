@@ -159,13 +159,13 @@ function grHtml(st) {
   }
   const rows = grRows(st);
   h += `<div class="gr-tools"><span class="gr-crit">급증 기준(${esc(per.label)}): ${esc(grYm(cmpYm))}보다 ${GR.MIN_NET}명 이상 늘고 증가율 ${Math.round(per.rate * 100)}% 이상 — 또는 ${GR.BIG_NET}명 이상 증가</span>`
-    + `<label><input type="checkbox" data-gr-opt="onlyCos"${st.onlyCos ? ' checked' : ''}> 국민연금 업종 「화장품 제조업」만</label>`
-    + `<label><input type="checkbox" data-gr-opt="hideTemp"${st.hideTemp ? ' checked' : ''}> 비정규·일용 사업장 빼기</label>`
+    + `<label class="gr-chip"><input type="checkbox" data-gr-opt="onlyCos"${st.onlyCos ? ' checked' : ''}> 국민연금 업종 「화장품 제조업」만</label>`
+    + `<label class="gr-chip"><input type="checkbox" data-gr-opt="hideTemp"${st.hideTemp ? ' checked' : ''}> 비정규·일용 사업장 빼기</label>`
     + `<span class="gr-sort">정렬 <button type="button" data-gr-sort="net" aria-pressed="${st.sort === 'net'}">증가 인원</button>`
     + `<button type="button" data-gr-sort="rate" aria-pressed="${st.sort === 'rate'}">증가율</button></span></div>`;
   if (!rows.length) return `${h}<div class="gr-empty">${esc(grYm(cmpYm))} 대비 급증 기준을 넘은 사업장이 없습니다${(d.have || []).includes(cmpYm) ? '' : ` — ${esc(grYm(cmpYm))} 자료가 아직 없습니다`}.</div>`;
   h += `<p class="gr-count"><b>${rows.length}곳</b>이 ${esc(grYm(cmpYm))} → ${esc(grYm(d.ym))} 사이 급증 기준을 넘었습니다${rows.length > GR.SHOW ? ` — 상위 ${GR.SHOW}곳` : ''}. 줄을 누르면 13개월 추이가 열립니다.</p>`;
-  h += '<div class="gr-tw"><table class="gr-tbl"><thead><tr><th>#</th><th>사업장</th><th>지역</th><th>13개월 추이</th>'
+  h += `<div class="gr-tw"><table class="gr-tbl${st.anim ? ' anim' : ''}"><thead><tr><th>#</th><th>사업장</th><th>지역</th><th>13개월 추이</th>`
     + `<th class="n">인원 (${esc(grYmS(cmpYm))} → ${esc(grYmS(d.ym))})</th><th class="n">증감</th><th class="n">월 인건비(추정)</th><th></th></tr></thead><tbody>`;
   rows.slice(0, GR.SHOW).forEach((r, i) => {
     const key = `${r.bz6}|${r.nm}`;
@@ -176,7 +176,7 @@ function grHtml(st) {
     ].join('');
     const pay = `${grWon(r.a[L] / 0.09)}${r.payRate != null ? `<small>${grPct(r.payRate)}</small>` : ''}`;
     const open = st.open === key;
-    h += `<tr class="gr-row${open ? ' open' : ''}" data-gr-row="${esc(key)}" tabindex="0" aria-expanded="${open}"><td class="n">${i + 1}</td><td><b>${esc(r.nm)}</b>${badges ? `<div class="gr-bs">${badges}</div>` : ''}</td>`
+    h += `<tr class="gr-row${open ? ' open' : ''}" data-gr-row="${esc(key)}" tabindex="0" aria-expanded="${open}" style="--i:${Math.min(i, 12)}"><td class="n">${i + 1}</td><td><b>${esc(r.nm)}</b>${badges ? `<div class="gr-bs">${badges}</div>` : ''}</td>`
       + `<td>${esc(grRegion(r.addr))}</td><td>${grSpark(r.s, B)}</td><td class="n">${r.base.toLocaleString()} → <b>${r.cur.toLocaleString()}</b></td>`
       + `<td class="n up">+${r.net.toLocaleString()}<small>${grPct(r.rate)}</small></td><td class="n">${pay}</td>`
       + `<td class="mk-acts"><button type="button" class="nb-btn sm" data-gr-go="${esc(r.mfdsName || r.nm)}">사전검증</button>`
@@ -389,13 +389,14 @@ function mountGrowth() {
     // 그래프 칸 너비 = 패널 안쪽 너비 − 그래프 상자 여백
     growthState.cw = Math.max(280, Math.round(box.clientWidth - 64));
     const tip = box.querySelector('.gr-tip'); box.innerHTML = grHtml(growthState); if (tip) box.appendChild(tip);
+    growthState.anim = false;
   };
   growthState.repaint = () => { if (growthState.data) paint(); };
   let lastW = 0, rt = null;
   if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(box.clientWidth - lastW) < 24) return; lastW = box.clientWidth; clearTimeout(rt); rt = setTimeout(() => { if (growthState.data) paint(); }, 150); }).observe(box);
   box.addEventListener('click', (e) => {
-    const p = e.target.closest('[data-gr-period]'); if (p) { growthState.period = p.dataset.grPeriod; growthState.open = null; paint(); return; }
-    const s = e.target.closest('[data-gr-sort]'); if (s) { growthState.sort = s.dataset.grSort; paint(); return; }
+    const p = e.target.closest('[data-gr-period]'); if (p) { growthState.period = p.dataset.grPeriod; growthState.open = null; growthState.anim = true; paint(); return; }
+    const s = e.target.closest('[data-gr-sort]'); if (s) { growthState.sort = s.dataset.grSort; growthState.anim = true; paint(); return; }
     const sv = e.target.closest('[data-gr-save]');
     if (sv) { const r = grSv.get(sv.dataset.grSave); if (r) svToggleFirm(r, r.from).catch((er) => svToast(`저장하지 못했습니다 — ${er.message}`)); return; }
     const nm = e.target.closest('[data-nh-months]'); if (nm) { nhState.months = Number(nm.dataset.nhMonths); paint(); return; }
@@ -412,13 +413,13 @@ function mountGrowth() {
     if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); row.click(); }
   });
   box.addEventListener('change', (e) => {
-    const o = e.target.closest('[data-gr-opt]'); if (o) { growthState[o.dataset.grOpt] = o.checked; paint(); }
+    const o = e.target.closest('[data-gr-opt]'); if (o) { growthState[o.dataset.grOpt] = o.checked; growthState.anim = true; paint(); }
     if (e.target.closest('[data-nh-only]')) { nhState.onlyHit = e.target.checked; paint(); }
   });
   grBindHover(box);
   paint();
   grProbe();
-  grLoad().then(paint).catch((e) => { growthState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
+  grLoad().then(() => { growthState.anim = true; paint(); }).catch((e) => { growthState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
 }
 const grLoad = (bust) => {
   const v = `${BUILD}-${bust || new Date().toISOString().slice(0, 10)}`;
@@ -611,7 +612,7 @@ function mkHtml(st) {
   const liveBtn = `<div class="gr-req"><button type="button" class="nb-btn sm${Lv.busy ? '' : ' dark'}" data-mk-live${Lv.busy ? ' disabled' : ''}>${Lv.busy ? `명단 받는 중 ${Lv.done || 0}/${Lv.pages || '…'}쪽` : Lv.at ? '다시 대조' : '최신 자료 조회 (현시점)'}</button>`
     + `<small>주간 집계 ${(st.data && grWhen(st.data.builtAt)) || '—'}${Lv.at ? ` · 현시점 대조 ${mkHm(Lv.at)}` : ''}</small>`
     + (Lv.err ? `<p class="gr-reqmsg err" role="status">${esc(Lv.err)}</p>`
-      : Lv.at ? `<p class="gr-reqmsg" role="status"><b>${mkHm(Lv.at)}</b> 대조 결과 · 식약처 명단 ${Lv.total.toLocaleString()}건(제조 ${Lv.makers.toLocaleString()}곳) — 주간 집계 이후 <b>새 제조업체 ${Lv.added.length}곳</b>${Lv.removed != null ? ` · 빠진 업체 ${Lv.removed}곳` : ''}${Lv.failed ? ` · 못 받은 쪽 ${Lv.failed}개(빠짐은 세지 않음)` : ''}`
+      : Lv.at ? `<p class="gr-reqmsg" role="status"><span class="fresh-dot" aria-hidden="true"></span><b>${mkHm(Lv.at)}</b> 대조 결과 · 식약처 명단 ${Lv.total.toLocaleString()}건(제조 ${Lv.makers.toLocaleString()}곳) — 주간 집계 이후 <b>새 제조업체 ${Lv.added.length}곳</b>${Lv.removed != null ? ` · 빠진 업체 ${Lv.removed}곳` : ''}${Lv.failed ? ` · 못 받은 쪽 ${Lv.failed}개(빠짐은 세지 않음)` : ''}`
         + ` <span class="mk-kept">(이 브라우저에 오늘 하루 보관${Lv.kept ? ' 중' : ''})</span></p>` : '')
     + '</div>';
   const head = (sub) => `<div class="gr-head"><div><h2>제조업 등록 현황 <small>식약처 화장품 제조업 허가 명단 누적 관리</small></h2>${sub || ''}</div>${liveBtn}</div>`;
@@ -634,6 +635,10 @@ function mkHtml(st) {
   const sidos = Object.entries(sidoN).sort((a, b) => b[1] - a[1]).slice(0, 6);
   if (st.sido && !sidoN[st.sido]) st.sido = null;
   let rows = base.filter((r) => (!st.sido || mkSido(r.a) === st.sido) && (!st.npsOnly || r.nps != null));
+  // 새 소식은 팝업 대신 목록 위 배너로 — 닫으면 오늘 하루 다시 띄우지 않는다
+  if (Lv.at && (Lv.added || []).length && !mkState.banOff) {
+    h += `<div class="mk-ban" role="status"><span><span class="fresh-dot" aria-hidden="true"></span>${esc(mkHm(Lv.at))} 대조 · <b>현시점 신규 ${Lv.added.length}곳</b>이 목록에 더해졌습니다</span><button type="button" data-mk-ban aria-label="배너 닫기">✕</button></div>`;
+  }
   h += '<div class="mk-sec">새로 들어온 업체</div><div class="mk-chips">'
     + MK_VIEWS.filter((v) => !(d.base && v.id === 'add' && !Lv.at)).map((v) => {
       const n = v.id === 'add' ? c.added + (Lv.added || []).length : v.id === 'd30' ? c.d30 : c.d90;
@@ -645,8 +650,8 @@ function mkHtml(st) {
   if (!rows.length) {
     h += `<div class="gr-empty">${st.view === 'add' ? '지난 조회 이후 명단에 새로 들어온 업체가 없습니다.' : '조건에 맞는 업체가 없습니다.'}</div>`;
   } else {
-    h += '<table class="mk-tbl"><thead><tr><th>허가일</th><th>업체</th><th class="mk-addr">소재지</th><th>확인된 정보</th><th></th></tr></thead><tbody>'
-      + rows.slice(0, 80).map((r) => `<tr><td class="mk-d">${esc(mkDay(r.p))}</td>`
+    h += `<table class="mk-tbl${st.anim ? ' anim' : ''}"><thead><tr><th>허가일</th><th>업체</th><th class="mk-addr">소재지</th><th>확인된 정보</th><th></th></tr></thead><tbody>`
+      + rows.slice(0, 80).map((r, i) => `<tr class="mk-r" style="--i:${Math.min(i, 12)}"><td class="mk-d">${esc(mkDay(r.p))}</td>`
         + `<td><b class="mk-nm">${esc(r.n)}</b><small>${esc(grRegion(r.a) || r.a || '')}</small></td>`
         + `<td class="mk-addr">${esc(r.ad || r.a || '')}</td><td class="mk-bs">${mkBadges(r)}</td>`
         + `<td class="mk-acts"><button type="button" class="nb-btn sm" data-gr-go="${esc(r.n)}" data-gr-bz="${esc(mkBzOf(r))}">사전검증</button>`
@@ -656,6 +661,13 @@ function mkHtml(st) {
   // ── 명단에서 빠진 업체 · 상호 변경 ──
   const gone = d.removed || [], ren = d.renames || [];
   if (gone.length || ren.length) {
+    // 빠진 업체 가운데 거래 중(저장)인 곳이 있으면 놓치면 안 된다 — 한 번에 대조
+    if (gone.length) {
+      const hit = st.lossHit;
+      h += `<div class="mk-loss"><span><b>빠진 업체 ${gone.length}곳</b> 가운데 저장업체가 있는지 확인하세요 <small>폐업·허가 취소 추정</small></span>`
+        + (hit == null ? '<button type="button" class="nb-btn sm" data-mk-loss>저장업체와 대조</button>'
+          : `<span class="mk-loss-r${hit.length ? ' bad' : ''}">${hit.length ? `저장업체 ${hit.length}곳 해당 — ${hit.map(esc).join(', ')}` : '저장업체 해당 없음'}</span>`) + '</div>';
+    }
     h += `<details class="mk-gone"><summary>명단에서 빠진 업체 ${gone.length}곳${ren.length ? ` · 상호 변경 ${ren.length}곳` : ''} — 직전 조회(${esc(d.prevAt || '')})에는 있었음</summary><table class="mk-tbl"><tbody>`
       + gone.map((r) => `<tr><td class="mk-d">${esc(mkDay(r.p))}</td><td><b class="mk-nm">${esc(r.n)}</b><small>${esc(grRegion(r.a))}</small></td>`
         + `<td class="mk-bs"><span class="mk-b gone">명단 제외</span>${r.nps != null ? `<span class="mk-b dim">국민연금 ${r.nps}명(${esc(grYmS(d.npsYm))})</span>` : ''}</td>`
@@ -673,16 +685,19 @@ function mkHtml(st) {
 function mountMakers() {
   const box = document.getElementById('makers');
   if (!box) return;
-  const paint = () => { if (box.clientWidth) mkState.cw = Math.max(280, Math.round(box.clientWidth - 40)); box.innerHTML = mkHtml(mkState); };
+  // 목록 등장 애니메이션은 보기·조건을 바꿨을 때만 — 진행 상황 갱신마다 다시 움직이면 산만하다
+  const paint = () => { if (box.clientWidth) mkState.cw = Math.max(280, Math.round(box.clientWidth - 40)); box.innerHTML = mkHtml(mkState); mkState.anim = false; };
   mkState.repaint = paint;
   if (!mkState.live) { mkState.live = mkLiveRestore(); if (mkState.live && mkState.live.added.length) mkState.view = 'add'; }
   let lastW = 0, rt = null;
   if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(box.clientWidth - lastW) < 24) return; lastW = box.clientWidth; clearTimeout(rt); rt = setTimeout(() => { if (mkState.data) paint(); }, 150); }).observe(box);
   box.addEventListener('click', (e) => {
-    const v = e.target.closest('[data-mk-view]'); if (v) { mkState.view = v.dataset.mkView; paint(); return; }
+    const v = e.target.closest('[data-mk-view]'); if (v) { mkState.view = v.dataset.mkView; mkState.anim = true; paint(); return; }
     if (e.target.closest('[data-mk-live]')) { mkLiveScan(paint); return; }
-    const s = e.target.closest('[data-mk-sido]'); if (s) { mkState.sido = mkState.sido === s.dataset.mkSido ? null : s.dataset.mkSido; paint(); return; }
-    if (e.target.closest('[data-mk-nps]')) { mkState.npsOnly = !mkState.npsOnly; paint(); return; }
+    if (e.target.closest('[data-mk-ban]')) { mkState.banOff = true; paint(); return; }
+    if (e.target.closest('[data-mk-loss]')) { mkState.lossHit = (mkState.data.removed || []).filter((r) => svKeys.has(svKey(r.n))).map((r) => r.n); paint(); return; }
+    const s = e.target.closest('[data-mk-sido]'); if (s) { mkState.sido = mkState.sido === s.dataset.mkSido ? null : s.dataset.mkSido; mkState.anim = true; paint(); return; }
+    if (e.target.closest('[data-mk-nps]')) { mkState.npsOnly = !mkState.npsOnly; mkState.anim = true; paint(); return; }
     const sv = e.target.closest('[data-mk-save]');
     if (sv) { const r = [...((mkState.live && mkState.live.added) || []), ...(mkState.data.recent || [])].find((x) => x.id === sv.dataset.mkSave); if (r) svToggleFirm(r).catch((er) => svToast(`저장하지 못했습니다 — ${er.message}`)); return; }
     const g = e.target.closest('[data-gr-go]');
@@ -691,7 +706,7 @@ function mountMakers() {
     if (e.target.closest('[data-gr-gh]')) grWatchGh();
   });
   paint();
-  mkLoad().then(() => { mkLiveStale(); paint(); dashTabsPaint(); if (growthState.repaint) growthState.repaint(); }).catch((e) => { mkState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
+  mkLoad().then(() => { mkLiveStale(); mkState.anim = true; paint(); dashTabsPaint(); if (growthState.repaint) growthState.repaint(); }).catch((e) => { mkState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
 }
 const mkLoad = (bust) => fetch(`data/growth/makers.json?v=${BUILD}-${bust || new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' })
   .then((r) => { if (r.status === 404) throw new Error('아직 첫 집계 전입니다 — 매주 월요일 아침 또는 「최신 자료 조회 요청」 때 만들어집니다'); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
