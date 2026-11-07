@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 234;
+const BUILD = 235;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3659,20 +3659,49 @@ const liveProg = { stage: 'corp', keys: [], st: {}, t0: 0 };
 function liveProgReset() { liveProg.stage = 'corp'; liveProg.keys = []; liveProg.st = {}; liveProg.t0 = Date.now(); liveProgPaint(); }
 function liveProgStart(keys) { liveProg.stage = 'src'; liveProg.keys = keys; liveProg.st = {}; liveProg.t0 = Date.now(); liveProgPaint(); }
 function liveProgMark(k, ok) { if (!liveProg.st[k]) { liveProg.st[k] = ok ? 'ok' : 'fail'; liveProgPaint(); } }
+// 조회 진행 — 4단계(업체 확인 · 공공자료 · 웹 자료 · 판정) + 받은 기관 수 막대 + 기관별 상태 + 근거 단단함 미터.
+// 뼈대는 한 번만 그리고 그 뒤로는 값만 바꾼다 — 매초 통째로 다시 그리면 스피너·막대 움직임이 끊긴다.
+const LP_WEB = new Set(['naverNews', 'cgmpNews', 'oemTrace', 'hiring', 'bizWeb']);
+const LP_STEPS = ['업체 확인', '공공자료', '웹 자료', '판정'];
 function liveProgHtml() {
-  if (liveProg.stage === 'corp' || !liveProg.keys.length) {
-    return '<div class="lp-step"><span class="lp-n">1/2</span> 기업 기본정보 확인 <small>금융위 법인 · 식약처 제조업 명단에서 업체를 찾는 중</small></div>';
-  }
-  const done = liveProg.keys.filter((k) => liveProg.st[k]).length, n = liveProg.keys.length;
-  const sec = Math.round((Date.now() - liveProg.t0) / 1000);
-  return `<div class="lp-step"><span class="lp-n">2/2</span> 자료 모으는 중 <b>${done}/${n}</b> <small>${sec}초 · 5초가 지나면 받은 자료로 먼저 보여 주고 나머지는 도착하는 대로 채웁니다</small></div>`
-    + `<div class="lp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${done}"><i style="width:${Math.round((done / n) * 100)}%"></i></div>`
-    + '<ul class="lp-list">' + liveProg.keys.map((k) => {
-      const st = liveProg.st[k];
-      return `<li class="${st || 'wait'}"><span aria-hidden="true">${st === 'ok' ? '✓' : st === 'fail' ? '–' : '<i class="lp-spin"></i>'}</span>${esc(LIVE_SRC_NAME[k] || k)}${st === 'fail' ? ' <small>자료 없음</small>' : ''}</li>`;
-    }).join('') + '</ul>';
+  const keys = liveProg.keys;
+  return `<div class="lp-steps" style="--s:0"><span class="lp-fill"></span>${LP_STEPS.map((t, i) => `<div class="lp-st"><i>${i + 1}</i>${t}</div>`).join('')}</div>`
+    + `<div class="lp-pb"><div class="lp-top"><b data-lp-now aria-live="polite">업체를 찾는 중</b><span class="lp-cnt" data-lp-cnt></span></div>`
+    + `<div class="lp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${keys.length || 1}" aria-valuenow="0"><i></i></div>`
+    + `<small class="lp-sec" data-lp-sec>금융위 법인 · 식약처 제조업 명단에서 업체를 찾는 중</small></div>`
+    + (keys.length ? '<ul class="lp-list">' + keys.map((k) => `<li class="wait" data-k="${esc(k)}"><span class="lp-dot" aria-hidden="true"></span>${esc(LIVE_SRC_NAME[k] || k)}</li>`).join('') + '</ul>'
+      + '<div class="lp-meter"><div class="lp-mh"><b>근거 단단함</b><span data-lp-off>공식 자료 0곳</span></div><div class="lp-segs" data-lv="0"><i></i><i></i><i></i><i></i></div><span class="lp-lv" data-lp-lv>자료를 받는 중</span></div>' : '');
 }
-function liveProgPaint() { document.querySelectorAll('[data-ld-prog]').forEach((b) => { b.innerHTML = liveProgHtml(); }); }
+function liveProgUpdate(b) {
+  const keys = liveProg.keys, st = liveProg.st;
+  const done = keys.filter((k) => st[k]).length, n = keys.length;
+  const offKeys = keys.filter((k) => !LP_WEB.has(k));
+  const offDone = offKeys.every((k) => st[k]);
+  const step = liveProg.stage === 'corp' || !n ? 0 : done === n ? 3 : offDone ? 2 : 1;
+  const steps = b.querySelector('.lp-steps');
+  if (steps) { steps.style.setProperty('--s', String(step / 3)); steps.querySelectorAll('.lp-st').forEach((x, i) => { x.classList.toggle('done', i < step); x.classList.toggle('on', i === step); }); }
+  const now = b.querySelector('[data-lp-now]'); if (now) now.textContent = ['업체를 찾는 중', '공공자료 받는 중', '웹 자료 확인 중', '판정 정리 중'][step];
+  if (!n) return;
+  const sec = Math.round((Date.now() - liveProg.t0) / 1000);
+  b.querySelector('[data-lp-cnt]').textContent = `${done} / ${n}`;
+  const bar = b.querySelector('.lp-bar'); bar.setAttribute('aria-valuenow', String(done)); bar.querySelector('i').style.width = `${Math.round((done / n) * 100)}%`;
+  b.querySelector('[data-lp-sec]').textContent = `${sec}초 · 5초가 지나면 받은 자료로 먼저 보여 주고 나머지는 도착하는 대로 채웁니다`;
+  b.querySelectorAll('.lp-list li').forEach((li) => { const v = st[li.dataset.k]; li.className = v || 'wait'; });
+  const off = offKeys.filter((k) => st[k] === 'ok').length;
+  const lv = !off ? 0 : off >= 8 ? 4 : off >= 6 ? 3 : off >= 3 ? 2 : 1;
+  b.querySelector('.lp-segs').dataset.lv = String(lv);
+  b.querySelector('[data-lp-off]').textContent = `공식 자료 ${off}곳`;
+  const lvEl = b.querySelector('[data-lp-lv]');
+  lvEl.textContent = ['자료를 받는 중', '근거가 아직 적어요', '보통이에요', '근거가 충분해요', '근거가 아주 단단해요'][lv];
+  lvEl.dataset.lv = String(lv);
+}
+function liveProgPaint() {
+  document.querySelectorAll('[data-ld-prog]').forEach((b) => {
+    const sig = `${liveProg.stage}|${liveProg.keys.join(',')}`;
+    if (b.dataset.sig !== sig) { b.innerHTML = liveProgHtml(); b.dataset.sig = sig; }
+    liveProgUpdate(b);
+  });
+}
 // 경과 시간 표시를 1초마다 갱신(로딩 화면이 떠 있을 때만)
 setInterval(() => { if (liveProg.stage === 'src' && document.querySelector('[data-ld-prog]')) liveProgPaint(); }, 1000);
 
@@ -4436,7 +4465,10 @@ function snapOf(report) {
   const vals = {};
   SNAP_FIELDS.forEach((k) => { const x = all.find((y) => y.key === k); vals[k] = x && x.value != null ? String(x.value) : null; });
   const M = report.meta || {};
-  return { at: M.query_at, name: M.vendor_name, vals, nps: M.manpower ? M.manpower.nps : null,
+  // 방문 준비 % — 필수 확인 항목 중 체크한 비율(비교 카드의 원형 진행률)
+  let prep = null;
+  try { const hi = buildVisitChecklist(report).filter((i) => i.pri === 'high'); const ck = getCheckedSet(M.vendor_id); prep = hi.length ? Math.round((hi.filter((i) => ck.has(checkKeyOf(i))).length / hi.length) * 100) : 100; } catch { /* 계산 못 하면 표시 안 함 */ }
+  return { at: M.query_at, name: M.vendor_name, vals, nps: M.manpower ? M.manpower.nps : null, grade: M.overall_grade || null, prep,
     risks: (report.risk_flags || []).map((r) => r.type), recalls: (report.recalls || []).length };
 }
 function snapLoad() { try { return JSON.parse(_ls(SNAP_KEY) || '{}') || {}; } catch { return {}; } }
@@ -4535,6 +4567,12 @@ function evidenceCard(report) {
 
 // ── 현장 모드 ── 방문 당일 휴대폰용. 리포트 전체 대신 '무엇을 확인할지'만, 엄지로 다루기 쉽게.
 // 확인 표시는 리포트의 「방문 전 확인필요」 체크와 같은 저장소를 쓴다(어느 쪽에서 눌러도 같이 바뀐다).
+const FM_ICON = {
+  chk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>',
+  sum: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>',
+  area: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V9l8-5 8 5v11z"/><path d="M9 20v-6h6v6"/></svg>',
+  near: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="10" r="3"/><path d="M12 21s-7-6-7-11a7 7 0 0 1 14 0c0 5-7 11-7 11z"/></svg>',
+};
 function openFieldMode(report) {
   const m = report.meta || {}, vid = m.vendor_id || null;
   const items = [...buildVisitChecklist(report), ...getCustomChecks(vid).map((c) => ({ ...c, uid: c.id, mine: true }))];
@@ -4563,14 +4601,22 @@ function openFieldMode(report) {
   ov.innerHTML = `<div class="fm-ph">`
     + `<div class="fm-bar"><button type="button" class="fm-back" aria-label="현장 모드 닫기">‹</button><div><b>${esc(m.vendor_name || '')}</b><small>${esc(String(visit).slice(0, 40))}</small></div></div>`
     + `<div class="fm-body"></div>`
-    + `<nav class="fm-tabs" aria-label="영역"><button type="button" data-t="chk" aria-current="page"><i class="fi-chk"></i>확인</button><button type="button" data-t="sum"><i class="fi-sum"></i>요약</button><button type="button" data-t="area"><i class="fi-area"></i>면적</button><button type="button" data-t="nearby"><i class="fi-near"></i>주변</button></nav>`
+    + `<nav class="fm-tabs" aria-label="영역"><span class="fm-pill" aria-hidden="true"></span>`
+    + `<button type="button" data-t="chk" aria-current="page" aria-label="확인">${FM_ICON.chk}<span class="lb">확인</span><span class="fm-bdg" hidden></span></button>`
+    + `<button type="button" data-t="sum" aria-label="요약">${FM_ICON.sum}<span class="lb">요약</span></button>`
+    + `<button type="button" data-t="area" aria-label="면적">${FM_ICON.area}<span class="lb">면적</span></button>`
+    + `<button type="button" data-t="nearby" aria-label="주변">${FM_ICON.near}<span class="lb">주변</span></button></nav>`
     + `<div class="fm-scrim"></div>`
     + `<div class="fm-sheet" role="dialog" aria-modal="true" aria-labelledby="fmT"><span class="grab" aria-hidden="true"></span><h4 id="fmT"></h4><p class="fm-tx"></p><p class="fm-why"></p>`
     + `<div class="fm-tog"><span>확인함</span><button type="button" class="tog" role="switch" aria-checked="false" aria-label="확인함"></button></div></div>`
     + `<div class="fm-toast" role="status"></div></div>`;
   const body = ov.querySelector('.fm-body'), sheet = ov.querySelector('.fm-sheet'), scrim = ov.querySelector('.fm-scrim'), tog = ov.querySelector('.tog'), toast = ov.querySelector('.fm-toast');
   const segPlace = () => { const sg = body.querySelector('.seg'); if (!sg) return; const on = sg.querySelector('[aria-pressed="true"]'), k = sg.querySelector('.seg-k'); if (on && on.offsetWidth) { k.style.width = `${on.offsetWidth}px`; k.style.transform = `translateX(${on.offsetLeft}px)`; } };
-  const paint = () => { body.innerHTML = bodyHtml(); requestAnimationFrame(segPlace); };
+  // 하단 탭 바 — 눌린 탭만 알약이 되고 이름이 펼쳐진다(Expanding Label). 확인 탭에는 남은 필수가 있으면 점
+  const tabsEl = ov.querySelector('.fm-tabs');
+  const pillPlace = () => { const on = tabsEl.querySelector('[aria-current="page"]'), p = tabsEl.querySelector('.fm-pill'); if (on && on.offsetWidth) { p.style.width = `${on.offsetWidth}px`; p.style.transform = `translateX(${on.offsetLeft - 6}px)`; } };
+  if (window.ResizeObserver) new ResizeObserver(pillPlace).observe(tabsEl);
+  const paint = () => { body.innerHTML = bodyHtml(); requestAnimationFrame(segPlace); tabsEl.querySelector('.fm-bdg').hidden = !left(); requestAnimationFrame(pillPlace); };
   const closeSheet = () => { sheet.classList.remove('on'); scrim.classList.remove('on'); };
   let tt;
   const say = (t) => { toast.textContent = t; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), 1600); };
@@ -4659,9 +4705,20 @@ function openCompare(report) {
   const dlg = document.createElement('dialog');
   dlg.className = 'vwhy cmp-dlg';
   dlg.setAttribute('aria-labelledby', 'cmpTitle');
+  const narrow = () => window.innerWidth <= 600;
+  // 휴대폰 — 표가 옆으로 잘리므로 후보를 한 장씩 넘기는 카드로. 위 스토리 바·아래 점이 몇 번째인지 알려 준다
+  const RC = 2 * Math.PI * 18;
+  const cards = (sel) => `<div class="cmp-story">${sel.map((_, i) => `<i><b style="width:${i ? 0 : 100}%"></b></i>`).join('')}</div>`
+    + `<div class="cmp-car">${sel.map((x) => { const sn = x.s, g = sn.grade || '—', p = sn.prep;
+      return `<div class="cmp-card"><div class="cc-top"><span class="cc-g g-${esc(g)}">${esc(g === 'D' ? '불가' : g)}</span><div><b>${esc(sn.name)}</b><span>${esc(new Date(sn.at).toLocaleDateString('ko-KR'))} 조회 · 리스크 ${sn.risks.length}건</span></div></div>`
+        + `<div class="cc-kv">${[['대표자', sn.vals['대표자']], ['제조소 인원', sn.vals['제조소 추정 근무 인원']], ['공장 건평', sn.vals['공장 건축면적 (건평)']], ['CGMP', sn.vals['CGMP 적합업소']], ['국민연금', sn.nps != null ? `${sn.nps}명` : null]].map(([k, v]) => `<div><span>${k}</span><b>${esc(v || '—')}</b></div>`).join('')}</div>`
+        + (p != null ? `<div class="cc-ring"><svg viewBox="0 0 44 44" aria-hidden="true"><circle class="t" cx="22" cy="22" r="18"/><circle class="v" cx="22" cy="22" r="18" stroke-dasharray="${RC.toFixed(1)}" stroke-dashoffset="${(RC * (1 - p / 100)).toFixed(1)}" transform="rotate(-90 22 22)"/><text x="22" y="26" text-anchor="middle">${p}%</text></svg><div><b>방문 준비 ${p}%</b><span>${p >= 100 ? '필수 확인을 마쳤습니다' : '필수 확인이 남았습니다'}</span></div></div>` : '')
+        + (sn.risks.length ? `<p class="cc-risk">${sn.risks.slice(0, 3).map(esc).join(' · ')}</p>` : '') + '</div>'; }).join('')}</div>`
+    + `<div class="cmp-dots">${sel.map((_, i) => `<i${i ? '' : ' class="on"'}></i>`).join('')}</div>`;
   const table = () => {
     const sel = all.filter((x) => pick.has(x.k));
     if (sel.length < 2) return '<p class="cmp-empty">비교할 업체를 2곳 이상 고르세요. 조회한 적이 있는 업체만 나옵니다(이 브라우저 기록).</p>';
+    if (narrow()) return cards(sel);
     const rowsDef = [['조회일', (s) => new Date(s.at).toLocaleDateString('ko-KR')], ['리스크', (s) => (s.risks.length ? `${s.risks.length}건 · ${s.risks.slice(0, 3).join(', ')}` : '없음')],
       ...SNAP_FIELDS.map((k) => [k, (s) => s.vals[k] || '—']), ['국민연금 가입자', (s) => (s.nps != null ? `${s.nps}명` : '—')], ['회수·판매중지', (s) => `${s.recalls}건`]];
     return `<div class="cmp-wrap"><table class="cmp-tbl"><thead><tr><th></th>${sel.map((x) => `<th>${esc(x.s.name)}</th>`).join('')}</tr></thead><tbody>`
@@ -4675,6 +4732,12 @@ function openCompare(report) {
       + table()
       + `<div class="cmp-foot"><small>최대 4곳 · 각 업체의 마지막 조회 기준</small><button type="button" class="nb-btn sm" data-cmp-csv${pick.size < 2 ? ' disabled' : ''}>엑셀로 받기</button></div></div>`;
     dlg.querySelector('.vwhy-x').addEventListener('click', () => dlg.close());
+    const car = dlg.querySelector('.cmp-car');
+    if (car) car.addEventListener('scroll', () => {
+      const i = Math.round(car.scrollLeft / car.clientWidth);
+      dlg.querySelectorAll('.cmp-story b').forEach((b, k) => { b.style.width = k <= i ? '100%' : '0%'; });
+      dlg.querySelectorAll('.cmp-dots i').forEach((d, k) => d.classList.toggle('on', k === i));
+    }, { passive: true });
   };
   dlg.addEventListener('change', (e) => {
     const c = e.target.closest('input[data-k]'); if (!c) return;
@@ -6461,6 +6524,7 @@ function renderVisitChecklist(report) {
       toggleChecked(vid, row.dataset.key, cb.checked);
       row.classList.toggle('vc-done', cb.checked);
       vcProgPaint(box);
+      if (currentReport === report) snapSave(report);   // 비교 카드의 방문 준비 %도 같이
       const ring = document.querySelector('details.rsec[data-fold="check"] [data-vc-ring]');
       if (ring) {
         const all = [...box.querySelectorAll('.vc-tbl .vr-ck')];
@@ -7382,8 +7446,11 @@ window.addEventListener('afterprint', () => {
 function render(report, opts = {}) {
   currentReport = report;
   const root = $('#report');
+  // 조회 진행 화면에서 넘어올 때만 결과가 살짝 커지며 나타난다(확대 전환) — 늦게 온 자료로 다시 그릴 때는 그대로
+  const fromLoading = !!root.querySelector('[data-ld-prog]');
   root.innerHTML = '';
   root.classList.remove('hidden');
+  if (fromLoading) { root.classList.remove('rp-in'); void root.offsetWidth; root.classList.add('rp-in'); }
 
   const m = report.meta;
   // 예전에 저장한 리포트 — 오피스형 건물 입주 판단이 없으면 남은 주소 글로 다시 판단하고 면적 칸도 고친다
@@ -7936,7 +8003,7 @@ const trendWhen = (t) => {
 // 로딩 화면 — 진행 문구 + 업계 소식 자리
 function loadingHtml(msg) {
   return `<div class="empty loadmsg"><span class="ld-spin" aria-hidden="true"></span>${msg}</div>`
-    + `<div class="ld-prog" data-ld-prog aria-live="polite">${liveProgHtml()}</div>`
+    + `<div class="ld-prog" data-ld-prog>${liveProgHtml()}</div>`
     + (getProxy() ? '<div class="trend" data-trend aria-live="off"><div class="tr-h">기다리는 동안 — 화장품 제조업 최신 소식</div><div class="tr-wait">소식을 불러오는 중…</div></div>' : '');
 }
 function mountTrend(root) {

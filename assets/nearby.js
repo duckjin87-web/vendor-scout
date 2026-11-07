@@ -1132,7 +1132,7 @@ function mountReportTabs(root, report, actions, areaEl) {
   bar.setAttribute('role', 'tablist');
   bar.setAttribute('aria-label', '리포트 보기');
   bar.innerHTML = tabs.map((t) => `<button type="button" role="tab" class="rtab" data-tab="${t.id}" id="rtab-${t.id}" aria-controls="rpane-${t.id}">${t.label}</button>`).join('')
-    + '<span class="rtab-ink" aria-hidden="true"></span>';
+    + '<span class="rtab-ink" aria-hidden="true"></span><span class="rtab-prog" aria-hidden="true"><i></i></span>';
   const ink = bar.querySelector('.rtab-ink');
   // 밑줄을 고른 탭 아래로 옮긴다(첫 그림에서는 미끄러지지 않고 바로 놓는다)
   const placeInk = (instant) => {
@@ -1189,5 +1189,54 @@ function mountReportTabs(root, report, actions, areaEl) {
     show(next); bar.querySelector(`[data-tab="${next}"]`).focus();
   });
   show(_nbActiveTab.get(vid) || 'report');
+  readGuide(bar, panes.report);
+}
+// 리포트 읽는 동안 — 탭 줄 아래 얇은 줄이 읽은 만큼 차고(스크롤 진행 바), 넓은 화면에서는 오른쪽 점이
+// 지금 단락을 짚는다(페이지 인디케이터). 점을 누르면 그 단락으로 간다. 리포트 탭이 아닐 때는 숨긴다.
+let _rgOff = null;
+function readGuide(bar, pane) {
+  if (_rgOff) _rgOff();
+  const prog = bar.querySelector('.rtab-prog i');
+  const secs = [];
+  const add = (node, label) => { if (node && label) secs.push({ node, label }); };
+  add(pane.querySelector('.verdict'), '판정');
+  add(pane.querySelector('.evc'), '근거');
+  pane.querySelectorAll(':scope > details.rsec').forEach((d) => {
+    const t = (d.querySelector('.rsec-t') || {}).textContent || '';
+    add(d, t.replace(/\s*·.*$/, '').replace(/^방문 전 /, '').slice(0, 10));
+  });
+  const dots = document.createElement('nav');
+  dots.className = 'rg-dots'; dots.setAttribute('aria-label', '리포트 단락 바로가기');
+  dots.innerHTML = secs.map((x, i) => `<button type="button" data-i="${i}" data-l="${esc(x.label)}" aria-label="${esc(x.label)}로 이동"></button>`).join('');
+  document.body.appendChild(dots);
+  const topH = () => (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--topbar-h')) || 0) + bar.offsetHeight;
+  dots.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const n = secs[Number(b.dataset.i)].node;
+    if (n.tagName === 'DETAILS' && !n.open) n.open = true;
+    window.scrollTo({ top: window.scrollY + n.getBoundingClientRect().top - topH() - 8, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  });
+  let raf = 0;
+  const paint = () => {
+    raf = 0;
+    if (!pane.isConnected) { off(); return; }
+    const vis = !pane.hidden && pane.offsetParent !== null;
+    dots.hidden = !vis || secs.length < 2;
+    if (!vis) { prog.style.width = '0%'; return; }
+    const r = pane.getBoundingClientRect(), h = topH();
+    const span = r.height - (window.innerHeight - h);
+    prog.style.width = `${Math.max(0, Math.min(100, span > 0 ? ((h - r.top) / span) * 100 : 100))}%`;
+    let cur = 0;
+    secs.forEach((x, i) => { if (x.node.getBoundingClientRect().top <= h + window.innerHeight * 0.3) cur = i; });
+    dots.querySelectorAll('button').forEach((b, i) => (i === cur ? b.setAttribute('aria-current', 'true') : b.removeAttribute('aria-current')));
+  };
+  const req = () => { if (!raf) raf = requestAnimationFrame(paint); };
+  const off = () => { window.removeEventListener('scroll', req); window.removeEventListener('resize', req); clearInterval(tick); dots.remove(); _rgOff = null; };
+  window.addEventListener('scroll', req, { passive: true });
+  window.addEventListener('resize', req);
+  // 탭을 바꾸거나 단락을 펼쳐 길이가 달라져도 맞춘다
+  const tick = setInterval(req, 1200);
+  _rgOff = off;
+  paint();
 }
 window.mountReportTabs = mountReportTabs;
