@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 235;
+const BUILD = 236;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -1749,6 +1749,10 @@ async function bldAreaLookup(addr, opts = {}) {
 const KOLMAR_BLD_ADDRS = [KOLMAR_ADDR];
 const REF_BLD_KEY = 'vs_ref_bld2';
 try { localStorage.removeItem('vs_ref_bld'); } catch { /* 옛 단일 지번 캐시 */ }
+// 저장해 둔 기준값을 바로 읽는다(3D 비교 같은 동기 화면용). 없으면 null — 그때는 refBldArea()가 채운다
+function refBldCached() {
+  try { const c = JSON.parse(localStorage.getItem(REF_BLD_KEY) || 'null'); return c && c.data && c.data.arch ? c.data : null; } catch { return null; }
+}
 async function refBldArea() {
   const sig = KOLMAR_BLD_ADDRS.join('|');
   try {

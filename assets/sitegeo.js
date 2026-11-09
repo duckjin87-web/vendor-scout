@@ -358,7 +358,16 @@ function sg3dData(report, B) {
 function sg3dHtml(report, B) {
   const D = sg3dData(report, B);
   if (!D) return null;
-  const nm = stripCorp(report.meta.vendor_name || '') || '조회 업체', st = D.stat, unit = B && B.unit;
+  const nm = stripCorp(report.meta.vendor_name || '') || '조회 업체', unit = B && B.unit;
+  // 숫자는 건축물대장 기준으로 맞춘다. 브이월드 건물 윤곽은 도로명주소가 붙은 동만 있어 일부가 빠진다
+  // (한국콜마 세종 관정리 732: 지도 3동 1,839평 ↔ 대장 건축면적 3,832평 · 연면적 10,813평 — 절반 이하).
+  // 그림은 지도에 있는 동으로 그리고, 바닥·연면적 비교와 '콜마 대비 %'는 대장 값으로 낸다(직육면체 비교와 같은 기준).
+  const reg = typeof refBldCached === 'function' ? refBldCached() : null;
+  const st = { ...D.stat };
+  const cov = reg && reg.arch ? D.stat.refFoot / reg.arch : null;
+  if (reg && reg.arch) { st.refFoot = reg.arch; st.refGfa = reg.tot || D.stat.refGfa; }
+  if (!unit && B && B.arch) { st.myFoot = B.arch; st.myGfa = B.tot || D.stat.myGfa; }
+  const covNote = cov != null && cov < 0.8 ? `<p class="s3-cov">⚠ 지도에 그려진 한국콜마 건물은 ${D.ref.bldgs.length}동 ${sgPy(D.stat.refFoot)}평으로 건축물대장 건축면적(${sgPy(reg.arch)}평)의 ${Math.round(cov * 100)}%입니다. 그림은 지도에 있는 동만, 숫자는 대장 기준입니다.</p>` : '';
   const pct = (a, b) => (b ? `${Math.max(1, Math.round((a / b) * 100))}%` : '—');
   const bar = (lab, a, b, unitTxt) => {
     const mx = Math.max(a, b) || 1;
@@ -372,11 +381,12 @@ function sg3dHtml(report, B) {
     + `<div class="s3-side"><p class="s3-head"><b>${esc(nm)}</b>의 바닥 면적은 한국콜마 세종의 <em>${pct(st.myFoot, st.refFoot)}</em>${unit ? ' (호실 전용)' : ''}</p>`
     + `<div class="s3-legend"><span><i class="s3-sw m"></i>${esc(nm)}${unit ? ' 호실' : ` ${D.mine.bldgs.length}동`}</span><span><i class="s3-sw k"></i>한국콜마 세종 ${D.ref.bldgs.length}동</span></div>`
     + bar('바닥 면적', st.myFoot, st.refFoot, (v) => `${sgPy(v)}평`)
-    + bar('추정 연면적', st.myGfa, st.refGfa, (v) => `${sgPy(v)}평`)
+    + bar(reg ? '연면적' : '추정 연면적', st.myGfa, st.refGfa, (v) => `${sgPy(v)}평`)
     + bar('최고 층수', st.myTop, st.refTop, (v) => `${v}층`)
-    + '</div></div>';
-  const src = ['건물 모양·지상 층수: 브이월드 건물 윤곽(도로명주소 건물) — 지도 윤곽이라 대장 건축면적과 조금 다를 수 있습니다',
-    '한국콜마 기준: 세종 산단길 22-17 필지 안 건물만(세종 공장 전체가 아님)', `높이는 층수 × ${SG_FLOOR_M}m로 가정했습니다 · 추정 연면적 = 바닥 면적 × 층수`,
+    + covNote + '</div></div>';
+  const src = ['건물 모양·지상 층수: 브이월드 건물 윤곽(도로명주소 건물) — 도로명주소가 없는 동(부속 창고 등)은 지도에 없어 그림에서 빠질 수 있습니다',
+    `바닥 면적·연면적 수치: ${reg ? '건축물대장(총괄표제부) 기준 — 직육면체 비교와 같은 값' : '브이월드 윤곽 기준(대장 기준값을 아직 받지 못함)'}`,
+    '한국콜마 기준: 세종 산단길 22-17(관정리 732) 필지 하나 — 세종 공장 전체가 아님', `높이는 층수 × ${SG_FLOOR_M}m로 가정했습니다`,
     unit ? '오피스형 건물 입주사라 건물 전체 대신 호실 전용면적만큼의 한 층짜리 상자로 그렸습니다' : '',
     D.mine.estF ? `브이월드에 층수가 없어 건축물대장 평균 층수(연면적 ÷ 건축면적 ≈ ${D.mine.estF}층)로 세웠습니다` : ''].filter(Boolean);
   return { html, src, D, badge: sgChip('info', `콜마 대비 ${pct(st.myFoot, st.refFoot)}`) };
