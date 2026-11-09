@@ -2885,3 +2885,6 @@ label.gr-chip:focus-within { outline: 2px solid var(--accent); outline-offset: 2
 @media (max-width: 460px) { .fm-ph { width: 100vw; height: 100dvh; } }
 .fm-scrim { z-index: 5; } .fm-sheet { z-index: 6; } .fm-toast { z-index: 7; }
 .s3-cov { margin: 10px 0 0; padding: 7px 10px; border-left: 3px solid var(--gC); background: var(--gC-bg); border-radius: 0 8px 8px 0; font-size: 11.5px; line-height: 1.55; color: var(--text); }
+/* 자료 기준 시점 — 시차가 있는 값만. 오래된 값은 노란색 */
+.fage { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; font-size: 10.5px; font-weight: 600; line-height: 1.6; color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); white-space: nowrap; vertical-align: 1px; font-variant-numeric: tabular-nums; }
+.fage.old { color: var(--gC); background: var(--gC-bg); border-color: transparent; }

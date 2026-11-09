@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 236;
+const BUILD = 237;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2001,6 +2001,36 @@ function nedrugListRows(html) {
       seq: (href.match(/entpSeq=(\d+)/) || [])[1] || '' };
   }).filter(Boolean);
 }
+// 식약처 행정처분(화장품) — 의약품안전나라 「행정처분정보」 목록을 업체명으로 받아, 이름이 같은 업체의 처분만 남긴다.
+// 공개 기간(공개종료일자)이 지난 처분은 목록에서 빠지므로 '지금 공개 중인 처분'이다.
+async function adminLookup(name) {
+  const key = stripCorp(name || '').replace(/\s/g, '');
+  if (key.length < 2) return { items: [], q: name };
+  const url = `${NEDRUG}/pbp/CCBAO01/getList?searchYn=true&page=1&limit=50&searchTypeCode=C&entpName=${encodeURIComponent(stripCorp(name).trim())}`;
+  const r = await proxyOnlyGet('fetchPage', { url });
+  const html = String((r && r.text) || '');
+  if (!/행정처분/.test(html)) throw new Error('의약품안전나라 응답 없음');
+  const items = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => {
+    const tr = m[1].replace(/<span class="s-th">[\s\S]*?<\/span>/gi, '');
+    const href = (tr.match(/href=["']([^"']*dispsApplySeq=\d+[^"']*)["']/i) || [])[1];
+    if (!href) return null;
+    const tds = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((x) => nedTxt(x[1]));
+    return { name: tds[1] || '', item: tds[2] || '', disp: tds[3] || '', date: tds[4] || '', end: tds[5] || '', link: `${NEDRUG}${href.replace(/&amp;/g, '&')}` };
+  }).filter((x) => x && stripCorp(x.name).replace(/\s/g, '') === key);
+  return { items, q: name, url };
+}
+// 법원 회생·파산 공고 — 매일 모아 둔 data/court/insolvency.json(법인회생·법인파산)에서 채무자명이 같은 사건을 찾는다.
+// 공고에는 사업자번호가 없어 상호로만 맞춘다(괄호 속 영문 표기·법인격은 떼고 비교).
+let _courtP = null;
+const courtNorm = (v) => stripCorp(String(v || '').replace(/\([^)]*\)/g, '')).replace(/\s/g, '');
+async function courtLookup(name) {
+  if (!_courtP) _courtP = fetch(`data/court/insolvency.json?v=${BUILD}-${new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const d = await _courtP;
+  if (!d) throw new Error('회생·파산 공고 자료 없음');
+  const key = courtNorm(name);
+  const hits = key.length >= 2 ? (d.rows || []).filter((x) => courtNorm(x.n) === key) : [];
+  return { hits, at: d.at, cases: d.cases, courts: d.courts };
+}
 function nedrugDetail(html) {
   const h = String(html || '');
   const t = nedTxt(h);
@@ -3735,6 +3765,9 @@ async function finishLive(name, corp) {
     oemTrace: proxyOnlyGet('naverWeb', { query: `${nm} 제조원`, display: '10' }),
     // 채용공고 추적 — 뉴스도 홈페이지도 없는 영세업체의 거의 유일한 활동 흔적
     hiring: hiringTrace(nm),
+    // 식약처 행정처분(화장품) · 법원 회생·파산 공고 — 공식 위험 신호
+    admin: adminLookup(corp.corpNm || name),
+    court: courtLookup(corp.corpNm || name),
     // 국세청 진위확인 — 사업자번호·대표자·개업일 3요소 대조(상태조회와 동일 서비스)
     // 금융위에 대표자·설립일이 없으면 웹 사업자정보·검색 요약문의 대표자·개업일(정확한 날짜일 때만)로 대조한다
     ntsVal: corp.rep && corp.estbDt ? ntsValidate(corp.bzno, corp.rep, corp.estbDt)
@@ -4002,6 +4035,19 @@ function checklistHtml(list) {
 // 3열 압축 행: [등급+항목] | [값] | [출처(우측 소형)]
 // 설명문을 읽기 좋게 자른다. 원문은 '★ 핵심 … ※ 단서 … ▣ 보완' 식으로 여러 문단이 한 줄에
 // 이어 붙어 있어, 통째로 뿌리면 문단이 흐른다. 표식 앞에서 끊어 줄로 나눈다.
+// 자료 기준 시점 — '2026.09 기준 · 2개월 전'. 조회 때 원부를 읽는 값은 표시하지 않는다(늘 지금 값).
+function fieldAge(fld) {
+  if (!fld || fld.value == null) return null;
+  const mAgo = (d) => { const t = Date.parse(d); return isFinite(t) ? Math.max(0, Math.floor((Date.now() - t) / (30.44 * 864e5))) : null; };
+  const ago = (m) => (m == null ? '' : m < 1 ? '이번 달' : m < 12 ? `${m}개월 전` : `${Math.floor(m / 12)}년${m % 12 ? ` ${m % 12}개월` : ''} 전`);
+  const r = fld.ref;
+  if (r && r.k === 'month') { const m = mAgo(`${r.d}-15`); return { t: `${r.d.replace('-', '.')} 기준 · ${ago(m)}`, old: m != null && m >= 6, tip: r.l }; }
+  if (r && r.k === 'reg') { const m = mAgo(r.d); return { t: `${r.d.slice(0, 4)}년 신고 · ${ago(m)}`, old: m != null && m >= 60, tip: r.l }; }
+  const fy = String(fld.as_of || '').match(/^(\d{4})-12$/);
+  if (fy && /재무/.test(String(fld.source || ''))) { const m = mAgo(`${fy[1]}-12-31`); return { t: `${fy[1]} 회계연도 · ${ago(m)}`, old: m != null && m >= 24, tip: '재무제표 기준 연도' }; }
+  if (isWebSource(fld)) return { t: '갱신일 미상', old: false, tip: '웹·집계 사이트 값 — 언제 기준인지 알 수 없습니다' };
+  return null;
+}
 const WEB_SRC_RE = /웹|사업자정보|채용|홈페이지|검색|기업정보|bizwiki|bizdang|카카오맵 등록|블로그/;
 const isWebSource = (fld) => fld && fld.grade !== 'A' && WEB_SRC_RE.test(String(fld.source || ''));
 function noteLines(note) {
@@ -4031,10 +4077,12 @@ function fieldRow(fld) {
   const rcChip = rc ? ` <button type="button" class="rc-chip ${rc.verdict === 'ok' ? 'ok' : 'warn'}" aria-expanded="${rc.verdict !== 'ok'}">${rcLab}</button>` : '';
   // 공식 원부가 아닌 웹·집계 사이트에서 채운 값은 값 옆에 표시한다 — 등급 점만으로는 놓치기 쉽다
   const webTag = !isGap && !pending && isWebSource(fld) ? ' <span class="ftag web" title="공식 자료에 없어 웹·집계 사이트에서 보강한 값">웹 보강</span>' : '';
+  const ag = !isGap && !pending ? fieldAge(fld) : null;
+  const ageTag = ag ? ` <span class="fage${ag.old ? ' old' : ''}" title="${esc(ag.tip || '')}">${esc(ag.t)}</span>` : '';
   const valHtml = Array.isArray(fld.checklist)
     ? checklistHtml(fld.checklist) + info
     : pending ? '<span class="skel-v" aria-label="불러오는 중"></span>'
-      : (isGap ? '해당 없음' : esc(fld.value)) + stale + webTag + rcChip + info;
+      : (isGap ? '해당 없음' : esc(fld.value)) + stale + ageTag + webTag + rcChip + info;
   row.appendChild(el('div', 'v' + (isGap && !fld.checklist && !pending ? ' gap' : ''), valHtml));
   // 판단을 바꾸는 경고(⚠ 문장)는 「!」 안에 숨기지 않고 값 아래에 바로 보인다
   const warns = !pending && !isGap ? (String(fld.note || '').match(/⚠[^⚠★※▣]*?(?:[.。](?=\s|$)|$)/g) || []).map((x) => x.trim()).filter(Boolean) : [];
@@ -5421,6 +5469,12 @@ function qualityGrade(report) {
   const debtHigh = !!(fh && fh.debtRatio != null && fh.debtRatio > 400);
   add('재무 건전성', capImpair ? false : (debtHigh ? null : true),
     capImpair ? '자본잠식(자본총계 ≤ 0)' : debtHigh ? `부채비율 ${fh.debtRatio}%` : fh ? `부채비율 ${fh.debtRatio != null ? fh.debtRatio + '%' : '—'}` : '공시 재무 없음(판정에 쓰지 않음)', 'risk');
+  // 공식 위험 — 법원 회생·파산 공고(최근 3년, 상호 일치) · 식약처 업무정지·등록취소는 C, 그 밖의 행정처분은 주의
+  const MA = (report.meta && report.meta.admin) || null, MC = (report.meta && report.meta.court) || null;
+  const courtBad = !!(MC && MC.recent);
+  const admBad = !!(MA && MA.heavy), admWarn = !!(MA && MA.n && !MA.heavy);
+  if (MC) add('법원 회생·파산', courtBad ? false : (MC.hits && MC.hits.length ? null : true), courtBad ? `최근 3년 공고 ${MC.recent}건(상호 일치 — 사건번호로 확인)` : MC.hits && MC.hits.length ? '3년 지난 공고만 있음' : '공고 없음', 'risk');
+  if (MA) add('식약처 행정처분', admBad ? false : (admWarn ? null : true), admBad ? `업무정지·등록취소 ${MA.heavy}건 공개 중` : admWarn ? `공개 중 ${MA.n}건(광고·판매 정지 등)` : '공개 중인 처분 없음', 'risk');
   // 웹 위험 신호(회생·파산·영업정지 등) — 공식 확인 전이라 C로 내리지는 않지만, A는 막고 '중대 위험 없음'이라고 쓰지 않는다
   const webHigh = (report.web_risk || []).filter((w) => w.sev === 'high');
   if ((report.web_risk || []).length) add('웹 위험 신호', webHigh.length ? null : true,
@@ -5446,10 +5500,10 @@ function qualityGrade(report) {
   if (!licensed) { grade = 'D'; why = '제조업 허가 미확인'; }
   else if (closed) { grade = 'D'; why = `${stt}`; }
   else if (bz.length !== 10) { grade = 'D'; why = '업체를 특정할 수 없음'; }
-  else if (rcBad || capImpair) { grade = 'C'; why = [rcBad ? '최근 3년 중대 회수' : '', capImpair ? '자본잠식' : ''].filter(Boolean).join(' · '); }
+  else if (rcBad || capImpair || courtBad || admBad) { grade = 'C'; why = [rcBad ? '최근 3년 중대 회수' : '', capImpair ? '자본잠식' : '', courtBad ? '법원 회생·파산 공고' : '', admBad ? '식약처 업무정지·등록취소' : ''].filter(Boolean).join(' · '); }
   else {
     const cautions = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회 불가' : '', !isFullAddr(site) ? '공장 번지 미확인' : '',
-      wfWarn ? '보험상 제조 인력 없음' : '', airWarn ? '제조소 배출시설 폐업·휴업' : '', webHigh.length ? `웹 위험 신호(${webHigh.map((w) => w.kind).join('·')})` : ''].filter(Boolean);
+      wfWarn ? '보험상 제조 인력 없음' : '', airWarn ? '제조소 배출시설 폐업·휴업' : '', webHigh.length ? `웹 위험 신호(${webHigh.map((w) => w.kind).join('·')})` : '', admWarn ? `식약처 행정처분 ${MA.n}건` : ''].filter(Boolean);
     const head = webHigh.length ? '웹 위험 신호 확인 전' : '중대 위험 없음';
     if (cgmp && !cautions.length) { grade = 'A'; why = 'CGMP 적합 · 중대 위험 없음'; }
     else { grade = 'B'; why = cgmp ? `CGMP 적합이나 주의: ${cautions.join(' · ')}` : `${head} · CGMP 미등재${cautions.length ? ` · 주의: ${cautions.join(' · ')}` : ''}`; }
@@ -5460,7 +5514,7 @@ function qualityGrade(report) {
   const dataGrade = gs.length ? ['A', 'B', 'C', 'D'][gs[Math.floor(gs.length / 2)]] : 'D';
   // A까지 남은 조건 — 게이지 아래에 '무엇이 있으면 한 단계 오르는지'를 적는다
   const caut = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회' : '', !isFullAddr(site) ? '공장 번지 확인' : '',
-    wfWarn ? '보험상 제조 인력' : '', airWarn ? '제조소 배출시설 가동' : '', webHigh.length ? '웹 위험 신호 해소' : ''].filter(Boolean);
+    wfWarn ? '보험상 제조 인력' : '', airWarn ? '제조소 배출시설 가동' : '', webHigh.length ? '웹 위험 신호 해소' : '', admWarn ? '행정처분 공개 기간 경과' : ''].filter(Boolean);
   const toA = grade === 'A' ? [] : grade === 'D' ? [why] : [...(grade === 'C' ? [why] : []), ...(cgmp ? [] : ['CGMP 적합']), ...caut];
   return { grade, why, checks, dataGrade, toA };
 }
@@ -6170,7 +6224,7 @@ function openVerdictWhy(report) {
   const rules = [
     ['A', 'CGMP 적합 + 중대 위험 없음 + 주의 신호 없음'],
     ['B', '중대 위험 없음 — CGMP 미등재이거나, CGMP가 있어도 주의 신호가 있음'],
-    ['C', '허가·영업 중이나 중대 위험(최근 3년 중대 회수 또는 회수 2건 이상, 자본잠식)'],
+    ['C', '허가·영업 중이나 중대 위험(최근 3년 중대 회수 또는 회수 2건 이상, 자본잠식, 최근 3년 법원 회생·파산 공고, 식약처 업무정지·등록취소)'],
     ['D', '검토불가 — 제조업 허가 미확인 · 휴업/폐업 · 업체를 특정할 수 없음(사업자번호 없음)'],
   ].map(([k, t]) => `<tr class="${k === g ? 'on' : ''}"><td><b class="vw-g badge-${k}">${k === 'D' ? '불가' : k}</b></td><td>${esc(VERDICT[k].label)}</td><td>${esc(t)}</td></tr>`).join('');
   const dlg = document.createElement('dialog');
@@ -7834,7 +7888,7 @@ function render(report, opts = {}) {
 // 먼저 그린 리포트(finishLive의 _late)가 완성되면 같은 업체를 보고 있을 때만 바꿔 그린다.
 // 그 사이 사용자가 한 일(홈페이지 추적·심층분석·면적 수정·직접 입력)은 새 리포트로 옮긴다.
 const LIVE_SRC_NAME = { finance: '금융위 재무', rpt: '식약처 보고품목', nps: '국민연금', maker: '식약처 제조업', nedrug: '의약품안전나라 제조소', gmp: '식약처 CGMP',
-  factory: '산단공 공장등록', recall: '식약처 회수·판매중지', nts: '국세청 사업자상태', bizWeb: '웹 사업자정보', naverNews: '뉴스', cgmpNews: 'CGMP 기사', oemTrace: '웹 언급',
+  factory: '산단공 공장등록', recall: '식약처 회수·판매중지', nts: '국세청 사업자상태', bizWeb: '웹 사업자정보', admin: '식약처 행정처분', court: '법원 회생·파산 공고', naverNews: '뉴스', cgmpNews: 'CGMP 기사', oemTrace: '웹 언급',
   hiring: '채용공고', ntsVal: '국세청 진위확인', insure: '고용·산재보험', air: '대기배출시설' };
 function hookLateReport(report) {
   if (!report || !report._late || report._lateHooked) return;

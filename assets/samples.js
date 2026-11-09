@@ -1949,6 +1949,56 @@ function assembleLiveReport(name, corp, res) {
         + (w.link ? ` 근거: ${w.link}` : '') });
   });
 
+  // ── 자료 기준 시점 ── 값마다 '언제 기준인가'를 붙인다. 조회 때 원부를 바로 읽는 자료(식약처·국세청·건축물대장 등)는
+  // 붙이지 않고, 월간 파일(국민연금)·신고 당시 값(산단공 공장등록)·회계연도(재무)처럼 시차가 있는 것만.
+  // 공장등록 신고값은 5년이 지나면 한 단계 낮춘다(이전·증축·인원 변동이 반영되지 않았을 수 있다).
+  {
+    const allF = [...basic, ...capacity];
+    const ymNps = npsYm ? npsYm.replace('.', '-') : null;
+    allF.forEach((x, i, arr) => {
+      if (x.value == null) return;
+      const src = String(x.source || '');
+      if (ymNps && /국민연금/.test(src)) x.ref = { d: ymNps, k: 'month', l: '국민연금 월간 파일' };
+      else if (fctRegDe && /산업단지공단 공장등록/.test(src)) {
+        x.ref = { d: fctRegDe, k: 'reg', l: '공장등록 신고' };
+        const yrs = (Date.now() - Date.parse(fctRegDe)) / (365.25 * 864e5);
+        if (yrs >= 5 && x.grade === 'A') {
+          const nx = { ...x, grade: 'B', note: `${x.note ? `${x.note} ` : ''}⚠ 공장등록 신고(${fctRegDe.slice(0, 4)}년) 당시 값이라 지금과 다를 수 있습니다.` };
+          const bi = basic.indexOf(x); if (bi >= 0) basic[bi] = nx; else { const ci = capacity.indexOf(x); if (ci >= 0) capacity[ci] = nx; }
+        }
+      }
+    });
+  }
+
+  // ── 식약처 행정처분(화장품) · 법원 회생·파산 공고 ── 웹 문구가 아니라 기관이 직접 공개한 위험 신호
+  const adm = R.admin && R.admin.ok ? R.admin.data : null;
+  const crt = R.court && R.court.ok ? R.court.data : null;
+  const ADM_HEAVY = /제조\s*업무\s*정지|제조업\s*등록\s*취소|등록\s*취소|영업\s*정지|업무\s*전부\s*정지|제조\s*정지/;
+  const admItems = adm ? adm.items || [] : [];
+  const admHeavy = admItems.filter((x) => ADM_HEAVY.test(x.disp));
+  const admShort = (x) => String(x.disp || '').replace(/^[○◦·\s]+/, '').replace(/^해당\s*품목\s*/, '').replace(/\*.*$/, '').trim().slice(0, 60);
+  const admField = !R.admin ? null : f('행정처분 (식약처)',
+    adm ? (admItems.length ? `공개 중 ${admItems.length}건 · 최근 ${admItems[0].date} ${admShort(admItems[0])}` : '공개 중인 처분 없음') : null,
+    adm ? 'A' : 'D', '의약품안전나라 행정처분정보(화장품)', adm ? today : null,
+    adm ? (admItems.length
+      ? `${admItems.slice(0, 5).map((x) => `${x.date} · ${x.item || '업체'} · ${admShort(x)}`).join(' / ')}${admHeavy.length ? ' ⚠ 업무정지·등록취소가 포함돼 있습니다 — 처분 사유와 재발 방지 조치를 먼저 받으세요.' : ''} ※ 공개 기간(대개 1년)이 지난 처분은 목록에서 빠집니다. 근거: ${admItems[0].link}`
+      : '의약품안전나라 화장품 행정처분 목록에 이 업체 이름으로 공개 중인 처분이 없습니다. ※ 공개 기간이 지난 처분은 목록에서 빠지므로, 과거 이력은 방문 때 물어보세요.')
+      : why('admin', R.admin.err || '조회 실패'));
+  const crtHits = crt ? crt.hits || [] : [];
+  const crtRecent = crtHits.filter((x) => x.last && (Date.now() - Date.parse(x.last)) < 3 * 365 * 864e5);
+  const crtField = !R.court ? null : f('법원 회생·파산 공고',
+    crt ? (crtHits.length ? `${crtHits[0].t} · ${crtHits[0].cs} · ${crtHits[0].c} · 최근 ${crtHits[0].last}` : '공고 없음') : null,
+    crt ? (crtHits.length ? 'B' : 'A') : 'D', '대법원 회생·파산 공고(법인회생·법인파산)', crt ? String(crt.at || '').slice(0, 10) : null,
+    crt ? (crtHits.length
+      ? `⚠ 채무자명이 같은 법인의 ${crtHits.map((x) => `${x.t} ${x.cs}(${x.c}, 첫 공고 ${x.first} · 최근 「${x.lastT}」 ${x.last})`).join(' / ')}. 공고에는 사업자번호가 없어 상호로만 맞췄습니다 — 동명 법인일 수 있으니 사건번호로 확인하세요. ※ 대법원 회생·파산 공고 화면에서 확인할 수 있습니다.`
+      : `전국 회생 관할 ${crt.courts || 15}개 법원의 법인회생·법인파산 공고 ${Number(crt.cases || 0).toLocaleString()}건에 이 상호가 없습니다(${String(crt.at || '').slice(0, 10)} 수집).`)
+      : why('court', R.court.err || '조회 실패'));
+  { const si = basic.findIndex((x) => x.key === '사업자 상태'); basic.splice(si >= 0 ? si + 1 : basic.length, 0, ...[admField, crtField].filter(Boolean)); }
+  admItems.slice(0, 3).forEach((x) => risk_flags.push({ type: ADM_HEAVY.test(x.disp) ? '행정처분 · 업무정지' : '행정처분', official: true,
+    detail: `${x.date} 식약처 행정처분 — ${x.item ? `${x.item} · ` : ''}${admShort(x)}. 처분 사유·이행 여부와 재발 방지 조치를 확인하세요. 근거: ${x.link}` }));
+  if (crtHits.length) risk_flags.unshift({ type: '법원 회생·파산 공고', official: true,
+    detail: `${crtHits[0].t} ${crtHits[0].cs}(${crtHits[0].c}) — 최근 공고 ${crtHits[0].last} 「${crtHits[0].lastT}」. 상호가 같은 법인의 공고라 사건번호로 같은 회사인지 먼저 확인하고, 맞다면 거래 조건(선급금·납기)을 재검토하세요.` });
+
   const reportOut = {
     meta: {
       vendor_name: name, vendor_id: name.replace(/[^\w가-힣]/g, '_'), query_at: new Date().toISOString(),
@@ -1957,6 +2007,8 @@ function assembleLiveReport(name, corp, res) {
       site: R.site && R.site.ok ? R.site.data : null,          // 실제 공장 소재지 선정 결과(후보·근거)
       mfds_sites: nedSites.length ? nedSites : null,
       cgmp_news: cgmpNews.length ? cgmpNews : null,
+      admin: adm ? { n: admItems.length, heavy: admHeavy.length, items: admItems.slice(0, 10) } : null,
+      court: crt ? { at: crt.at, hits: crtHits, recent: crtRecent.length } : null,
       // 생산 제품군 카드의 재료 — 이미 받은 자료에서 제품명·품목 문구만 추린다(분류는 화면에서)
       prod_src: {
         // 보고품목은 이 업체가 제조원으로 올라 있는지(제조 칸 일치) 따로 표시한다 — 아니면 책임판매로 본다
