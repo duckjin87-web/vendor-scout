@@ -1,0 +1,38 @@
+name: Update court insolvency notices (daily)
+
+# 대법원 회생·파산 공고(법인회생·법인파산)를 매일 아침(한국 시간 06:23) 받아 data/court/insolvency.json으로 둔다.
+# 사전검증 리포트가 업체명으로 맞춰 「법원 회생·파산 공고」 위험 신호를 띄운다. 공개 화면 자료라 키가 필요 없다.
+on:
+  schedule:
+    - cron: '23 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: growth
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build
+        run: node scripts/build-insolvency.mjs
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data/court)" ]; then
+            git add data/court
+            git commit -m "court: 회생·파산 공고 갱신 ($(date -u +%F))"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
