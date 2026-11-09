@@ -7,6 +7,7 @@ on:
       url: { description: 'POST 주소', required: true, type: string }
       bodies: { description: 'JSON 본문들(||| 구분)', required: true, type: string }
       referer: { description: 'Referer', required: false, type: string }
+      extract: { description: '본문이 GET일 때 응답에서 뽑을 정규식(전역, 첫 그룹)', required: false, type: string }
 
 permissions:
   contents: read
@@ -22,10 +23,18 @@ jobs:
           URL: ${{ inputs.url }}
           BODIES: ${{ inputs.bodies }}
           REF: ${{ inputs.referer }}
+          EXTRACT: ${{ inputs.extract }}
         run: |
           cat > d.mjs <<'JS'
           const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3800));
           for (const body of process.env.BODIES.split('|||').map((x) => x.trim()).filter(Boolean)) {
+            if (body === 'GET') {
+              const t = await (await fetch(process.env.URL, { headers: { 'User-Agent': 'Mozilla/5.0' } })).text();
+              const re = new RegExp(process.env.EXTRACT || '(.{0,200})', 'g');
+              const all = [...t.matchAll(re)].map((m) => m.slice(1).join('|'));
+              for (let i = 0; i < all.length; i += 60) n(all.slice(i, i + 60).join(' ; '));
+              continue;
+            }
             try {
               const r = await fetch(process.env.URL, { method: 'POST', body, headers: { 'Content-Type': 'application/json; charset=UTF-8', Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36', ...(process.env.REF ? { Referer: process.env.REF } : {}) }, signal: AbortSignal.timeout(30000) });
               const t = await r.text();
