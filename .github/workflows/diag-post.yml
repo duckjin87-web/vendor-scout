@@ -1,0 +1,36 @@
+name: Diagnose JSON POST endpoint
+
+# 외부 공개 화면이 쓰는 JSON 조회 주소에 본문을 바꿔 가며 보내 응답 모양을 본다 — 파서 작성용. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      url: { description: 'POST 주소', required: true, type: string }
+      bodies: { description: 'JSON 본문들(||| 구분)', required: true, type: string }
+      referer: { description: 'Referer', required: false, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          URL: ${{ inputs.url }}
+          BODIES: ${{ inputs.bodies }}
+          REF: ${{ inputs.referer }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3800));
+          for (const body of process.env.BODIES.split('|||').map((x) => x.trim()).filter(Boolean)) {
+            try {
+              const r = await fetch(process.env.URL, { method: 'POST', body, headers: { 'Content-Type': 'application/json; charset=UTF-8', Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124 Safari/537.36', ...(process.env.REF ? { Referer: process.env.REF } : {}) }, signal: AbortSignal.timeout(30000) });
+              const t = await r.text();
+              n(`HTTP ${r.status} · ${t.length}자 · 본문 ${body.slice(0, 200)} → ${t.slice(0, 3000)}`);
+            } catch (e) { n(`실패 ${e.message} · ${body.slice(0, 200)}`); }
+          }
+          JS
+          node d.mjs
