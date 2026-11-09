@@ -29,7 +29,7 @@ jobs:
           const b = await chromium.launch();
           const page = await b.newPage();
           await page.goto(process.env.SITE.replace(/\/$/, '') + '/');
-          await page.evaluate(() => localStorage.clear());
+          await page.evaluate((s) => { localStorage.clear(); localStorage.setItem('vs_proxy', s.replace(/\/$/, '') + '/api/proxy'); }, process.env.SITE);
           await page.reload(); await page.waitForTimeout(2500);
           const out = await page.evaluate(async (addrs) => {
             const r = [];
