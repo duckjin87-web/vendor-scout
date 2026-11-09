@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # ubuntu-latest(26.04)에서는 법원 서버 TLS 연결이 실패했다(fetch failed)
     steps:
       - uses: actions/checkout@v4
         with:

@@ -49,7 +49,7 @@ for (const [cort, cnm] of Object.entries(COURTS)) {
         await new Promise((s) => setTimeout(s, 400));
       } while (got < total && no <= 20);
       console.log(`${cnm} ${tnm}: ${total}건 공고`);
-    } catch (e) { fails.push(`${cnm} ${tnm}: ${e.message}`); console.log(`실패 ${cnm} ${tnm} ${e.message}`); }
+    } catch (e) { const why = `${e.message}${e.cause ? ` (${e.cause.code || e.cause.message})` : ''}`; fails.push(`${cnm} ${tnm}: ${why}`); console.log(`실패 ${cnm} ${tnm} ${why}`); }
   }
 }
 const rows = [...cases.values()].filter((c) => c.n).sort((a, b) => String(b.last).localeCompare(String(a.last)));
