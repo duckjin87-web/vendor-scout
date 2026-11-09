@@ -1,0 +1,58 @@
+name: Diagnose reference site (Kolmar)
+
+# 배포된 사이트에서 비교 기준(한국콜마 세종) 건축물대장 건평과 브이월드 건물 윤곽을 직접 뽑아 대조한다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      addrs: { description: '대조할 주소(| 구분)', required: true, type: string, default: '세종특별자치시 전의면 산단길 22-17|세종특별자치시 전동면 노장공단길 23|세종특별자치시 전의면 덕고개길 12-11' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Check
+        env:
+          SITE: ${{ inputs.site }}
+          ADDRS: ${{ inputs.addrs }}
+        run: |
+          npm i -s playwright@1.56.1 2>&1 | tail -5
+          npx -y playwright@1.56.1 install --with-deps chromium 2>&1 | tail -3
+          cat > d.mjs <<'JS'
+          import { chromium } from 'playwright';
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3900));
+          const b = await chromium.launch();
+          const page = await b.newPage();
+          await page.goto(process.env.SITE.replace(/\/$/, '') + '/');
+          await page.evaluate(() => localStorage.clear());
+          await page.reload(); await page.waitForTimeout(2500);
+          const out = await page.evaluate(async (addrs) => {
+            const r = [];
+            const py = (m) => Math.round(m / 3.305785);
+            for (const a of addrs) {
+              try {
+                const d = await bldAreaLookup(a);
+                r.push(`[대장] ${a} → 지번 ${d.jibun} · 대지 ${py(d.plat || 0)}평 · 건축면적 ${py(d.arch || 0)}평 · 연면적 ${py(d.tot || 0)}평 · 공장 건축 ${py(d.factoryArch || 0)}평 · 동 ${d.bldgCount} (공장 ${d.factoryCount}) · ${d.src}`);
+                r.push(`[대장 동별] ${a} :: ${(d.bldgs || []).slice(0, 14).map((x) => `${x.dong || x.name}/${x.purpose}/${py(x.arch || 0)}평/${x.floors}층`).join(' · ')}`);
+              } catch (e) { r.push(`[대장] ${a} 실패 ${e.message}`); }
+            }
+            try {
+              const pt = await sgGeocode(addrs[0]);
+              r.push(`[좌표] ${JSON.stringify(pt)}`);
+              const s = await sgSiteAt(pt);
+              const area = (ring) => { const lat0 = ring.reduce((t, p) => t + p[1], 0) / ring.length, kx = Math.cos(lat0 * Math.PI / 180) * 111320, ky = 110540; let A = 0; for (let i = 0; i < ring.length - 1; i++) A += ring[i][0] * kx * ring[i + 1][1] * ky - ring[i + 1][0] * kx * ring[i][1] * ky; return Math.abs(A) / 2; };
+              r.push(`[브이월드 필지] ${s.parcel && s.parcel.addr} · ${s.parcel && s.parcel.ring ? py(area(s.parcel.ring)) : '—'}평 · 공시 ${s.parcel && s.parcel.jiga}`);
+              r.push(`[브이월드 건물] ${(s.bldgs || []).length}동 :: ${(s.bldgs || []).map((x) => `${x.name || '이름없음'}/${py(area(x.ring))}평/${x.floors}층`).join(' · ')}`);
+              r.push(`[용도] ${(s.uses || []).map((u) => u.name).join(', ')}`);
+            } catch (e) { r.push(`[브이월드] 실패 ${e.message}`); }
+            return r;
+          }, process.env.ADDRS.split('|'));
+          out.forEach(n);
+          await b.close();
+          JS
+          node d.mjs
