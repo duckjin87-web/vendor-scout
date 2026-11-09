@@ -27,11 +27,10 @@ function grReqHtml(st, meta) {
   const d = st.data || {}, q = st.req || {};
   const fd = d.fileDate ? d.fileDate.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') : '';
   // 프록시에 실행 토큰이 없으면(canRun false) 버튼 대신 GitHub 실행 화면으로 보낸다 — 빨간 오류 대신 할 일을 안내
-  const btn = q.busy ? '<button type="button" class="nb-btn sm" disabled>집계 중…</button>'
-    : st.canRun === false ? `<a class="nb-btn sm dark" href="${esc(GR_ACTIONS)}" target="_blank" rel="noopener" data-gr-gh>최신 자료 조회 (GitHub) ↗</a>`
-    : '<button type="button" class="nb-btn sm dark" data-gr-req>최신 자료 조회 요청</button>';
-  const hint = !q.busy && !q.msg && st.canRun === false
-    ? '<p class="gr-reqmsg" role="note">GitHub 화면에서 「Run workflow」를 누르면 집계됩니다. 이 화면을 열어 두면 끝난 뒤 자동으로 새 자료로 바뀝니다.</p>' : '';
+  // 버튼은 늘 같은 자리 — 누르면 포털의 최신 파일과 지금 집계를 바로 대조하고, 새 파일이 있으면 집계를 돌린다
+  const btn = q.busy ? `<button type="button" class="nb-btn sm" disabled>${esc(q.btn || '확인 중…')}</button>`
+    : '<button type="button" class="nb-btn sm dark" data-gr-req>최신 자료 확인</button>';
+  const hint = '';
   return `<div class="gr-req">${btn}`
     + `<small>${meta != null ? esc(meta) : `마지막 집계 ${esc(grWhen(d.builtAt) || '—')}${fd ? ` · 국민연금 파일 ${esc(fd)}` : ''} · 다음 공개 ${esc(d.nextUpdate || '미정')}`}</small>`
     + (q.msg ? `<p class="gr-reqmsg${q.err ? ' err' : ''}" role="status">${esc(q.msg)}${q.link ? ` <a href="${esc(q.link)}" target="_blank" rel="noopener">GitHub 화면 ↗</a>` : ''}</p>` : '')
@@ -222,7 +221,7 @@ function grJobsHtml(st) {
     return '<div class="gr-empty"><b>채용공고 급증은 공식 API 키가 있어야 집계됩니다.</b><br>'
       + '구인 사이트 중 공식 API로 받을 수 있는 곳은 <b>사람인</b>(oapi.saramin.co.kr)과 <b>고용24</b>(work24.go.kr 오픈API)입니다. '
       + '두 곳 모두 무료로 신청할 수 있고, 받은 키를 GitHub 저장소 Settings → Secrets에 <code>SARAMIN_KEY</code> · <code>WORK24_KEY</code>로 넣은 뒤 '
-      + '위 「최신 자료 조회 요청」을 누르면 함께 집계됩니다.<br>'
+      + '위 「최신 자료 확인」을 누르면 새 파일 여부를 바로 확인합니다.<br>'
       + '잡코리아는 공개 API가 없고, 인크루트·링크드인은 사이트가 자동 수집을 막고 있어(robots.txt Disallow: /) 넣지 않았습니다.'
       + (j ? `<br><small>현재 상태: ${esc(srcTxt('saramin', '사람인'))} · ${esc(srcTxt('work24', '고용24'))}</small>` : '') + '</div>';
   }
@@ -430,17 +429,45 @@ const grLoad = (bust) => {
     .then((d) => { growthState.data = d; return d; });
 };
 
-// 「최신 자료 조회 요청」 — 프록시가 GitHub Actions 집계를 돌리고, 끝나면 새 집계를 다시 읽는다.
+// 「최신 자료 확인」 — 프록시가 GitHub Actions 집계를 돌리고, 끝나면 새 집계를 다시 읽는다.
 // 집계 작업은 포털의 최신 파일이 지난번과 같으면 내려받기·대조 없이 바로 끝난다.
+// 공공데이터포털의 국민연금 파일 화면에서 최신 파일 날짜와 다음 공개 예정일을 읽는다(키 불필요)
+async function grPortalCheck() {
+  const r = await proxyOnlyGet('fetchPage', { url: 'https://www.data.go.kr/data/15083277/fileData.do' });
+  const h = String((r && r.text) || '');
+  const file = (h.match(/<title>[^<]*_(\d{8})/) || h.match(/_(20\d{6})\b/) || [])[1] || null;
+  const next = (h.replace(/<[^>]+>/g, ' ').match(/차기\s*등록\s*예정일\s*(\d{4}-\d{2}-\d{2})/) || [])[1] || null;
+  if (!file) throw new Error('포털 파일 날짜를 읽지 못했습니다');
+  return { file, next };
+}
+const grFd = (v) => String(v || '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3');
 async function grRequest(paint) {
   // 두 패널(급성장 신호·명단 변동)이 같은 요청 버튼을 쓴다 — 상태가 바뀌면 둘 다 다시 그린다
   const set = (o) => { growthState.req = { ...(growthState.req || {}), ...o }; paint(); if (typeof mkState !== 'undefined' && mkState.repaint) mkState.repaint(); };
-  if (!getProxy()) { set({ msg: '실데이터 연결(프록시)이 있어야 요청할 수 있습니다 — 우측 상단 「실데이터 연결」을 먼저 해 주세요.', err: true, link: GR_ACTIONS }); return; }
-  set({ busy: true, msg: '집계 요청 중…', err: false, link: null });
+  if (!getProxy()) { set({ msg: '실데이터 연결(프록시)이 있어야 확인할 수 있습니다 — 우측 상단 「실데이터 연결」을 먼저 해 주세요.', err: true, link: null }); return; }
+  // ① 저장소의 집계를 다시 읽고(매일 아침 자동 집계가 그 사이 돌았을 수 있다) ② 포털의 최신 파일과 대조한다
+  set({ busy: true, btn: '확인 중…', msg: '공공데이터포털에서 국민연금 최신 파일을 확인하고 있습니다…', err: false, link: null });
+  const before = growthState.data && growthState.data.builtAt;
+  try { const d = await grLoad(Date.now()); if (d.builtAt !== before) paint(); } catch { /* 지난 집계 유지 */ }
+  const have = growthState.data && growthState.data.fileDate;
+  let P = null;
+  try { P = await grPortalCheck(); } catch { /* 포털 확인 실패 — 예전처럼 집계 요청으로 */ }
+  const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+  if (P && have && P.file <= have) {
+    set({ busy: false, msg: `이미 최신입니다 — 국민연금 ${grFd(have)} 파일로 집계돼 있습니다${P.next ? ` · 다음 공개 예정 ${P.next}` : ''} (${now} 포털 확인).`, err: false, link: null });
+    return;
+  }
+  // 새 파일이 있다 — 실행 권한이 없으면 아침 자동 집계를 안내하고, GitHub에서 바로 돌릴 수 있게 연결한다
+  if (P && growthState.canRun === false) {
+    set({ busy: false, msg: `새 국민연금 파일(${grFd(P.file)})이 공개됐습니다. 매일 아침 7시 자동 집계에서 반영됩니다 — 지금 바로 반영하려면 GitHub 화면에서 「Run workflow」를 눌러 주세요. 이 화면을 열어 두면 끝난 뒤 자동으로 바뀝니다.`, err: false, link: GR_ACTIONS });
+    grWatch(set, Date.now());
+    return;
+  }
+  set({ busy: true, btn: '집계 중…', msg: P ? `새 국민연금 파일(${grFd(P.file)})을 집계합니다…` : '집계 요청 중…', err: false, link: null });
   let r;
   try { r = await proxyOnlyGet('growthRefresh', {}); } catch (e) {
     // 실행 토큰이 없는 배포 — 오류가 아니라 GitHub 화면에서 돌리는 방식으로 바꿔 보여 준다
-    if (/GH_DISPATCH_TOKEN/.test(e.message || '')) { growthState.canRun = false; set({ busy: false, msg: null, err: false, link: null }); return; }
+    if (/GH_DISPATCH_TOKEN/.test(e.message || '')) { growthState.canRun = false; set({ busy: false, msg: '지금 바로 집계할 권한이 없어 매일 아침 7시 자동 집계에서 반영됩니다. 바로 반영하려면 GitHub 화면에서 「Run workflow」를 눌러 주세요.', err: false, link: GR_ACTIONS }); return; }
     set({ busy: false, msg: e.message || '요청 실패', err: true, link: GR_ACTIONS }); return;
   }
   if (!r.started) { set({ msg: `${r.reason || '지금은 새로 돌리지 않았습니다'} — 끝나면 자동으로 새 자료를 불러옵니다.`, link: r.actionsUrl }); }
@@ -459,7 +486,7 @@ async function grWatch(set, since) {
     try { st = await proxyOnlyGet('growthStatus', {}); } catch { continue; }
     const last = st && st.last;
     if (!last || !last.createdAt || Date.parse(last.createdAt) < since - 60000) continue;    // 아직 새 작업이 없다
-    if (!growthState.req || !growthState.req.busy) set({ busy: true, msg: '집계 중입니다 — 끝나면 자동으로 새 자료로 바뀝니다.', err: false, link: last.url });
+    if (!growthState.req || !growthState.req.busy) set({ busy: true, btn: '집계 중…', msg: '집계 중입니다 — 끝나면 자동으로 새 자료로 바뀝니다.', err: false, link: last.url });
     if (last.status !== 'completed') continue;
     if (last.conclusion !== 'success') { set({ busy: false, msg: `집계 작업이 실패했습니다(${last.conclusion}).`, err: true, link: last.url }); return; }
     for (let k = 0; k < 9; k++) {
@@ -709,7 +736,7 @@ function mountMakers() {
   mkLoad().then(() => { mkLiveStale(); mkState.anim = true; paint(); dashTabsPaint(); if (growthState.repaint) growthState.repaint(); }).catch((e) => { mkState.err = /Failed to fetch|NetworkError|CORS/i.test(e.message) ? '이 화면(파일로 연 경우)에서는 읽을 수 없습니다' : e.message; paint(); });
 }
 const mkLoad = (bust) => fetch(`data/growth/makers.json?v=${BUILD}-${bust || new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' })
-  .then((r) => { if (r.status === 404) throw new Error('아직 첫 집계 전입니다 — 매주 월요일 아침 또는 「최신 자료 조회 요청」 때 만들어집니다'); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then((r) => { if (r.status === 404) throw new Error('아직 첫 집계 전입니다 — 매일 아침 자동 확인 또는 「최신 자료 확인」 때 만들어집니다'); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
   .then((d) => { mkState.data = d; mkState.err = null; return d; });
 
 // ── 대시보드 탭 ── 급성장 신호 / 제조업 명단 변동. 리포트가 열리면 탭과 두 패널 모두 숨긴다.

@@ -3,9 +3,12 @@ name: Build growth signals (NPS monthly)
 # 급성장 신호 — 국민연금 가입 사업장 월간 파일 + 식약처 제조업 명단으로 화장품 제조업체의 월 순증을 집계해
 # data/growth/latest.json(대시보드용)과 달별 스냅숏을 저장한다. 키는 Secret에만 있고 결과 JSON만 커밋된다.
 
-# 자동 실행은 하지 않는다 — 대시보드의 「최신 자료 조회 요청」 버튼(프록시 growthRefresh)이나
-# GitHub Actions 화면의 Run workflow로만 돈다. 포털 파일이 지난번과 같으면 바로 끝난다.
+# 매일 아침(한국 시간 07:13) 포털에 새 달 파일이 올라왔는지 보고, 있으면 집계한다 — 국민연금 파일은 한 달에 한 번
+# 공개되므로 결과적으로 월 1회 갱신이며, 공개 후 하루 안에 반영된다. 포털 파일이 지난번과 같으면 바로 끝난다.
+# 대시보드의 「최신 자료 확인」 버튼(프록시 growthRefresh, 토큰이 있을 때)이나 GitHub 화면의 Run workflow로도 돈다.
 on:
+  schedule:
+    - cron: '13 22 * * *'
   workflow_dispatch:
     inputs:
       force:
