@@ -1,0 +1,50 @@
+name: Diagnose wastewater datasets
+
+# 폐수배출시설 공공데이터를 찾는다 — ① 포털 목록 검색 ② 행정안전부 인허가 API 이름 후보 호출. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      keyword: { description: '포털 검색어', required: true, type: string, default: '폐수배출시설' }
+      name: { description: '시험 조회 상호', required: true, type: string, default: '한국콜마' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          KW: ${{ inputs.keyword }}
+          NM: ${{ inputs.name }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3000));
+          const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36' };
+          // ① 포털 검색 — 데이터셋 이름·번호·제공기관
+          for (const dType of ['API', 'FILE']) {
+            try {
+              const u = `https://www.data.go.kr/tcs/dss/selectDataSetList.do?dType=${dType}&keyword=${encodeURIComponent(process.env.KW)}&perPage=40`;
+              const h = await (await fetch(u, { headers: UA })).text();
+              const items = [...h.matchAll(/<span class="title">\s*([\s\S]*?)<\/span>[\s\S]{0,1500}?\/data\/(\d+)\/(openapi|fileData)\.do/g)].map((m) => `${m[2]} ${m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()}`);
+              n(`[포털 ${dType}] ${items.length}건 :: ${items.slice(0, 30).join(' | ')}`);
+            } catch (e) { n(`[포털 ${dType}] 실패 ${e.message}`); }
+          }
+          // ② 행정안전부 인허가 API 이름 후보(대기 = air_pollution_facility_installation)
+          const cands = ['wastewater_discharge_facility', 'wastewater_discharge_facility_installation', 'water_pollution_facility_installation',
+            'water_pollutant_discharge_facility', 'waste_water_discharge_facility', 'wastewater_discharge_facilities', 'water_pollution_facility',
+            'wastewater_facility_installation', 'air_pollution_facility_installation'];
+          const key = process.env.KEY;
+          for (const c of cands) {
+            try {
+              const u = `https://apis.data.go.kr/1741000/${c}/info?serviceKey=${encodeURIComponent(key)}&returnType=json&pageNo=1&numOfRows=3&cond[BPLC_NM::LIKE]=${encodeURIComponent(process.env.NM)}`;
+              const r = await fetch(u); const t = await r.text();
+              n(`[API ${c}] ${r.status} :: ${t.slice(0, 900)}`);
+            } catch (e) { n(`[API ${c}] 실패 ${e.message}`); }
+          }
+          JS
+          node d.mjs
