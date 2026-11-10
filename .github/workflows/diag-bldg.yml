@@ -39,16 +39,18 @@ jobs:
             n(`${tag}: ${fs.length ? `${fs.length}건` : JSON.stringify(j).slice(0, 500)}`);
             fs.slice(0, 12).forEach((f, i) => n(`${tag} #${i} geom=${f.geometry && f.geometry.type} props=${JSON.stringify(f.properties).slice(0, 700)}`));
           };
-          for (const fn of ['getBldgisSpceWFS', 'getBuildingUseWFS']) {
-            for (const typename of ['dt_d162', 'dt_d010', 'dt_d163', 'dt_d011']) {
-              for (const [lab, bbox, srs] of [['yx', `${y0},${x0},${y1},${x1}`, 'EPSG:4326'], ['xy', `${x0},${y0},${x1},${y1}`, 'EPSG:4326'], ['xy-srs', `${x0},${y0},${x1},${y1},EPSG:4326`, 'EPSG:4326']]) {
-                const j = await vw({ op: 'bldg', fn, typename, bbox, srsName: srs, maxFeatures: '50' });
-                show(`${fn}/${typename}/${lab}`, j);
-                if (j && j.features && j.features.length) break;
-              }
-            }
-            const j = await vw({ op: 'bldg', fn, pnu: pf.properties.pnu, maxFeatures: '50' });
-            show(`${fn}/pnu`, j);
+          const q = (bb, mf) => vw({ op: 'bldg', fn: 'getBldgisSpceWFS', typename: 'dt_d010', bbox: bb, srsName: 'EPSG:4326', maxFeatures: mf });
+          for (const mf of ['10', '100', '1000']) { const j = await q(`${y0},${x0},${y1},${x1}`, mf); n(`maxFeatures=${mf}: ${(j.features || []).length}건 total=${j.totalFeatures} matched=${j.numberMatched}`); }
+          // 4x4 타일로 나눠 모은다
+          const all = new Map(); const N = 4;
+          for (let a = 0; a < N; a++) for (let b = 0; b < N; b++) {
+            const ya = y0 + (y1 - y0) * a / N, yb = y0 + (y1 - y0) * (a + 1) / N, xa = x0 + (x1 - x0) * b / N, xb = x0 + (x1 - x0) * (b + 1) / N;
+            const j = await q(`${ya},${xa},${yb},${xb}`, '100');
+            (j.features || []).forEach((f) => all.set(f.properties.gis_idntfc_no + f.properties.src_objectid, f));
           }
+          const mine = [...all.values()].filter((f) => f.properties.pnu === pf.properties.pnu);
+          n(`타일 합계 ${all.size}건 · 필지 732: ${mine.length}동`);
+          const py = (m) => Math.round(m / 3.305785);
+          mine.forEach((f) => { const p = f.properties; const r = f.geometry.coordinates[0][0]; n(`  ${p.dong_nm || p.buld_nm || '-'} 용도${p.buld_prpos_code} 건축 ${py(p.ar)}평 연 ${py(p.totar)}평 지상${p.ground_floor_co} 높이${p.hg} 꼭짓점${r.length} 첫점${JSON.stringify(r[0])}`); });
           JS
           node d.mjs
