@@ -327,6 +327,81 @@ function sgTruckExtra(report) {
 // ── 3D 규모 비교 ── 브이월드 건물 윤곽을 지상 층수만큼 세워 한국콜마 세종 건물과 같은 축척으로 나란히(또는 겹쳐) 본다.
 // 라이브러리 없이 캔버스에 직교 투영으로 그린다. 끌면 돌아가고, 위아래로 끌면 내려다보는 각도가 바뀐다.
 const SG_FLOOR_M = 4.5;          // 공장 한 층 높이 가정
+const SG_Z0 = 1.3;               // 처음 보이는 배율 — 전체를 딱 맞추면 건물이 작아 1.3배로 연다(+− 로 조정)
+// 지도(브이월드)에 없는 동을 건축물대장으로 채운다 — 한국콜마 세종 관정리 732는 도로명주소 건물 윤곽(LT_C_SPBD)에
+// 3동만 있고, GIS건물통합정보(WFS)에는 이 필지 건물이 아예 없다(2026-11 확인). 대장에는 동마다 건축면적·층수가 있으므로
+// 지도에 그려진 동과 면적으로 짝을 짓고, 짝이 없는 동은 부지의 빈 땅에 같은 면적·층수의 상자로 세운다(위치는 추정 → 점선).
+function sgFillFromRegister(g, reg) {
+  if (!g || !g.parcel || !reg || !Array.isArray(reg.bldgs)) return [];
+  const list = reg.bldgs.filter((b) => b.arch >= 20).map((b) => ({ ...b, used: false })).sort((a, b) => b.arch - a.arch);
+  // ① 지도에 있는 동과 짝 — 면적 차이 35% 이내, 층수가 같으면 우선
+  g.bldgs.forEach((d) => {
+    const a = sgArea(d.pts);
+    let best = null, bs = Infinity;
+    list.forEach((r) => {
+      if (r.used) return;
+      const diff = Math.abs(r.arch - a) / Math.max(r.arch, a);
+      if (diff > 0.35) return;
+      const sc = diff + (r.floors && d.floors && r.floors !== d.floors ? 0.15 : 0);
+      if (sc < bs) { bs = sc; best = r; }
+    });
+    if (best) best.used = true;
+  });
+  const miss = list.filter((r) => !r.used);
+  if (!miss.length) return [];
+  // ② 부지를 가장 큰 동의 방향으로 돌려 격자를 만들고, 건물(+여유 4m)이 없는 칸에 직사각형을 넣는다
+  const big = g.bldgs.slice().sort((a, b) => sgArea(b.pts) - sgArea(a.pts))[0];
+  let th = 0;
+  if (big) { let L = 0; big.pts.forEach((p, i) => { const q = big.pts[(i + 1) % big.pts.length]; const l = Math.hypot(q[0] - p[0], q[1] - p[1]); if (l > L) { L = l; th = Math.atan2(q[1] - p[1], q[0] - p[0]); } }); }
+  const c = Math.cos(-th), sn = Math.sin(-th), rot = ([x, y]) => [x * c - y * sn, x * sn + y * c];
+  const back = ([x, y]) => [x * Math.cos(th) - y * Math.sin(th), x * Math.sin(th) + y * Math.cos(th)];
+  const P = g.parcel.map(rot), Bs = g.bldgs.map((b) => b.pts.map(rot));
+  const xs = P.map((p) => p[0]), ys = P.map((p) => p[1]);
+  const x0 = Math.min(...xs), y0 = Math.min(...ys), W = Math.max(...xs) - x0, H = Math.max(...ys) - y0;
+  const cell = Math.max(1, Math.max(W, H) / 160), nx = Math.ceil(W / cell) + 1, ny = Math.ceil(H / cell) + 1;
+  const inside = (pt, poly) => { let ins = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi) ins = !ins; } return ins; };
+  const occ = new Uint8Array(nx * ny);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const pt = [x0 + (i + 0.5) * cell, y0 + (j + 0.5) * cell];
+    occ[j * nx + i] = !inside(pt, P) || Bs.some((b) => inside(pt, b)) ? 1 : 0;
+  }
+  const grow = (k) => { // 건물 둘레 여유(통로) — 막힌 칸을 k칸 넓힌다
+    const o2 = occ.slice();
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (occ[j * nx + i]) for (let dj = -k; dj <= k; dj++) for (let di = -k; di <= k; di++) { const a = i + di, b = j + dj; if (a >= 0 && b >= 0 && a < nx && b < ny) o2[b * nx + a] = 1; }
+    return o2;
+  };
+  let free = grow(Math.max(1, Math.round(4 / cell)));
+  const cen = Bs.length ? Bs.flat().reduce((s2, p) => [s2[0] + p[0], s2[1] + p[1]], [0, 0]).map((v) => v / Bs.flat().length) : [x0 + W / 2, y0 + H / 2];
+  const out = [];
+  miss.forEach((r) => {
+    // 미리 합(누적합)으로 직사각형 안에 막힌 칸이 있는지 바로 센다
+    const S = new Int32Array((nx + 1) * (ny + 1));
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) S[(j + 1) * (nx + 1) + i + 1] = free[j * nx + i] + S[j * (nx + 1) + i + 1] + S[(j + 1) * (nx + 1) + i] - S[j * (nx + 1) + i];
+    const blocked = (i, j, w, h) => S[(j + h) * (nx + 1) + i + w] - S[j * (nx + 1) + i + w] - S[(j + h) * (nx + 1) + i] + S[j * (nx + 1) + i];
+    let hit = null;
+    for (const [asp, k] of [[1.6, 1], [1.6, 0], [1, 1], [2.4, 1], [1, 0.85], [1.6, 0.7]]) {
+      for (const swap of [false, true]) {
+        const A = r.arch * k * k, wm = Math.sqrt(A * asp), hm = A / wm;
+        const w = Math.max(1, Math.round((swap ? hm : wm) / cell)), h = Math.max(1, Math.round((swap ? wm : hm) / cell));
+        if (w >= nx || h >= ny) continue;
+        let bd = Infinity;
+        for (let j = 0; j + h <= ny; j++) for (let i = 0; i + w <= nx; i++) {
+          if (blocked(i, j, w, h)) continue;
+          const d = Math.hypot(x0 + (i + w / 2) * cell - cen[0], y0 + (j + h / 2) * cell - cen[1]);
+          if (d < bd) { bd = d; hit = { i, j, w, h, k }; }
+        }
+        if (hit) break;
+      }
+      if (hit) break;
+    }
+    if (!hit) return;
+    for (let j = hit.j; j < hit.j + hit.h; j++) for (let i = hit.i; i < hit.i + hit.w; i++) occ[j * nx + i] = 1;
+    free = grow(Math.max(1, Math.round(4 / cell)));
+    const ax = x0 + hit.i * cell, ay = y0 + hit.j * cell, bx = ax + hit.w * cell, by = ay + hit.h * cell;
+    out.push({ pts: [[ax, ay], [bx, ay], [bx, by], [ax, by]].map(back), floors: r.floors || 1, est: true, name: r.dong || r.name || '', purpose: r.purpose, arch: r.arch, shrunk: hit.k < 1 });
+  });
+  return out;
+}
 function sg3dData(report, B) {
   const G = report.meta && report.meta.geo;
   if (!G || !G.site || !G.ref || !(G.ref.bldgs || []).length) return null;
@@ -335,6 +410,11 @@ function sg3dData(report, B) {
   const ro = sgCentroid(R.parcel && R.parcel.ring ? R.parcel.ring : R.bldgs.flatMap((b) => b.ring)), rM = sgM(ro);
   const ref = { o: ro, parcel: R.parcel && R.parcel.ring ? open(R.parcel.ring).map(rM) : null,
     bldgs: R.bldgs.map((b) => ({ pts: open(b.ring).map(rM), floors: b.floors || 1 })) };
+  // 지도에 없는 동은 건축물대장 면적·층수로 채운다(위치 추정)
+  const regRef = typeof refBldCached === 'function' ? refBldCached() : null;
+  const est = sgFillFromRegister(ref, regRef);
+  ref.mapN = ref.bldgs.length; ref.estN = est.length;
+  ref.bldgs = ref.bldgs.concat(est);
   let mine;
   if (unit) {
     const a = unit.area && unit.area.excl;
@@ -364,10 +444,13 @@ function sg3dHtml(report, B) {
   // 그림은 지도에 있는 동으로 그리고, 바닥·연면적 비교와 '콜마 대비 %'는 대장 값으로 낸다(직육면체 비교와 같은 기준).
   const reg = typeof refBldCached === 'function' ? refBldCached() : null;
   const st = { ...D.stat };
-  const cov = reg && reg.arch ? D.stat.refFoot / reg.arch : null;
+  const cov = reg && reg.arch ? D.ref.bldgs.filter((b) => !b.est).reduce((a, b) => a + sgArea(b.pts), 0) / reg.arch : null;
   if (reg && reg.arch) { st.refFoot = reg.arch; st.refGfa = reg.tot || D.stat.refGfa; }
   if (!unit && B && B.arch) { st.myFoot = B.arch; st.myGfa = B.tot || D.stat.myGfa; }
-  const covNote = cov != null && cov < 0.8 ? `<p class="s3-cov">⚠ 지도에 그려진 한국콜마 건물은 ${D.ref.bldgs.length}동 ${sgPy(D.stat.refFoot)}평으로 건축물대장 건축면적(${sgPy(reg.arch)}평)의 ${Math.round(cov * 100)}%입니다. 그림은 지도에 있는 동만, 숫자는 대장 기준입니다.</p>` : '';
+  const estB = D.ref.bldgs.filter((b) => b.est), mapFoot = D.ref.bldgs.filter((b) => !b.est).reduce((a, b) => a + sgArea(b.pts), 0);
+  const covNote = estB.length
+    ? `<p class="s3-cov">한국콜마 ${D.ref.bldgs.length}동 중 <b>${estB.length}동(${sgPy(estB.reduce((a, b) => a + (b.arch || sgArea(b.pts)), 0))}평)</b>은 지도 윤곽이 없어 건축물대장의 건축면적·층수로 세웠습니다 — <b>점선 상자는 위치·모양이 추정</b>이고 크기와 높이만 대장 값입니다.</p>`
+    : cov != null && cov < 0.8 ? `<p class="s3-cov">⚠ 지도에 그려진 한국콜마 건물은 ${D.ref.bldgs.length}동 ${sgPy(D.stat.refFoot)}평으로 건축물대장 건축면적(${sgPy(reg.arch)}평)의 ${Math.round(cov * 100)}%입니다. 그림은 지도에 있는 동만, 숫자는 대장 기준입니다.</p>` : '';
   const pct = (a, b) => (b ? `${Math.max(1, Math.round((a / b) * 100))}%` : '—');
   const bar = (lab, a, b, unitTxt) => {
     const mx = Math.max(a, b) || 1;
@@ -379,14 +462,14 @@ function sg3dHtml(report, B) {
     + `<div class="s3-zoom"><button type="button" class="nb-btn sm" data-s3="in" aria-label="확대">+</button><button type="button" class="nb-btn sm" data-s3="out" aria-label="축소">−</button></div>`
     + `<span class="s3-hint">끌어서 돌리기 · 위아래로 끌면 각도 · +− 확대</span></div>`
     + `<div class="s3-side"><p class="s3-head"><b>${esc(nm)}</b>의 바닥 면적은 한국콜마 세종의 <em>${pct(st.myFoot, st.refFoot)}</em>${unit ? ' (호실 전용)' : ''}</p>`
-    + `<div class="s3-legend"><span><i class="s3-sw m"></i>${esc(nm)}${unit ? ' 호실' : ` ${D.mine.bldgs.length}동`}</span><span><i class="s3-sw k"></i>한국콜마 세종 ${D.ref.bldgs.length}동</span></div>`
+    + `<div class="s3-legend"><span><i class="s3-sw m"></i>${esc(nm)}${unit ? ' 호실' : ` ${D.mine.bldgs.length}동`}</span><span><i class="s3-sw k"></i>한국콜마 세종 ${D.ref.bldgs.length}동${D.ref.estN ? ` <small>(점선 ${D.ref.estN}동 위치 추정)</small>` : ''}</span></div>`
     + bar('바닥 면적', st.myFoot, st.refFoot, (v) => `${sgPy(v)}평`)
     + bar(reg ? '연면적' : '추정 연면적', st.myGfa, st.refGfa, (v) => `${sgPy(v)}평`)
     + bar('최고 층수', st.myTop, st.refTop, (v) => `${v}층`)
     + covNote + '</div></div>';
-  const src = ['건물 모양·지상 층수: 브이월드 건물 윤곽(도로명주소 건물) — 도로명주소가 없는 동(부속 창고 등)은 지도에 없어 그림에서 빠질 수 있습니다',
+  const src = ['건물 모양·지상 층수: 브이월드 건물 윤곽(도로명주소 건물) — 도로명주소가 없는 동(부속 창고 등)은 지도에 없어, 한국콜마는 건축물대장의 동별 건축면적·층수로 빈 땅에 세워 채웠습니다(점선 = 위치 추정)',
     `바닥 면적·연면적 수치: ${reg ? '건축물대장(총괄표제부) 기준 — 직육면체 비교와 같은 값' : '브이월드 윤곽 기준(대장 기준값을 아직 받지 못함)'}`,
-    '한국콜마 기준: 세종 산단길 22-17(관정리 732) 필지 하나 — 세종 공장 전체가 아님', `높이는 층수 × ${SG_FLOOR_M}m로 가정했습니다`,
+    '한국콜마 기준: 세종 산단길 22-17(관정리 732) 필지의 모든 동(건축물대장 기준)', `높이는 층수 × ${SG_FLOOR_M}m로 가정했습니다`,
     unit ? '오피스형 건물 입주사라 건물 전체 대신 호실 전용면적만큼의 한 층짜리 상자로 그렸습니다' : '',
     D.mine.estF ? `브이월드에 층수가 없어 건축물대장 평균 층수(연면적 ÷ 건축면적 ≈ ${D.mine.estF}층)로 세웠습니다` : ''].filter(Boolean);
   return { html, src, D, badge: sgChip('info', `콜마 대비 ${pct(st.myFoot, st.refFoot)}`) };
@@ -443,7 +526,7 @@ function sg3dDraw(cv, D, st) {
   let off;
   if (over) {
     // 겹쳐 보기 — 업체 건물들의 가운데를 한국콜마에서 가장 큰 건물의 가운데에 포갠다
-    const big = D.ref.bldgs.slice().sort((a, b) => sgArea(b.pts) - sgArea(a.pts))[0];
+    const big = (D.ref.bldgs.filter((b) => !b.est).length ? D.ref.bldgs.filter((b) => !b.est) : D.ref.bldgs).slice().sort((a, b) => sgArea(b.pts) - sgArea(a.pts))[0];
     const kb = bb(big.pts), vb = bb(D.mine.bldgs.flatMap((b) => b.pts));
     off = [(kb[0] + kb[1]) / 2 - (vb[0] + vb[1]) / 2, (kb[2] + kb[3]) / 2 - (vb[2] + vb[3]) / 2];
   } else {
@@ -455,7 +538,7 @@ function sg3dDraw(cv, D, st) {
   const fx = (Math.min(...allX) + Math.max(...allX)) / 2, fy = (Math.min(...allY) + Math.max(...allY)) / 2;
   const Rxy = Math.max(...allX.map((x) => Math.abs(x - fx)), ...allY.map((y) => Math.abs(y - fy))) * 1.08 || 50;
   // 확대할수록 화면 가운데를 조회 업체 쪽으로 옮긴다 — 크게 볼 때 보고 싶은 건 업체 건물이다
-  const zm = st.zoom || 1, pull = zm > 1 ? Math.min(1, (zm - 1) * 1.2) : 0;
+  const zm = st.zoom || SG_Z0, pull = zm > SG_Z0 ? Math.min(1, (zm / SG_Z0 - 1) * 1.2) : 0;
   const cx0 = fx + ((mb[0] + mb[1]) / 2 + off[0] - fx) * pull, cy0 = fy + ((mb[2] + mb[3]) / 2 + off[1] - fy) * pull;
   const maxZ = Math.max(...[D.ref, D.mine].flatMap((g) => g.bldgs.map((b) => (b.floors || 1) * SG_FLOOR_M)));
   const ct = Math.cos(st.yaw), sn = Math.sin(st.yaw), cp = Math.cos(st.pitch), sp = Math.sin(st.pitch);
@@ -488,7 +571,7 @@ function sg3dDraw(cv, D, st) {
   const mk = ({ g, o, rgbc, a, key, sat }) => g.bldgs.map((b) => {
     const pts = b.pts.map(([x, y]) => [x + o[0], y + o[1]]), floors = b.floors || 1, h = floors * SG_FLOOR_M;
     const cen = pts.reduce((s, p) => [s[0] + p[0] / pts.length, s[1] + p[1] / pts.length], [0, 0]);
-    return { pts, h, floors, rgbc, a, key, sat, o, d: P([cen[0], cen[1], 0]).d, dash: key === 'm' && D.mine.unit };
+    return { pts, h, floors, rgbc, a: b.est ? a * 0.72 : a, key, sat, o, d: P([cen[0], cen[1], 0]).d, dash: (key === 'm' && D.mine.unit) || !!b.est };
   });
   const sortD = (arr) => arr.sort((p, q) => q.d - p.d);
   const bl = over ? [...sortD(mk(groups[0])), ...sortD(mk(groups[1]))] : sortD([...mk(groups[0]), ...mk(groups[1])]);
@@ -535,7 +618,7 @@ function sg3dDraw(cv, D, st) {
 }
 function sgBind3d(root, D, label) {
   const cv = root.querySelector('.s3-cv'); if (!cv || !D) return;
-  const st = { yaw: -0.18, pitch: 0.95, mode: 'side', label, zoom: 1 };
+  const st = { yaw: -0.18, pitch: 0.95, mode: 'side', label, zoom: SG_Z0 };
   const draw = () => sg3dDraw(cv, D, st);
   let drag = null;
   cv.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, yaw: st.yaw, pitch: st.pitch }; cv.setPointerCapture(e.pointerId); cv.classList.add('drag'); });
@@ -545,7 +628,7 @@ function sgBind3d(root, D, label) {
   root.querySelectorAll('[data-s3]').forEach((b) => b.addEventListener('click', () => {
     const k = b.dataset.s3;
     if (k === 'in' || k === 'out') st.zoom = Math.max(0.6, Math.min(6, st.zoom * (k === 'in' ? 1.4 : 1 / 1.4)));
-    else if (k === 'reset') { st.yaw = -0.18; st.pitch = 0.95; st.zoom = 1; } else { st.mode = k; root.querySelectorAll('[data-s3="side"],[data-s3="over"]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.s3 === k))); }
+    else if (k === 'reset') { st.yaw = -0.18; st.pitch = 0.95; st.zoom = SG_Z0; } else { st.mode = k; root.querySelectorAll('[data-s3="side"],[data-s3="over"]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.s3 === k))); }
     draw();
   }));
   if (window.ResizeObserver) new ResizeObserver(draw).observe(cv);

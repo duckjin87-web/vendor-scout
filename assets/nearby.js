@@ -1168,12 +1168,15 @@ function mountReportTabs(root, report, actions, areaEl) {
     // 탭을 바꿀 때만 새 내용이 살짝 떠오르며 나타난다(처음 그릴 때·같은 탭은 그대로)
     if (!first && prev !== tab) {
       const p = panes[tab];
-      p.classList.remove('enter'); void p.offsetWidth; p.classList.add('enter');
-      // 탭 줄이 상단에 붙은 채로 바꾸면 새 탭의 처음부터 보이게 올린다
-      if (bar.classList.contains('stuck')) {
-        const topH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--topbar-h')) || 0;
-        window.scrollTo({ top: window.scrollY + bar.getBoundingClientRect().top - topH, behavior: 'auto' });
-      }
+      // 새 탭은 늘 맨 위부터 — 앞 탭에서 내려가 있던 위치가 그대로 남으면 새 탭의 중간이 보인다.
+      // 탭 줄은 sticky라 붙어 있을 때 그 위치로는 원래 자리를 알 수 없다 → 붙지 않는 패널의 윗변으로 잰다.
+      // (enter 애니메이션의 translate가 섞이기 전에 잰다)
+      p.classList.remove('enter');
+      const topH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--topbar-h')) || 0;
+      const lim = topH + bar.offsetHeight;
+      const pt = p.getBoundingClientRect().top;
+      if (pt < lim) window.scrollTo({ top: Math.max(0, window.scrollY + pt - lim), behavior: 'auto' });
+      void p.offsetWidth; p.classList.add('enter');
     }
     first = false;
     if (tab === 'nearby') nbOpen(panes.nearby, report);

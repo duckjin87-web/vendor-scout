@@ -190,6 +190,27 @@ function handleNaver(url, env, kind) {
 }
 
 // 임의 페이지 텍스트 취득 — 홈페이지 대조·심층분석용. http(s)만, 400KB 상한(SPA 임베드 JSON 수용).
+// 홈페이지 이미지(OCR용) — 화장품 업체 홈페이지는 설비·인증·생산능력을 글자 대신 이미지로 올리는 곳이 많다.
+// 브라우저가 남의 도메인 이미지 픽셀을 읽을 수 없어(CORS) 여기서 받아 그대로 돌려준다. 이미지 형식·4MB까지만.
+async function handleImg(url) {
+  const target = url.searchParams.get('url');
+  if (!target || !/^https?:\/\//i.test(target)) return jsonRes({ error: 'url 파라미터(http/https) 필요' }, 400);
+  let host = '';
+  try { host = new URL(target).hostname; } catch { return jsonRes({ error: '잘못된 url' }, 400); }
+  if (/^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|::1$)/i.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) return jsonRes({ error: '내부 호스트 접근 불가' }, 400);
+  let up;
+  try {
+    up = await fetch(target, { redirect: 'follow', signal: AbortSignal.timeout(15000), headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'Accept': 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8', 'Referer': new URL(target).origin + '/' } });
+  } catch (e) { return jsonRes({ error: '이미지 호출 실패', detail: String(e && e.message || e) }, 502); }
+  const ct = (up.headers.get('content-type') || '').toLowerCase();
+  if (!up.ok) return jsonRes({ error: `이미지 HTTP ${up.status}` }, 502);
+  if (!/^image\/(png|jpe?g|gif|webp|bmp)/.test(ct)) return jsonRes({ error: '이미지 형식 아님', type: ct.slice(0, 40) }, 415);
+  const buf = await up.arrayBuffer();
+  if (buf.byteLength > 4 * 1024 * 1024) return jsonRes({ error: '이미지가 너무 큼(4MB 초과)' }, 413);
+  return new Response(buf, { status: 200, headers: { 'Content-Type': ct, 'Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*' } });
+}
 async function handleFetchPage(url) {
   const target = url.searchParams.get('url');
   if (!target || !/^https?:\/\//i.test(target)) return jsonRes({ error: 'url 파라미터(http/https) 필요' }, 400);
@@ -474,6 +495,7 @@ export default async function handler(req) {
     if (service === 'naverWeb')        return handleNaver(url, env, 'webkr');
     if (service === 'naverLocal')      return handleNaver(url, env, 'local');
     if (service === 'fetchPage')       return handleFetchPage(url);
+    if (service === 'img')             return handleImg(url);
     if (service === 'ntsStatus')       return handleNtsStatus(url, env);
     if (service === 'ntsValidate')     return handleNtsValidate(url, env);
     if (service === 'siteExtract')     return handleSiteExtract(url, env);

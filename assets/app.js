@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 238;
+const BUILD = 239;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -676,10 +676,11 @@ async function gatherSiteText(baseUrl, companyName, seedUrls) {
   }
   targets = targets.slice(0, 14);   // 회사소개 계열만 받고 설비·제품 페이지를 놓치던 문제
   const rawHtmls = [html];
+  const rawPages = [{ u: baseUrl, h: html }];   // 이미지 주소를 페이지 기준으로 풀기 위해(OCR)
   const subs = await Promise.all(targets.map((u) =>
     proxyOnlyGet('fetchPage', { url: u }).then((p) => ({ u, h: (p && p.text) || '' })).catch(() => null)));
   subs.forEach((s) => {
-    if (s && s.h) { const r = harvestFromHtml(s.h, s.u); if (r.text) { texts.push(r.text); pages.push(s.u); rawHtmls.push(s.h); } }
+    if (s && s.h) { const r = harvestFromHtml(s.h, s.u); rawPages.push(s); if (r.text) { texts.push(r.text); pages.push(s.u); rawHtmls.push(s.h); } }
   });
 
   const homeText = texts.join('\n');
@@ -702,6 +703,7 @@ async function gatherSiteText(baseUrl, companyName, seedUrls) {
     webText: webText.slice(0, 100000),        // 참고용(키워드 전용)
     pages, webFallback: !!webText, thin: first.bodyLen < 400,
     html: rawHtmls.join('\n').slice(0, 600000), // 설비 추정용 원본(이미지 태그 분석)
+    ocrCands: ocrCandidates(rawPages),          // 글자가 든 것으로 보이는 이미지(OCR 버튼용)
     resolvedUrl: baseUrl,
   };
 }
@@ -950,6 +952,133 @@ function imageAssets(html) {
   }
   return out;
 }
+// ═══ 이미지 글자 읽기(OCR) ═══
+// 화장품 OEM 홈페이지는 설비 목록·인증서·생산능력을 표 '그림'으로 올리는 곳이 많다(본문에는 한 줄도 없음).
+// 버튼을 누르면 후보 이미지를 프록시(service=img)로 받아 브라우저에서 Tesseract(한글+영문)로 읽고,
+// 읽은 글자에 본문과 같은 규칙(인증·설비 용어·생산능력 수치)을 다시 돌려 결과에 「이미지」 근거로 더한다.
+// 로고·아이콘·버튼·배경은 빼고, 설비·인증·소개 페이지의 큰 콘텐츠 이미지를 앞에 둔다.
+const OCR_SKIP = /(logo|icon|ico_|_ico|btn|button|arrow|sns|facebook|insta|youtube|blog|kakao|naver|top_|gnb|lnb|bg_|_bg|bullet|blank|spacer|loading|banner_s|quick|favicon|close|prev|next|more|search|menu|line_|dot|sprite|flag|map_)/i;
+const OCR_HOT = /(설비|장비|equip|facilit|시설|공장|factory|생산|product|capa|라인|line|인증|cert|gmp|iso|품질|quality|연혁|history|about|company|회사|소개|intro|organ|조직|특허|patent|award|수상|cleanroom|클린룸|process|공정|제조|manufact|r&d|연구|lab)/i;
+function ocrCandidates(pages) {
+  const out = [], seen = new Set();
+  (pages || []).forEach(({ u, h }, pi) => {
+    imageAssets(h || '').forEach((a) => {
+      if (!a.src || /^data:/i.test(a.src)) return;
+      let url; try { url = new URL(a.src, u).href; } catch { return; }
+      if (seen.has(url) || !/^https?:/i.test(url)) return;
+      const nm = `${a.file} ${a.alt}`;
+      if (/\.(svg|gif|ico)(\?|$)/i.test(url) || OCR_SKIP.test(a.file)) return;
+      seen.add(url);
+      // 점수 — 설비·인증 단서(파일명·alt·페이지 주소) > 하위 페이지 콘텐츠 이미지 > 첫 화면 이미지
+      const score = (OCR_HOT.test(nm) ? 4 : 0) + (OCR_HOT.test(u) ? 2 : 0) + (pi > 0 ? 1 : 0) + (a.alt && a.alt.length > 6 ? 1 : 0);
+      out.push({ url, file: (a.alt || a.file || '').slice(0, 60), page: u, score });
+    });
+  });
+  return out.sort((a, b) => b.score - a.score).slice(0, 24);
+}
+let _tessP = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (_tessP) return _tessP;
+  _tessP = new Promise((ok, no) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+    sc.onload = () => (window.Tesseract ? ok(window.Tesseract) : no(new Error('OCR 엔진을 불러오지 못했습니다')));
+    sc.onerror = () => { _tessP = null; no(new Error('OCR 엔진을 불러오지 못했습니다(네트워크)')); };
+    document.head.appendChild(sc);
+  });
+  return _tessP;
+}
+// 한글 OCR은 글자 사이에 빈칸을 끼우는 일이 잦다('클 린 룸') — 한 글자씩 떨어진 한글을 붙인다
+const ocrTidy = (t) => String(t || '').replace(/(?<=[가-힣]) (?=[가-힣](?:\s|$))/g, '').replace(/[|_~`]+/g, ' ').replace(/[ \t]{2,}/g, ' ')
+  .split('\n').map((x) => x.trim()).filter((x) => x.replace(/[^가-힣A-Za-z0-9]/g, '').length >= 2).join('\n');
+// cands: ocrCandidates 결과, onStep(i, n, msg)
+async function runSiteOcr(cands, onStep, max = 10) {
+  const T = await loadTesseract();
+  onStep(0, 0, '한글 인식 모델을 받는 중… (처음 한 번 약 10MB)');
+  const worker = await T.createWorker(['kor', 'eng'], 1, { logger: () => {} });
+  const out = []; let tried = 0;
+  try {
+    for (const c of cands) {
+      if (tried >= max) break;
+      let blob;
+      try {
+        const r = await fetch(buildProxyUrl({ service: 'img', url: c.url }), { signal: AbortSignal.timeout(20000) });
+        if (!r.ok || !/^image\//.test(r.headers.get('content-type') || '')) continue;
+        blob = await r.blob();
+      } catch { continue; }
+      // 아이콘·장식(작은 그림)은 건너뛴다 — 글자가 든 콘텐츠 이미지는 대개 가로 300px 이상
+      let bm = null; try { bm = await createImageBitmap(blob); } catch { continue; }
+      if (bm.width < 280 || bm.height < 120 || blob.size < 9000) { bm.close && bm.close(); continue; }
+      bm.close && bm.close();
+      tried++;
+      onStep(tried, Math.min(max, cands.length), `이미지 ${tried}장째 읽는 중 — ${c.file || c.url.split('/').pop()}`);
+      try {
+        const { data } = await worker.recognize(blob);
+        const lines = (data.lines || []).filter((l) => (l.confidence || 0) >= 55).map((l) => l.text).join('\n');
+        const text = ocrTidy(lines || '');
+        out.push({ url: c.url, page: c.page, file: c.file || c.url.split('/').pop(), conf: Math.round(data.confidence || 0), text: text.slice(0, 4000) });
+      } catch { /* 이 이미지만 건너뜀 */ }
+    }
+  } finally { try { await worker.terminate(); } catch { /* 무시 */ } }
+  return out;
+}
+// 읽은 글자를 본문과 같은 규칙으로 다시 훑어 심층분석 결과(state.data.tabs)에 「이미지」 근거로 더한다
+function mergeOcrIntoDeep(state, imgs) {
+  const withText = imgs.filter((x) => x.text && x.text.replace(/\s/g, '').length >= 8);
+  const d = state.data || (state.data = { company_name: null });
+  const tabs = d.tabs || (d.tabs = {});
+  const found = { cert: 0, equip: 0, capa: 0 };
+  const whereOf = (re) => { const hit = withText.find((x) => re.test(x.text)); return hit ? hit.file : '이미지'; };
+  const all = withText.map((x) => x.text).join('\n');
+  // 인증
+  const have = new Set((tabs.cert || []).map((c) => c.label));
+  CERT_PATTERNS.forEach((c) => {
+    if (have.has(c.label) || !c.re.test(all)) return;
+    const ev = pickSentences(all, c.re, { cap: 1 })[0] || null;
+    (tabs.cert || (tabs.cert = [])).push({ label: c.label, grp: c.grp, evidence: `[이미지 글자 · ${whereOf(c.re)}] ${ev ? ev.slice(0, 100) : ''}`, ocr: true, ...certOwnership(ev) });
+    found.cert++;
+  });
+  // 설비·인증 용어
+  const mergeTerms = (key, lex) => {
+    extractLexicon(all, lex).forEach((g) => {
+      const list = tabs[key] || (tabs[key] = []);
+      const grp = list.find((x) => x.grp === g.grp) || (list.push({ grp: g.grp, terms: [] }), list[list.length - 1]);
+      const low = new Set(grp.terms.map((t) => t.toLowerCase().replace(/\s/g, '')));
+      g.terms.forEach((t) => { const k = t.toLowerCase().replace(/\s/g, ''); if (!low.has(k)) { grp.terms.push(`${t} (이미지)`); low.add(k); if (key === 'equipTerms') found.equip++; } });
+    });
+  };
+  mergeTerms('equipTerms', EQUIP_LEX);
+  mergeTerms('certTerms', CERT_LEX);
+  // 생산능력 수치
+  const capaSeen = new Set((tabs.capa || []).map((c) => `${c.kind}|${c.value}`));
+  withText.forEach((x) => extractCapa(x.text).forEach((c) => {
+    const k = `${c.kind}|${c.value}`; if (capaSeen.has(k)) return; capaSeen.add(k);
+    (tabs.capa || (tabs.capa = [])).push({ ...c, context: `[이미지 · ${x.file}] ${c.context}`, ocr: true });
+    found.capa++;
+  }));
+  state.ocr = { at: Date.now(), tried: imgs.length, read: withText.length, found,
+    imgs: imgs.map((x) => ({ url: x.url, page: x.page, file: x.file, conf: x.conf, text: (x.text || '').slice(0, 1200) })) };
+  if (state.err && (found.cert || found.equip || found.capa)) state.err = null;
+  return state;
+}
+function ocrBlockHtml(state) {
+  const c = state.ocrCands || [];
+  const O = state.ocr;
+  if (state.ocrBusy) return `<div class="sd-ocr busy"><b>이미지 글자 읽기</b><span class="sd-ocr-msg">${esc(state.ocrBusy)}</span><i class="sd-ocr-bar"><i style="width:${state.ocrPct || 4}%"></i></i></div>`;
+  if (O) {
+    const f = O.found || {};
+    const sum = [f.cert ? `인증 ${f.cert}` : '', f.equip ? `설비 용어 ${f.equip}` : '', f.capa ? `생산능력 수치 ${f.capa}` : ''].filter(Boolean).join(' · ');
+    return `<div class="sd-ocr done"><b>이미지 글자 읽기</b><span>${O.tried}장 읽음 · 글자 있는 이미지 ${O.read}장${sum ? ` → 새로 찾은 것: <em>${esc(sum)}</em>` : ' → 새로 더할 내용 없음'}</span>`
+      + (O.imgs.some((x) => x.text) ? `<details class="sd-ocr-raw"><summary>읽은 원문 보기</summary>${O.imgs.filter((x) => x.text).map((x) => `<div class="sd-ocr-it"><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.file)}</a><small>인식 신뢰도 ${x.conf}%</small><pre>${esc(x.text)}</pre></div>`).join('')}</details>` : '')
+      + '<small class="sd-mini">글자 인식은 그림 품질에 따라 틀릴 수 있습니다 — 「이미지」 표시가 붙은 항목은 원본 그림으로 확인하세요.</small></div>';
+  }
+  if (!c.length) return '';
+  return `<div class="sd-ocr"><b>이미지 글자 읽기</b><span>홈페이지 이미지 ${c.length}장 중 설비·인증·소개 그림을 골라 글자를 읽습니다 (최대 10장 · 30초~1분)</span>`
+    + '<button type="button" class="nb-btn sm dark sd-ocr-run">이미지 글자 읽기</button>'
+    + (state.ocrErr ? `<small class="sd-ocr-err">${esc(state.ocrErr)}</small>` : '') + '</div>';
+}
+
 // 설비 추정 — {label, confidence, basis, evidence}
 function inferEquipment(html, text) {
   const assets = imageAssets(html || '');
@@ -1000,7 +1129,7 @@ async function siteDeepHeuristic(name, hpUrl, seeds) {
   }
   if (!baseUrl) return { data: null, source: 'heuristic', reason: '홈페이지 미확보 — 아래에 주소를 직접 입력하면 분석합니다' };
   const g = await gatherSiteText(baseUrl, name, seedList);
-  if (!g || !g.text) return { data: null, source: 'heuristic', reason: '페이지를 열 수 없음(주소 오류·접속 차단) — 다른 주소로 다시 시도해 보세요', base: baseUrl };
+  if (!g || (!g.text && !(g.ocrCands || []).length)) return { data: null, source: 'heuristic', reason: '페이지를 열 수 없음(주소 오류·접속 차단) — 다른 주소로 다시 시도해 보세요', base: baseUrl };
   const T = g.text;
   const arrOrNull = (a) => (a && a.length ? a : null);
   const business_type = arrOrNull(['OEM', 'ODM', 'OGM', 'OBM'].filter((k) => new RegExp(`\\b${k}\\b`, 'i').test(T)));
@@ -1079,7 +1208,7 @@ async function siteDeepHeuristic(name, hpUrl, seeds) {
   };
   const any = Object.entries(data).some(([k, v]) => k !== 'company_name' && v != null && (!Array.isArray(v) || v.length));
   return {
-    data: any ? data : null, source: 'heuristic', pages: g.pages, base: baseUrl,
+    data: any ? data : null, source: 'heuristic', pages: g.pages, base: baseUrl, ocrCands: g.ocrCands || [],
     harvest: { webFallback: !!g.webFallback, thin: !!g.thin, chars: g.text.length },
     reason: any ? null : '페이지에서 의미 있는 텍스트를 찾지 못했습니다(이미지 전용 사이트 가능)',
   };
@@ -4185,10 +4314,12 @@ function productLineBlock(report) {
   }).join('');
   const extra = [R.fct ? `공장등록 생산품 원문: ${R.fct}` : '', R.forms.length ? `기능성 신고 제형: ${R.forms.join(', ')}` : ''].filter(Boolean);
   b.appendChild(el('div', 'pl-body', `<div class="pl-chips">${R.list.map((c) => `<span class="pl-chip ${PL_TIER[c.tier][1]}">${esc(c.name)}</span>`).join('')}</div>`
+    // 근거 행·원문·설명은 기본 접힘 — 칩만으로 제품군은 읽히고, 근거가 궁금할 때 연다
+    + `<details class="pl-more"><summary>근거 상세 보기<em>${R.list.length}개 제품군 · 출처별 근거</em></summary>`
     + `<div class="pl-rows">${rows}</div>`
     + (extra.length ? `<p class="pl-raw">${extra.map(esc).join('<br>')}</p>` : '')
     + '<p class="pl-foot"><b>실제 생산</b> 공장등록 생산품·제조원으로 올라간 보고품목 · <b>신고·판매</b> 이 업체 이름이 붙은 기능성 보고·회수 품목(책임판매로 판 것일 수 있음) · <b>추정</b> 채용공고·홈페이지 문구. '
-    + `일반 화장품은 품목 신고 의무가 없어 공식 목록이 없습니다 — 주력 제품과 라인별 생산 품목은 방문 때 확인하세요.${R.hasDeep ? '' : ' 홈페이지 심층분석이 끝나면 그 제품 분류도 추정 근거로 더합니다.'}</p>`));
+    + `일반 화장품은 품목 신고 의무가 없어 공식 목록이 없습니다 — 주력 제품과 라인별 생산 품목은 방문 때 확인하세요.${R.hasDeep ? '' : ' 홈페이지 심층분석이 끝나면 그 제품 분류도 추정 근거로 더합니다.'}</p></details>`));
   return b;
 }
 function refreshProductLines(report) {
@@ -5175,8 +5306,9 @@ async function siteDeepAnalyze(name, hpUrl, seeds) {
   const data = mergeDeep(llm, heur && heur.data ? heur.data : null);
   const source = llm ? (heur && heur.data ? 'ai+kw' : 'ai') : 'kw';
   const base = (heur && heur.base) || hpUrl || null;
-  if (!data) return { source, base, err: (heur && heur.reason) || llmErr || '추출 결과 없음', keyless: !llm };
-  return { data, source, base, pages: heur && heur.pages, harvest: heur && heur.harvest };
+  const ocrCands = (heur && heur.ocrCands) || [];
+  if (!data) return { source, base, err: (heur && heur.reason) || llmErr || '추출 결과 없음', keyless: !llm, ocrCands };
+  return { data, source, base, pages: heur && heur.pages, harvest: heur && heur.harvest, ocrCands };
 }
 const SITE_DEEP_FIELDS = [
   { key: 'keywords', label: '추출 키워드', kind: 'chips' },
@@ -5229,11 +5361,11 @@ function renderSiteDeepInto(box, state) {
   const srcTag = state.source ? `<b class="sd-tag">${esc(SD_SRC_TAG[state.source] || state.source)}</b>` : '';
   if (state.err && !state.data) {
     box.innerHTML = `<h4>홈페이지 심층분석 ${srcTag}</h4>` +
-      `<div class="sd-none">${esc(state.err)}</div>` + sdManualRow(state.base);
+      `<div class="sd-none">${esc(state.err)}</div>` + ocrBlockHtml(state) + sdManualRow(state.base);
     return;
   }
   const d = state.data;
-  if (!d) { box.innerHTML = `<h4>홈페이지 심층분석 ${srcTag}</h4><div class="sd-none">추출 결과 없음</div>` + sdManualRow(state.base); return; }
+  if (!d) { box.innerHTML = `<h4>홈페이지 심층분석 ${srcTag}</h4><div class="sd-none">추출 결과 없음</div>` + ocrBlockHtml(state) + sdManualRow(state.base); return; }
   const rows = SITE_DEEP_FIELDS
     .map((f) => ({ f, has: !(d[f.key] == null || (Array.isArray(d[f.key]) && !d[f.key].length) || d[f.key] === '') }))
     .filter((r) => r.has);
@@ -5387,6 +5519,7 @@ function renderSiteDeepInto(box, state) {
     if (state.base) html += `<div class="sd-foot">출처: <a href="${esc(state.base)}" target="_blank" rel="noopener">${esc(domainOf(state.base))}</a>` +
       `${state.pages && state.pages.length > 1 ? ` 외 ${state.pages.length - 1}개 페이지` : ''}${state.source === 'kw' ? ' · 키워드 자동추출' : ''}</div>`;
   }
+  html += ocrBlockHtml(state);
   html += sdManualRow(state.base);
   box.innerHTML = html;
 }
@@ -6017,7 +6150,6 @@ function renderVerdict(report) {
   let html = `<div class="vd-head">`
     + `<div class="vd-left"><button type="button" class="vd-badge vd-gz badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기">${gaugeSvg(g)}<b>${g === 'D' ? '불가' : esc(g)}</b><span>종합판정 ⓘ</span></button>`
     + `<div class="vd-verd">${esc(v.label)}<small class="vd-qwhy">${esc(Q.why)}</small>`
-    + (Q.toA && Q.toA.length && g !== 'D' ? `<small class="vd-toa">A까지 <b>${esc(Q.toA.slice(0, 3).join(' · '))}</b></small>` : '')
     + `</div></div>`
     + `<div class="vd-title"><div class="vd-h2row"><h2>${esc(m.vendor_name || '')}</h2>`
     + (m.live ? `<button type="button" class="sv-btn" data-act="save-firm" data-sv-key="${esc(svKey(m.vendor_name || ''))}" data-sv-kind="report">☆ 저장</button>` : '')
@@ -7556,9 +7688,6 @@ function render(report, opts = {}) {
     pop.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; set(false); if (b.dataset.x === 'csv') downloadCSV(report); else downloadJSON(); });
     document.addEventListener('click', (e) => { if (!dlBtn.contains(e.target)) set(false); });
   }
-  const fieldBtn = el('button', 'act', '현장 모드');
-  fieldBtn.title = '방문 당일 휴대폰으로 확인할 것만 보는 화면';
-  fieldBtn.addEventListener('click', () => openFieldMode(report));
   const cmpBtn = el('button', 'act', '업체 비교');
   cmpBtn.title = '조회한 적 있는 업체를 최대 4곳 나란히 비교합니다';
   cmpBtn.addEventListener('click', () => openCompare(report));
@@ -7600,7 +7729,6 @@ function render(report, opts = {}) {
     tmapBtn.addEventListener('click', () => { window.location.href = tmapUrl; });
     actions.appendChild(tmapBtn);
   }
-  if (m && m.live) actions.appendChild(fieldBtn);
   actions.appendChild(cmpBtn);
   actions.appendChild(dlBtn);
   actions.appendChild(printBtn);
@@ -7765,6 +7893,22 @@ function render(report, opts = {}) {
           sdBox.querySelectorAll('.sd-pane').forEach((p) => p.classList.toggle('on', p.dataset.pane === id));
         });
       });
+      // 이미지 글자 읽기(OCR) — 진행 상황을 같은 자리에서 보여 주고, 끝나면 결과에 「이미지」 근거로 합친다
+      const ocrBtn = sdBox.querySelector('.sd-ocr-run');
+      if (ocrBtn) ocrBtn.addEventListener('click', () => {
+        const st = report._siteDeep; if (!st || st.ocrBusy) return;
+        st.ocrErr = null; st.ocrBusy = 'OCR 엔진을 불러오는 중…'; st.ocrPct = 4; paintDeep(st);
+        Object.defineProperty(st, '_ocrLive', { configurable: true, writable: true, value: true });   // 저장본에는 남지 않는 표식
+        runSiteOcr(st.ocrCands || [], (i, n, msg) => { st.ocrBusy = msg; st.ocrPct = n ? Math.round(8 + (i / n) * 88) : 6; if (report._siteDeep === st) paintDeep(st); })
+          .then((imgs) => {
+            st.ocrBusy = null;
+            if (!imgs.length) { st.ocrErr = '글자를 읽을 만한 이미지를 받지 못했습니다(이미지 차단·작은 그림뿐)'; }
+            else { mergeOcrIntoDeep(st, imgs); reconcileDeep(st, report); }
+            if (report._siteDeep === st) paintDeep(st);
+            refreshProductLines(report); refreshVisitChecklist(report); saveLastReport(report);
+          })
+          .catch((e) => { st.ocrBusy = null; st.ocrErr = (e && e.message) || 'OCR 실패'; if (report._siteDeep === st) paintDeep(st); });
+      });
       const go = sdBox.querySelector('.sd-go');
       const inp = sdBox.querySelector('.sd-url');
       if (!go || !inp) return;
@@ -7830,6 +7974,8 @@ function render(report, opts = {}) {
     const sdBox = el('div', 'sdbox');
     blocks.appendChild(sdBox);
     if (report._siteDeep && (report._siteDeep.data || report._siteDeep.err)) {
+      // 읽는 도중 저장된 리포트를 다시 열면 '읽는 중'이 멈춘 채 남는다 — 다시 누를 수 있게 푼다
+      if (report._siteDeep.ocrBusy && !report._siteDeep._ocrLive) report._siteDeep.ocrBusy = null;
       paintDeep(report._siteDeep);
     } else {
       sdBox.innerHTML = '<h4>홈페이지 심층분석 <span>사이트 유형(정적·JS·이미지) 무관 키워드 추출 · API키 불필요</span></h4>';
