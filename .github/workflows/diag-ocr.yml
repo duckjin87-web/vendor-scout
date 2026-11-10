@@ -1,0 +1,63 @@
+name: Diagnose OCR + 3D reference fill
+
+# 배포된 사이트에서 ① 이미지 프록시(service=img) ② Tesseract 한글 인식 ③ 한국콜마 3D 대장 보충 동 수를 확인한다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      img: { description: '프록시로 받아 볼 이미지 주소', required: false, type: string, default: 'https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Check
+        env:
+          SITE: ${{ inputs.site }}
+          IMG: ${{ inputs.img }}
+        run: |
+          npm i -s playwright@1.56.1 2>&1 | tail -3
+          npx -y playwright@1.56.1 install --with-deps chromium 2>&1 | tail -2
+          cat > d.mjs <<'JS'
+          import { chromium } from 'playwright';
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3000));
+          const b = await chromium.launch();
+          const page = await b.newPage();
+          page.on('pageerror', (e) => n('pageerror ' + e.message));
+          await page.goto(process.env.SITE.replace(/\/$/, '') + '/');
+          await page.evaluate((s) => { localStorage.clear(); localStorage.setItem('vs_proxy', s.replace(/\/$/, '') + '/api/proxy'); }, process.env.SITE);
+          await page.reload(); await page.waitForTimeout(2500);
+          n('build ' + await page.evaluate(() => typeof BUILD !== 'undefined' ? BUILD : '?'));
+          // ① 이미지 프록시
+          n(await page.evaluate(async (u) => { const r = await fetch(buildProxyUrl({ service: 'img', url: u })); const bl = await r.blob(); return `img proxy ${r.status} ${r.headers.get('content-type')} ${bl.size}B`; }, process.env.IMG));
+          // ② Tesseract — 캔버스에 한글 설비표를 그려 읽힌다
+          const t0 = Date.now();
+          n(await page.evaluate(async () => {
+            const cv = document.createElement('canvas'); cv.width = 900; cv.height = 360;
+            const c = cv.getContext('2d'); c.fillStyle = '#fff'; c.fillRect(0, 0, 900, 360); c.fillStyle = '#111'; c.font = '34px sans-serif';
+            ['생산설비 현황', '진공유화기 3톤 2기', '튜브충전기 2대', '월 생산능력 300만개', 'CGMP 인증 획득'].forEach((t, i) => c.fillText(t, 40, 60 + i * 64));
+            const blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
+            const T = await loadTesseract();
+            const w = await T.createWorker(['kor', 'eng'], 1, { logger: () => {} });
+            const { data } = await w.recognize(blob); await w.terminate();
+            const st = { ocrCands: [] }; mergeOcrIntoDeep(st, [{ url: 'x', file: 'test', conf: Math.round(data.confidence), text: ocrTidy(data.text) }]);
+            return `OCR conf ${Math.round(data.confidence)} :: ${ocrTidy(data.text).replace(/\n/g, ' / ')} :: found ${JSON.stringify(st.ocr.found)}`;
+          }).catch((e) => 'OCR 실패 ' + e.message));
+          n(`OCR ${Math.round((Date.now() - t0) / 1000)}s`);
+          // ③ 한국콜마 3D 보충
+          n(await page.evaluate(async () => {
+            const reg = await refBldArea();
+            const pt = await sgGeocode(KOLMAR_ADDR); const ref = await sgSiteAt(pt);
+            const rep = { meta: { vendor_name: '테스트', geo: { site: ref, ref } } };
+            const D = sg3dData(rep, null);
+            const est = D.ref.bldgs.filter((x) => x.est);
+            return `대장 ${reg.bldgs.length}동 건축 ${Math.round(reg.arch / 3.305785)}평 · 지도 ${D.ref.mapN}동 · 보충 ${est.length}동 :: ${est.map((x) => `${x.name}/${Math.round(x.arch / 3.305785)}평/${x.floors}층${x.shrunk ? '(축소)' : ''}`).join(' · ')} :: 대장 동 ${reg.bldgs.map((x) => `${x.dong || x.name}/${Math.round(x.arch / 3.305785)}평/${x.floors}층`).join(' · ')}`;
+          }).catch((e) => '3D 실패 ' + e.message));
+          await b.close();
+          JS
+          node d.mjs
