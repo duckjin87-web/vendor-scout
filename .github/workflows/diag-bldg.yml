@@ -1,0 +1,54 @@
+name: Diagnose all-building footprints (NED WFS)
+
+# 한국콜마 세종 필지의 '모든 건물' 윤곽을 GIS건물통합정보 WFS로 받을 수 있는지 본다(LT_C_SPBD는 주소 붙은 동만). 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      addr: { description: '주소', required: true, type: string, default: '세종특별자치시 전의면 산단길 22-17' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          SITE: ${{ inputs.site }}
+          ADDR: ${{ inputs.addr }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 2400));
+          const vw = async (p) => { const r = await fetch(`${process.env.SITE}/api/proxy?service=vworld&${new URLSearchParams(p)}`, { signal: AbortSignal.timeout(28000) }); const t = await r.text(); try { return JSON.parse(t); } catch { return { raw: t.slice(0, 400), status: r.status }; } };
+          const feats = (j) => (j && j.response && j.response.result && j.response.result.featureCollection && j.response.result.featureCollection.features) || [];
+          const g = await vw({ op: 'address', request: 'getcoord', type: 'road', address: process.env.ADDR, refine: 'true', simple: 'false' });
+          const pt = g.response && g.response.result && g.response.result.point;
+          n(`좌표 ${pt ? `${pt.x},${pt.y}` : JSON.stringify(g).slice(0, 300)}`);
+          const pj = await vw({ op: 'data', data: 'LP_PA_CBND_BUBUN', geomFilter: `POINT(${pt.x} ${pt.y})`, size: '1', geometry: 'true', attribute: 'true', crs: 'EPSG:4326' });
+          const pf = feats(pj)[0];
+          const ring = pf.geometry.type === 'MultiPolygon' ? pf.geometry.coordinates[0][0] : pf.geometry.coordinates[0];
+          const xs = ring.map((p) => p[0]), ys = ring.map((p) => p[1]);
+          const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+          n(`필지 ${pf.properties.pnu} ${pf.properties.addr} bbox ${x0},${y0},${x1},${y1}`);
+          const show = (tag, j) => {
+            const fs = (j && j.features) || [];
+            n(`${tag}: ${fs.length ? `${fs.length}건` : JSON.stringify(j).slice(0, 500)}`);
+            fs.slice(0, 12).forEach((f, i) => n(`${tag} #${i} geom=${f.geometry && f.geometry.type} props=${JSON.stringify(f.properties).slice(0, 700)}`));
+          };
+          for (const fn of ['getBldgisSpceWFS', 'getBuildingUseWFS']) {
+            for (const typename of ['dt_d162', 'dt_d010', 'dt_d163', 'dt_d011']) {
+              for (const [lab, bbox, srs] of [['yx', `${y0},${x0},${y1},${x1}`, 'EPSG:4326'], ['xy', `${x0},${y0},${x1},${y1}`, 'EPSG:4326'], ['xy-srs', `${x0},${y0},${x1},${y1},EPSG:4326`, 'EPSG:4326']]) {
+                const j = await vw({ op: 'bldg', fn, typename, bbox, srsName: srs, maxFeatures: '50' });
+                show(`${fn}/${typename}/${lab}`, j);
+                if (j && j.features && j.features.length) break;
+              }
+            }
+            const j = await vw({ op: 'bldg', fn, pnu: pf.properties.pnu, maxFeatures: '50' });
+            show(`${fn}/pnu`, j);
+          }
+          JS
+          node d.mjs

@@ -387,17 +387,27 @@ const VW_OPS = {
   data: { url: 'https://api.vworld.kr/req/data', keys: ['data', 'geomFilter', 'attrFilter', 'size', 'page', 'columns', 'geometry', 'attribute', 'crs', 'buffer'], fixed: { service: 'data', request: 'GetFeature', format: 'json' } },
   address: { url: 'https://api.vworld.kr/req/address', keys: ['request', 'type', 'address', 'point', 'crs', 'refine', 'simple'], fixed: { service: 'address', format: 'json' } },
   landuse: { url: 'https://api.vworld.kr/ned/data/getLandUseAttr', keys: ['pnu', 'cnflcAt', 'numOfRows', 'pageNo'], fixed: { format: 'json' } },
+  // GIS건물통합정보(국토부 NED WFS) — 도로명주소가 없는 부속동·창고까지 필지의 모든 건물 윤곽(LT_C_SPBD는 주소 붙은 동만)
+  bldg: { url: 'https://api.vworld.kr/ned/wfs/', keys: ['typename', 'bbox', 'pnu', 'maxFeatures', 'srsName', 'resultType'], fixed: { output: 'application/json' } },
 };
+const VW_WFS = new Set(['getBuildingUseWFS', 'getBldgisSpceWFS', 'getBuildingAgeWFS']);
 async function handleVworld(url, env) {
   if (!env.VWORLD_KEY) return jsonRes({ error: 'VWORLD_KEY 미설정' }, 501);
   const op = VW_OPS[url.searchParams.get('op')];
-  if (!op) return jsonRes({ error: 'op는 data·address·landuse 중 하나' }, 400);
+  if (!op) return jsonRes({ error: 'op는 data·address·landuse·bldg 중 하나' }, 400);
   const q = new URLSearchParams(op.fixed);
   for (const k of op.keys) { const v = url.searchParams.get(k); if (v) q.set(k, v.slice(0, 600)); }
   if (url.searchParams.get('op') === 'data' && !VW_LAYERS.has(q.get('data') || '')) return jsonRes({ error: '허용하지 않은 레이어' }, 400);
+  let base = op.url;
+  if (url.searchParams.get('op') === 'bldg') {
+    const fn = url.searchParams.get('fn') || 'getBldgisSpceWFS';
+    if (!VW_WFS.has(fn)) return jsonRes({ error: '허용하지 않은 WFS' }, 400);
+    if (q.get('typename') && !/^dt_d\d{3}$/.test(q.get('typename'))) return jsonRes({ error: '허용하지 않은 typename' }, 400);
+    base += fn;
+  }
   q.set('key', env.VWORLD_KEY);
   q.set('domain', env.VWORLD_DOMAIN || 'https://vendor-scout-gilt.vercel.app');
-  return relay(`${op.url}?${q}`, '브이월드');
+  return relay(`${base}?${q}`, '브이월드');
 }
 
 // 브이월드 위성영상 타일(3D 규모 비교의 지붕·마당 질감) — 키는 서버에서만 붙이고 이미지만 돌려준다
