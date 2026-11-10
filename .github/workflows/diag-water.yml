@@ -25,19 +25,33 @@ jobs:
           cat > d.mjs <<'JS'
           const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3000));
           const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36' };
-          // 데이터셋 상세 — 제목·제공기관·요청주소·오퍼레이션·항목
-          for (const id of ['15057129', '15154930', '15154989', '15124967', '15113432', '15058140', '15108181']) {
+          const KEY = encodeURIComponent(process.env.KEY);
+          // 국립환경과학원 산업계(전국오염원조사)
+          for (const extra of ['', '&type=json', '&type=json&numOfRows=3&pageNo=1', '&_type=json&numOfRows=3&pageNo=1']) {
             try {
-              let h = await (await fetch(`https://www.data.go.kr/data/${id}/openapi.do`, { headers: UA })).text();
-              if (h.length < 3000 || /fileData/.test(h.slice(0, 600))) h = await (await fetch(`https://www.data.go.kr/data/${id}/fileData.do`, { headers: UA })).text();
-              const t = (h.match(/<title>([^<]+)/) || [])[1] || '';
-              const txt = h.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-              const urls = [...new Set([...h.matchAll(/https?:\/\/apis\.data\.go\.kr\/[\w/.-]+/g)].map((m) => m[0]))].slice(0, 8);
-              const pick = (k, len) => { const a = txt.indexOf(k); return a >= 0 ? txt.slice(a, a + len) : ''; };
-              n(`[${id}] ${t} :: 요청 ${urls.join(' ')} :: ${pick('제공기관', 60)} :: ${pick('키워드', 120)} :: ${pick('설명', 500)}`);
-              const ops = [...new Set([...h.matchAll(/(get[A-Z]\w{3,60})/g)].map((m) => m[1]))].slice(0, 12);
-              if (ops.length) n(`[${id}] 오퍼레이션 ${ops.join(', ')}`);
-            } catch (e) { n(`[${id}] 실패 ${e.message}`); }
+              const r = await fetch(`https://apis.data.go.kr/1480523/IndryService/getIndryInfo?serviceKey=${KEY}${extra}`);
+              n(`[IndryService ${extra || '기본'}] ${r.status} :: ${(await r.text()).slice(0, 1500)}`);
+            } catch (e) { n(`[IndryService] 실패 ${e.message}`); }
           }
+          try {
+            const h = await (await fetch('https://www.data.go.kr/data/15057129/openapi.do', { headers: UA })).text();
+            const txt = h.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+            const a = txt.indexOf('요청변수'); n(`[IndryService 요청변수] ${a >= 0 ? txt.slice(a, a + 1500) : '없음'}`);
+            const b = txt.indexOf('출력결과'); n(`[IndryService 출력결과] ${b >= 0 ? txt.slice(b, b + 2500) : '없음'}`);
+          } catch (e) { n('상세 실패 ' + e.message); }
+          // 행정안전부 자원환경 인허가 — 폐수배출시설 이름 후보
+          for (const c of ['water_pollution_source_other', 'water_pollution_source', 'water_pollution_source_facility', 'water_pollution_source_installation',
+            'wastewater_emission_facility', 'water_pollutant_emission_facility', 'wastewater_discharge_facility_info', 'water_pollution_discharge_facility', 'wastewater_facility']) {
+            try {
+              const r = await fetch(`https://apis.data.go.kr/1741000/${c}/info?serviceKey=${KEY}&returnType=json&pageNo=1&numOfRows=2&cond[BPLC_NM::LIKE]=${encodeURIComponent(process.env.NM)}`);
+              n(`[1741000/${c}] ${r.status} :: ${(await r.text()).slice(0, 700)}`);
+            } catch (e) { n(`[${c}] 실패 ${e.message}`); }
+          }
+          // 포털에서 행정안전부 '자원환경_' 데이터셋 목록
+          try {
+            const h = await (await fetch(`https://www.data.go.kr/tcs/dss/selectDataSetList.do?keyword=${encodeURIComponent('행정안전부 자원환경')}&perPage=60`, { headers: UA })).text();
+            const t = [...new Set([...h.matchAll(/title="(행정안전부_자원환경_[^"]+?)(?: 활용신청| 상세| 바로가기|")/g)].map((m) => m[1]))];
+            n(`[자원환경 목록] ${t.join(' | ')}`);
+          } catch (e) { n('목록 실패 ' + e.message); }
           JS
           node d.mjs
