@@ -56,7 +56,7 @@ jobs:
             const rep = { meta: { vendor_name: '테스트', geo: { site: ref, ref } } };
             const D = sg3dData(rep, null);
             const est = D.ref.bldgs.filter((x) => x.est);
-            return `대장 ${reg.bldgs.length}동 건축 ${Math.round(reg.arch / 3.305785)}평 · 지도 ${D.ref.mapN}동 · 보충 ${est.length}동 :: ${est.map((x) => `${x.name}/${Math.round(x.arch / 3.305785)}평/${x.floors}층${x.shrunk ? '(축소)' : ''}`).join(' · ')} :: 대장 동 ${reg.bldgs.map((x) => `${x.dong || x.name}/${Math.round(x.arch / 3.305785)}평/${x.floors}층`).join(' · ')}`;
+            return `main ${JSON.stringify(D.ref.mainOf)} · 대장 ${reg.bldgs.length}동 건축 ${Math.round(reg.arch / 3.305785)}평 · 지도 ${D.ref.mapN}동 · 보충 ${est.length}동 :: ${est.map((x) => `${x.name}/${Math.round(x.arch / 3.305785)}평/${x.floors}층${x.shrunk ? '(축소)' : ''}`).join(' · ')} :: 대장 동 ${reg.bldgs.map((x) => `${x.dong || x.name}/${Math.round(x.arch / 3.305785)}평/${x.floors}층`).join(' · ')}`;
           }).catch((e) => '3D 실패 ' + e.message));
           await b.close();
           JS

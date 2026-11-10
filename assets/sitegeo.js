@@ -334,8 +334,13 @@ const SG_Z0 = 1.3;               // 처음 보이는 배율 — 전체를 딱 �
 function sgFillFromRegister(g, reg) {
   if (!g || !g.parcel || !reg || !Array.isArray(reg.bldgs)) return [];
   const list = reg.bldgs.filter((b) => b.arch >= 20).map((b) => ({ ...b, used: false })).sort((a, b) => b.arch - a.arch);
+  // ⓪ 지도 윤곽을 다 더해도 대장의 가장 큰 동보다 작으면, 그 윤곽들은 큰 동 하나가 여러 조각으로 그려진 것이다
+  //    (한국콜마 세종: 지도 3조각 1,839평 = 대장 '공장동' 3,791평의 일부). 큰 동을 또 세우면 이중으로 센다.
+  const mapSum = g.bldgs.reduce((a, d) => a + sgArea(d.pts), 0);
+  if (list[0] && mapSum < list[0].arch * 1.2) { list[0].used = true; g.mainOf = { name: list[0].dong || list[0].name || '주 건물', arch: list[0].arch, cover: mapSum / list[0].arch }; }
   // ① 지도에 있는 동과 짝 — 면적 차이 35% 이내, 층수가 같으면 우선
   g.bldgs.forEach((d) => {
+    if (g.mainOf && sgArea(d.pts) > list[0].arch * 0.5) return;   // 큰 동의 조각
     const a = sgArea(d.pts);
     let best = null, bs = Infinity;
     list.forEach((r) => {
@@ -413,7 +418,7 @@ function sg3dData(report, B) {
   // 지도에 없는 동은 건축물대장 면적·층수로 채운다(위치 추정)
   const regRef = typeof refBldCached === 'function' ? refBldCached() : null;
   const est = sgFillFromRegister(ref, regRef);
-  ref.mapN = ref.bldgs.length; ref.estN = est.length;
+  ref.mapN = ref.bldgs.length; ref.estN = est.length; ref.mainOf = ref.mainOf || null;
   ref.bldgs = ref.bldgs.concat(est);
   let mine;
   if (unit) {
@@ -449,7 +454,9 @@ function sg3dHtml(report, B) {
   if (!unit && B && B.arch) { st.myFoot = B.arch; st.myGfa = B.tot || D.stat.myGfa; }
   const estB = D.ref.bldgs.filter((b) => b.est), mapFoot = D.ref.bldgs.filter((b) => !b.est).reduce((a, b) => a + sgArea(b.pts), 0);
   const covNote = estB.length
-    ? `<p class="s3-cov">한국콜마 ${D.ref.bldgs.length}동 중 <b>${estB.length}동(${sgPy(estB.reduce((a, b) => a + (b.arch || sgArea(b.pts)), 0))}평)</b>은 지도 윤곽이 없어 건축물대장의 건축면적·층수로 세웠습니다 — <b>점선 상자는 위치·모양이 추정</b>이고 크기와 높이만 대장 값입니다.</p>`
+    ? `<p class="s3-cov">한국콜마는 건축물대장 ${estB.length + (D.ref.mainOf ? 1 : D.ref.mapN)}동 기준으로 세웠습니다. `
+      + (D.ref.mainOf ? `지도 윤곽 ${D.ref.mapN}조각은 대장의 <b>${esc(D.ref.mainOf.name)}(${sgPy(D.ref.mainOf.arch)}평)</b> 한 동으로 보며, 지도에는 그 건축면적의 ${Math.round(D.ref.mainOf.cover * 100)}%만 그려져 있습니다. ` : '')
+      + `지도에 없는 <b>${estB.length}동(${estB.map((b) => esc(b.name || '부속동')).join('·')} · ${sgPy(estB.reduce((a, b) => a + (b.arch || sgArea(b.pts)), 0))}평)</b>은 대장의 건축면적·층수로 빈 땅에 세웠습니다 — <b>점선 상자는 위치·모양이 추정</b>입니다.</p>`
     : cov != null && cov < 0.8 ? `<p class="s3-cov">⚠ 지도에 그려진 한국콜마 건물은 ${D.ref.bldgs.length}동 ${sgPy(D.stat.refFoot)}평으로 건축물대장 건축면적(${sgPy(reg.arch)}평)의 ${Math.round(cov * 100)}%입니다. 그림은 지도에 있는 동만, 숫자는 대장 기준입니다.</p>` : '';
   const pct = (a, b) => (b ? `${Math.max(1, Math.round((a / b) * 100))}%` : '—');
   const bar = (lab, a, b, unitTxt) => {
