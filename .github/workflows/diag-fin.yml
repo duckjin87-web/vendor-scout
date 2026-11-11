@@ -1,0 +1,70 @@
+name: Diagnose finance sources for a non-listed maker
+
+# 재무가 비는 업체의 재무 경로를 하나씩 확인한다 — 금융위 기업정보(상호 변형)·bizwiki·DART 검색(본인·모회사)·금융위 재무. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      name: { description: '상호', required: true, type: string, default: '모나미코스메틱' }
+      bzno: { description: '사업자번호', required: true, type: string, default: '5558602822' }
+      parent: { description: '모회사(있으면)', required: false, type: string, default: '모나미' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Check
+        env:
+          SITE: ${{ inputs.site }}
+          NM: ${{ inputs.name }}
+          BZ: ${{ inputs.bzno }}
+          PARENT: ${{ inputs.parent }}
+        run: |
+          npm i -s playwright@1.56.1 2>&1 | tail -2
+          npx -y playwright@1.56.1 install --with-deps chromium 2>&1 | tail -1
+          cat > d.mjs <<'JS'
+          import { chromium } from 'playwright';
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3500));
+          const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36' };
+          // ── DART 공시 검색(키 없이 웹 목록) ──
+          const dart = async (crp, from = '20220101') => {
+            const body = new URLSearchParams({ currentPage: '1', maxResults: '100', maxLinks: '10', sort: 'date', series: 'desc', textCrpNm: crp, startDate: from, endDate: '20261231', finalReport: 'recent' });
+            const r = await fetch('https://dart.fss.or.kr/dsab007/detailSearch.ax', { method: 'POST', headers: { ...UA, 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest', Referer: 'https://dart.fss.or.kr/dsab007/main.do' }, body });
+            const h = await r.text();
+            const rows = [...h.matchAll(/<tr[\s\S]*?<\/tr>/g)].map((m) => m[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter((x) => /\d{4}\.\d{2}\.\d{2}/.test(x));
+            const rcp = [...h.matchAll(/rcpNo=(\d{14})/g)].map((m) => m[1]);
+            return { status: r.status, len: h.length, rows, rcp };
+          };
+          for (const q of [process.env.NM, process.env.PARENT].filter(Boolean)) {
+            try { const d = await dart(q); n(`[DART 「${q}」] ${d.status} ${d.len}자 · ${d.rows.length}건 :: ${d.rows.slice(0, 40).join(' ‖ ')}`); }
+            catch (e) { n(`[DART ${q}] 실패 ${e.message}`); }
+          }
+          // ── 사이트 함수로 금융위·bizwiki ──
+          const b = await chromium.launch();
+          const page = await b.newPage();
+          await page.goto(process.env.SITE.replace(/\/$/, '') + '/');
+          await page.evaluate((s) => { localStorage.clear(); localStorage.setItem('vs_proxy', s.replace(/\/$/, '') + '/api/proxy'); }, process.env.SITE);
+          await page.reload(); await page.waitForTimeout(2500);
+          const out = await page.evaluate(async ({ nm, bz }) => {
+            const r = [];
+            for (const q of [nm, `주식회사${nm}`, `(주)${nm}`, `주식회사 ${nm}`]) {
+              try { const d = await proxyGet('corp', { name: q, rows: '100' }); const c = window.mapCorpCandidates(d); r.push(`[금융위 기업 「${q}」] ${c.length}건 :: ${c.slice(0, 6).map((x) => `${x.corpNm}/${x.crno}/${x.bzno}`).join(' · ')}`); }
+              catch (e) { r.push(`[금융위 기업 ${q}] 실패 ${e.message}`); }
+            }
+            try { const d = await proxyGet('corp', { bzno: bz, rows: '10' }); const c = window.mapCorpCandidates(d); r.push(`[금융위 기업 사업자번호] ${c.length}건 :: ${c.map((x) => `${x.corpNm}/${x.crno}`).join(' · ')}`); } catch (e) { r.push('[금융위 사업자번호] 실패 ' + e.message); }
+            let crno = null;
+            try { const w = await bizWebLookup(bz); r.push(`[bizwiki] ${JSON.stringify(w)}`); crno = w && w.crno; } catch (e) { r.push('[bizwiki] 실패 ' + e.message); }
+            if (crno) {
+              try { const f = await financeLookup(crno); r.push(`[금융위 재무 ${crno}] ${JSON.stringify(f).slice(0, 1500)}`); } catch (e) { r.push(`[금융위 재무 ${crno}] 실패 ${e.message}`); }
+            }
+            return r;
+          }, { nm: process.env.NM, bz: process.env.BZ });
+          out.forEach(n);
+          await b.close();
+          JS
+          node d.mjs
