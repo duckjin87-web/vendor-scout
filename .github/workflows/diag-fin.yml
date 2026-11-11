@@ -40,6 +40,33 @@ jobs:
             const rcp = [...h.matchAll(/rcpNo=(\d{14})/g)].map((m) => m[1]);
             return { status: r.status, len: h.length, rows, rcp };
           };
+          // 모회사 정기보고서에서 자회사 이름이 나오는 문단을 뽑는다(종속회사 요약재무·출자·손상·합병)
+          const grab = async (rcp, label) => {
+            try {
+              const m = await (await fetch(`https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${rcp}`, { headers: UA })).text();
+              const dcm = (m.match(/dcmNo['"]?\s*[:=]\s*['"]?(\d{6,})/) || m.match(/viewDoc\('\d+',\s*'(\d+)'/) || [])[1];
+              const nodes = [...m.matchAll(/viewDoc\('(\d+)',\s*'(\d+)',\s*'(\d+)',\s*'(\d+)',\s*'(\d+)',\s*'([^']+)'/g)];
+              n(`[${label} ${rcp}] dcm ${dcm} nodes ${nodes.length}`);
+              let all = '';
+              for (const x of nodes.length ? nodes : [[0, rcp, dcm, '0', '0', '0', 'dart4.xsd']]) {
+                const u = `https://dart.fss.or.kr/report/viewer.do?rcpNo=${x[1]}&dcmNo=${x[2]}&eleId=${x[3]}&offset=${x[4]}&length=${x[5]}&dtd=${x[6]}`;
+                const h = await (await fetch(u, { headers: UA })).text();
+                all += ' ' + h.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
+              }
+              const nm = process.env.NM; let i = 0, k = 0;
+              while ((i = all.indexOf(nm, i)) >= 0 && k < 14) { n(`[${label}] …${all.slice(Math.max(0, i - 160), i + 520)}`); i += 400; k++; }
+              if (!k) n(`[${label}] 「${nm}」 언급 없음 (${all.length}자)`);
+            } catch (e) { n(`[${label}] 실패 ${e.message}`); }
+          };
+          {
+            const d = await dart(process.env.PARENT || '', '20250101');
+            const h = await (await fetch('https://dart.fss.or.kr/dsab007/detailSearch.ax', { method: 'POST', headers: { ...UA, 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' }, body: new URLSearchParams({ currentPage: '1', maxResults: '100', sort: 'date', series: 'desc', textCrpNm: process.env.PARENT || '', startDate: '20250101', endDate: '20261231', finalReport: 'recent' }) })).text();
+            const items = [...h.matchAll(/rcpNo=(\d{14})[^>]*>([\s\S]*?)<\/a>/g)].map((m) => ({ rcp: m[1], t: m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() }));
+            n(`[목록] ${items.slice(0, 30).map((x) => `${x.rcp}:${x.t}`).join(' | ')}`);
+            for (const want of [/반기보고서 \(2026\.06\)/, /회사합병결정\(종속/, /주요사항보고서\(회사합병결정\)/, /사업보고서 \(2025\.12\)/]) {
+              const it = items.find((x) => want.test(x.t)); if (it) await grab(it.rcp, it.t.slice(0, 24));
+            }
+          }
           for (const q of [process.env.NM, process.env.PARENT].filter(Boolean)) {
             try { const d = await dart(q); n(`[DART 「${q}」] ${d.status} ${d.len}자 · ${d.rows.length}건 :: ${d.rows.slice(0, 40).join(' ‖ ')}`); }
             catch (e) { n(`[DART ${q}] 실패 ${e.message}`); }
