@@ -45,7 +45,12 @@ jobs:
             try {
               const m = await (await fetch(`https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${rcp}`, { headers: UA })).text();
               const dcm = (m.match(/dcmNo['"]?\s*[:=]\s*['"]?(\d{6,})/) || m.match(/viewDoc\('\d+',\s*'(\d+)'/) || [])[1];
-              const nodes = [...m.matchAll(/viewDoc\('(\d+)',\s*'(\d+)',\s*'(\d+)',\s*'(\d+)',\s*'(\d+)',\s*'([^']+)'/g)];
+              const nodes = [];
+              for (const blk of m.split(/var\s+node\d+\s*=\s*\{\};/).slice(1)) {
+                const g = (k) => (blk.match(new RegExp(`\\['${k}'\\]\\s*=\\s*"([^"]*)"`)) || [])[1];
+                if (g('dcmNo')) nodes.push([0, g('rcpNo'), g('dcmNo'), g('eleId'), g('offset'), g('length'), g('dtd'), g('text')]);
+              }
+              if (!nodes.length) n(`[${label}] main 일부: ${m.replace(/\s+/g, ' ').slice(m.indexOf('node1') > 0 ? m.indexOf('node1') - 20 : 0, (m.indexOf('node1') > 0 ? m.indexOf('node1') : 0) + 600)}`);
               n(`[${label} ${rcp}] dcm ${dcm} nodes ${nodes.length}`);
               let all = '';
               for (const x of nodes.length ? nodes : [[0, rcp, dcm, '0', '0', '0', 'dart4.xsd']]) {
@@ -55,7 +60,7 @@ jobs:
               }
               const nm = process.env.NM; let i = 0, k = 0;
               while ((i = all.indexOf(nm, i)) >= 0 && k < 14) { n(`[${label}] …${all.slice(Math.max(0, i - 160), i + 520)}`); i += 400; k++; }
-              if (!k) n(`[${label}] 「${nm}」 언급 없음 (${all.length}자)`);
+              if (!k) n(`[${label}] 「${nm}」 언급 없음 (${all.length}자) :: ${all.slice(0, 1200)}`);
             } catch (e) { n(`[${label}] 실패 ${e.message}`); }
           };
           {
