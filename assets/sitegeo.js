@@ -327,7 +327,7 @@ function sgTruckExtra(report) {
 // ── 3D 규모 비교 ── 브이월드 건물 윤곽을 지상 층수만큼 세워 한국콜마 세종 건물과 같은 축척으로 나란히(또는 겹쳐) 본다.
 // 라이브러리 없이 캔버스에 직교 투영으로 그린다. 끌면 돌아가고, 위아래로 끌면 내려다보는 각도가 바뀐다.
 const SG_FLOOR_M = 4.5;          // 공장 한 층 높이 가정
-const SG_Z0 = 1.3;               // 처음 보이는 배율 — 전체를 딱 맞추면 건물이 작아 1.3배로 연다(+− 로 조정)
+const SG_Z0 = 1;                 // 처음 배율 — 전체가 다 보이게 맞춘다. 크게 보이도록 확대 대신 화면(캔버스)을 키웠다
 // 지도(브이월드)에 없는 동을 건축물대장으로 채운다 — 한국콜마 세종 관정리 732는 도로명주소 건물 윤곽(LT_C_SPBD)에
 // 3동만 있고, GIS건물통합정보(WFS)에는 이 필지 건물이 아예 없다(2026-11 확인). 대장에는 동마다 건축면적·층수가 있으므로
 // 지도에 그려진 동과 면적으로 짝을 짓고, 짝이 없는 동은 부지의 빈 땅에 같은 면적·층수의 상자로 세운다(위치는 추정 → 점선).
@@ -337,7 +337,7 @@ function sgFillFromRegister(g, reg) {
   // ⓪ 지도 윤곽을 다 더해도 대장의 가장 큰 동보다 작으면, 그 윤곽들은 큰 동 하나가 여러 조각으로 그려진 것이다
   //    (한국콜마 세종: 지도 3조각 1,839평 = 대장 '공장동' 3,791평의 일부). 큰 동을 또 세우면 이중으로 센다.
   const mapSum = g.bldgs.reduce((a, d) => a + sgArea(d.pts), 0);
-  if (list[0] && mapSum < list[0].arch * 1.2) { list[0].used = true; g.mainOf = { name: list[0].dong || list[0].name || '주 건물', arch: list[0].arch, cover: mapSum / list[0].arch }; }
+  if (list[0] && mapSum < list[0].arch * 1.2) { list[0].used = true; g.mainOf = { name: list[0].dong || list[0].name || '주 건물', arch: list[0].arch, floors: list[0].floors || null, cover: mapSum / list[0].arch }; }
   // ① 지도에 있는 동과 짝 — 면적 차이 35% 이내, 층수가 같으면 우선
   g.bldgs.forEach((d) => {
     if (g.mainOf && sgArea(d.pts) > list[0].arch * 0.5) return;   // 큰 동의 조각
@@ -350,7 +350,7 @@ function sgFillFromRegister(g, reg) {
       const sc = diff + (r.floors && d.floors && r.floors !== d.floors ? 0.15 : 0);
       if (sc < bs) { bs = sc; best = r; }
     });
-    if (best) best.used = true;
+    if (best) { best.used = true; d.regOf = best; }
   });
   const miss = list.filter((r) => !r.used);
   if (!miss.length) return [];
@@ -419,6 +419,13 @@ function sg3dData(report, B) {
   const regRef = typeof refBldCached === 'function' ? refBldCached() : null;
   const est = sgFillFromRegister(ref, regRef);
   ref.mapN = ref.bldgs.length; ref.estN = est.length; ref.mainOf = ref.mainOf || null;
+  // 층수는 대장이 기준이다 — 지도(도로명주소 건물) 층수는 오래됐거나 일부 동만 반영된다
+  // (한국콜마 세종 공장동: 지도 3층 ↔ 대장 지상 4층). 큰 동의 조각은 그 동의 대장 층수로, 짝지은 동은 짝의 층수로 맞춘다.
+  ref.bldgs.forEach((b) => {
+    if (b.est) return;
+    const f = b.regOf ? b.regOf.floors : ref.mainOf ? ref.mainOf.floors : null;
+    if (f && f !== b.floors) { b.mapFloors = b.floors; b.floors = f; }
+  });
   ref.bldgs = ref.bldgs.concat(est);
   let mine;
   if (unit) {
@@ -438,7 +445,8 @@ function sg3dData(report, B) {
   const sum = (g) => g.bldgs.reduce((a, b) => a + sgArea(b.pts), 0);
   const gfa = (g) => g.bldgs.reduce((a, b) => a + sgArea(b.pts) * (b.floors || 1), 0);
   const top = (g) => Math.max(...g.bldgs.map((b) => b.floors || 1));
-  return { ref, mine, stat: { refFoot: sum(ref), myFoot: sum(mine), refGfa: gfa(ref), myGfa: gfa(mine), refTop: top(ref), myTop: top(mine) } };
+  const regTop = regRef && Array.isArray(regRef.bldgs) ? Math.max(0, ...regRef.bldgs.map((b) => b.floors || 0)) : 0;
+  return { ref, mine, stat: { refFoot: sum(ref), myFoot: sum(mine), refGfa: gfa(ref), myGfa: gfa(mine), refTop: Math.max(top(ref), regTop), myTop: top(mine) } };
 }
 function sg3dHtml(report, B) {
   const D = sg3dData(report, B);
@@ -477,6 +485,7 @@ function sg3dHtml(report, B) {
   const src = ['건물 모양·지상 층수: 브이월드 건물 윤곽(도로명주소 건물) — 도로명주소가 없는 동(부속 창고 등)은 지도에 없어, 한국콜마는 건축물대장의 동별 건축면적·층수로 빈 땅에 세워 채웠습니다(점선 = 위치 추정)',
     `바닥 면적·연면적 수치: ${reg ? '건축물대장(총괄표제부) 기준 — 직육면체 비교와 같은 값' : '브이월드 윤곽 기준(대장 기준값을 아직 받지 못함)'}`,
     '한국콜마 기준: 세종 산단길 22-17(관정리 732) 필지의 모든 동(건축물대장 기준)', `높이는 층수 × ${SG_FLOOR_M}m로 가정했습니다`,
+    D.ref.bldgs.some((b) => b.mapFloors) ? `한국콜마 층수는 건축물대장 기준입니다(지도 ${[...new Set(D.ref.bldgs.filter((b) => b.mapFloors).map((b) => b.mapFloors))].join('·')}층 → 대장 지상 ${[...new Set(D.ref.bldgs.filter((b) => b.mapFloors).map((b) => b.floors))].join('·')}층)` : '',
     unit ? '오피스형 건물 입주사라 건물 전체 대신 호실 전용면적만큼의 한 층짜리 상자로 그렸습니다' : '',
     D.mine.estF ? `브이월드에 층수가 없어 건축물대장 평균 층수(연면적 ÷ 건축면적 ≈ ${D.mine.estF}층)로 세웠습니다` : ''].filter(Boolean);
   return { html, src, D, badge: sgChip('info', `콜마 대비 ${pct(st.myFoot, st.refFoot)}`) };
