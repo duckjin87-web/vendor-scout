@@ -1172,7 +1172,7 @@ function assembleLiveReport(name, corp, res) {
 
   // ── 대기오염물질 배출시설 신고 — 공장이 실제로 설비를 돌리고 있다는 근거 ──
   const airD = R.air && R.air.ok ? R.air.data : null;
-  const airInfo = airD ? (() => {
+  const mkAir = (airD, siteKeys) => (() => {
     const ymd = (v) => { const d = String(v || '').replace(/\D/g, ''); return d.length >= 8 ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : null; };
     const rows = (airD.rows || []).map((r) => {
       const atSite = siteKeys.has(rk(r.addr)) || siteKeys.has(rk(r.lot));
@@ -1184,7 +1184,9 @@ function assembleLiveReport(name, corp, res) {
     const cur = rows.filter((r) => r.atSite);
     return { rows, cur: cur.length, curActive: cur.filter((r) => !r.isClosed).length, curClosed: cur.filter((r) => r.isClosed).length,
       old: rows.filter((r) => r.tag === 'old').length, siteKnown: siteKeys.size > 0 };
-  })() : null;
+  })();
+  window.buildAirInfo = (d, addrs) => mkAir(d, new Set((addrs || []).map(rk).filter(Boolean)));   // 리포트에서 대기 신고만 다시 조회할 때
+  const airInfo = airD ? mkAir(airD, siteKeys) : null;
 
   // 식약처 GMP 적합업소 (CGMP 등록여부) — 적합업체 전체목록에서 상호로 필터
   // 업체명 필드 키가 API마다 달라(BSSH_NM/CMPNY_NM/…) 모든 필드값을 훑어 상호 포함 여부로 매칭
@@ -1927,6 +1929,7 @@ function assembleLiveReport(name, corp, res) {
     ['영업 정지·허가 취소', 'high', /영업\s*정지|업무\s*정지|제조\s*정지|허가\s*취소|등록\s*취소|제조업\s*취소/],
     ['수사·형사', 'high', /압수\s*수색|횡령|배임|구속\s*(?:기소|영장)|검찰\s*(?:송치|기소)|불구속\s*기소/],
     ['소송·압류', 'mid', /소송|가압류|압류|체납|손해\s*배상\s*청구/],
+    ['재무 악화', 'mid', /상장\s*폐지|관리\s*종목|자본\s*잠식|연속\s*적자|적자\s*(?:지속|누적|확대)|감사\s*의견\s*거절|손상\s*차손/],
     ['행정처분·제재', 'mid', /행정\s*처분|과징금|과태료|시정\s*명령|판매\s*정지|광고\s*정지|회수\s*명령|적발/],
   ];
   const riskNoise = /휴\s*[·ㆍ.]?\s*폐업|폐업\s*(?:여부|조회|상태)|체납\s*(?:여부|조회)|소송\s*(?:여부|조회)/g;

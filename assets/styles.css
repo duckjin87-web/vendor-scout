@@ -1178,8 +1178,8 @@ a.vch-link:hover b { text-decoration-thickness: 2px; }
 /* 고른 탭 아래 밑줄이 옆 탭으로 미끄러져 간다 */
 .rtab-ink { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: var(--text); border-radius: 2px;
   transition: transform .28s cubic-bezier(.3, .7, .2, 1), width .28s cubic-bezier(.3, .7, .2, 1); pointer-events: none; }
-.tabpane.enter { animation: paneIn .28s ease both; }
-@keyframes paneIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.tabpane.enter { animation: paneIn .3s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes paneIn { from { opacity: 0; transform: translateX(var(--pane-dx, 0)); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .rtab-ink { transition: none; }
   .tabpane.enter { animation: none; }
@@ -1929,7 +1929,10 @@ details.rsec > summary:focus-visible { outline: 2px solid var(--accent); outline
 details.rsec[open] > summary .rsec-c { transform: rotate(-135deg); }
 details.rsec[open] > summary { border-bottom: 1px solid var(--rule); border-radius: 8px 8px 0 0; }
 details.rsec > :not(summary) { margin: 12px; }
-details.rsec[open] > :not(summary) { animation: rsecIn .22s ease both; }
+details.rsec[open] > :not(summary) { animation: rsecIn .26s ease both; }
+details.rsec.closing > :not(summary) { opacity: 0; transition: opacity .16s linear; animation: none; }
+details.rsec.closing > summary .rsec-c { transform: rotate(45deg); }
+.rsec-pv { color: var(--text); font-weight: 700; }
 @keyframes rsecIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { details.rsec[open] > :not(summary) { animation: none; } .rsec-c { transition: none; } }
 @media (max-width: 720px) { details.rsec > :not(summary) { margin: 8px; } details.rsec > summary { flex-wrap: wrap; } .rsec-s { flex-basis: calc(100% - 30px); order: 3; } }
@@ -2911,3 +2914,63 @@ label.gr-chip:focus-within { outline: 2px solid var(--accent); outline-offset: 2
 /* 자료 기준 시점 — 시차가 있는 값만. 오래된 값은 노란색 */
 .fage { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; font-size: 10.5px; font-weight: 600; line-height: 1.6; color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); white-space: nowrap; vertical-align: 1px; font-variant-numeric: tabular-nums; }
 .fage.old { color: var(--gC); background: var(--gC-bg); border-color: transparent; }
+
+/* ═══ 한눈에 보기 보강(brief.js) ═══ */
+.vd-one { margin: 6px 0 4px; font-size: 13.5px; line-height: 1.55; color: var(--text); max-width: 70ch; }
+.vd-alts { display: inline; }
+.vd-alts > summary { display: inline; cursor: pointer; color: var(--muted); font-size: 11.5px; text-decoration: underline dotted; list-style: none; }
+.vd-alts > summary::-webkit-details-marker { display: none; }
+.vd-alts[open] > summary { margin-right: 6px; }
+.bf-issues { display: grid; gap: 6px; margin: 12px 0 2px; }
+.bf-issue { display: grid; grid-template-columns: 6.2em minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 9px 12px; border-radius: 8px; font-size: 13px; line-height: 1.45;
+  animation: bfIn .32s cubic-bezier(.2, .8, .2, 1) both; }
+.bf-issue:nth-child(2) { animation-delay: .05s; } .bf-issue:nth-child(3) { animation-delay: .1s; }
+@keyframes bfIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.bf-issue.bad { background: var(--risk-bg); } .bf-issue.warn { background: var(--gC-bg); }
+.bf-issue b { font-weight: 800; } .bf-issue.bad b { color: var(--risk); } .bf-issue.warn b { color: var(--gC); }
+.bf-issue em, .bf-issue a { font-style: normal; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.bf-issue a { text-decoration: underline; }
+.bf-noissue { display: flex; align-items: center; gap: 8px; margin: 12px 0 2px; padding: 9px 12px; border-radius: 8px; background: var(--gA-bg); color: var(--gA); font-size: 13px; font-weight: 700; }
+.bf-noissue svg, .vd-oks svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.bf-more { all: unset; cursor: pointer; font-size: 12px; color: var(--accent); padding: 2px 0; }
+.bf-more:hover { text-decoration: underline; } .bf-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.vw.gap i { color: var(--muted); } .vw.gap span { color: var(--muted); }
+.vd-oks { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: var(--gA); font-weight: 600; }
+.vd-oks span { display: inline-flex; align-items: center; gap: 4px; }
+.bf { margin: 0 0 12px; }
+.bf-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.bf-col { display: grid; gap: 12px; min-width: 0; }
+.bf-box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.bf-box h4 { margin: 0 0 10px; font-size: 14px; font-weight: 800; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.bf-box h4 small { font-size: 11.5px; font-weight: 500; color: var(--muted); }
+.bf-row { display: grid; grid-template-columns: 5.4em minmax(0, 1fr); gap: 10px; padding: 8px 0; border-top: 1px solid var(--rule); align-items: baseline; }
+.bf-row:first-of-type { border-top: 0; padding-top: 0; }
+.bf-k { font-size: 12px; color: var(--muted); font-weight: 600; }
+.bf-v { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.bf-none { font-size: 12.5px; color: var(--faint); }
+.bf-chip { display: inline-flex; align-items: baseline; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--text); padding: 2px 8px; border-radius: 6px; border: 1px solid var(--rule); background: var(--bg); text-decoration: none; max-width: 100%; }
+a.bf-chip:hover { border-color: var(--accent); }
+.bf-chip i { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.bf-chip.s-of i { color: var(--gA); } .bf-chip.s-nw i, .bf-chip.s-ext i { color: var(--gC); } .bf-chip.s-est i { color: var(--faint); }
+.bf-chip.mini { padding: 0 6px; margin-right: 3px; }
+.bf-note, .bf-legend { margin: 8px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.bf-meter { display: flex; gap: 3px; margin-bottom: 10px; }
+.bf-meter i { flex: 1; height: 5px; border-radius: 3px; background: var(--rule); }
+.bf-meter i.ok { background: var(--gA); } .bf-meter i.warn { background: var(--gC); } .bf-meter i.bad { background: var(--risk); }
+.bf-chain { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 12.5px; }
+.bf-chain li { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+.bf-chain li::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--rule); transform: translateY(-1px); }
+.bf-chain li.ok::before { background: var(--gA); } .bf-chain li.warn::before { background: var(--gC); } .bf-chain li.bad::before { background: var(--risk); }
+.bf-chain li.na span { color: var(--muted); }
+.bf-chain em { font-style: normal; font-size: 11px; color: var(--faint); white-space: nowrap; }
+.bf-retry { all: unset; cursor: pointer; margin-left: 8px; font-size: 11.5px; font-weight: 700; color: var(--accent); text-decoration: underline; }
+.bf-retry:disabled { color: var(--faint); cursor: default; text-decoration: none; }
+.bf-peers ul { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; font-size: 12.5px; }
+.bf-peers li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
+.bf-peers li b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bf-peers li span { color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) { .bf-grid { grid-template-columns: minmax(0, 1fr); } .bf-issue { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+@media (prefers-reduced-motion: reduce) { .bf-issue { animation: none; } }
+@media print { .bf-more, .bf-retry, .bf-peers .vd-alt { display: none; } .bf-issue { animation: none; } }
+/* 버튼 반응 — 끝난 일을 버튼 자체에 잠깐 표시한다 */
+.is-done { background: var(--gA) !important; color: #fff !important; box-shadow: none !important; transition: background .16s ease; }

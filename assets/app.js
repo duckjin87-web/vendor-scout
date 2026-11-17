@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 241;
+const BUILD = 242;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3915,7 +3915,9 @@ async function finishLive(name, corp) {
   }
   // 대기배출시설 — 의약품안전나라 제조소 주소로도 찾아야 해서 그 결과를 기다렸다가 부른다
   calls.air = Promise.resolve(calls.nedrug).catch(() => null)
-    .then((ned) => airLookup(corp.bzno, nm, ned && ned.found ? ned.sites.map((x) => x.addr) : []));
+    .then((ned) => { const ad = ned && ned.found ? ned.sites.map((x) => x.addr) : [];
+      // 행정안전부 API가 가끔 응답이 늦다 — 한 번은 다시 부른다(실패하면 실재성 근거에 「다시 조회」가 남는다)
+      return airLookup(corp.bzno, nm, ad).catch(() => airLookup(corp.bzno, nm, ad)); });
   const keys = Object.keys(calls);
   const res = {};
   const settleOf = {};
@@ -4507,6 +4509,25 @@ function airInferLine(c, M) {
   return `<div class="xguess"><i>유추</i><span>${bits.join(' · ')}.${tail}</span></div>`;
 }
 
+// 대기 신고만 다시 조회해 리포트에 채운다(조회 때 응답 지연으로 빠진 경우)
+async function airRetry(report) {
+  const M = report.meta || {};
+  const bz = String(((report.basic || []).find((x) => x.key === '사업자등록번호') || {}).value || '').replace(/\D/g, '');
+  const addrs = [...(M.mfds_sites || []).map((x) => x.addr), ((report.capacity || []).find((x) => x.key === '실제 공장 소재지 (선정)') || {}).value].filter(Boolean);
+  try {
+    const d = await airLookup(bz, M.vendor_name, addrs);
+    if (typeof window.buildAirInfo !== 'function') return;
+    M.air = window.buildAirInfo(d, addrs);
+    const st = (M.src_status || []).find((x) => x.key === 'air');
+    const cur = M.air.rows.filter((r) => r.atSite);
+    if (st) { st.ok = true; st.detail = M.air.rows.length ? `신고 ${M.air.rows.length}건${cur.length ? ` · 제조소 주소 ${cur.length}건` : ''} (다시 조회)` : '신고 없음 (다시 조회)'; }
+    const c = cur.find((r) => !r.isClosed) || cur[0];
+    const fld = (report.capacity || []).find((x) => x.key === '대기 배출시설 신고');
+    if (fld && c) { fld.value = `${c.kind || '신고'} · ${c.status || ''}`.trim(); fld.data_gap = false; fld.grade = c.isClosed ? 'C' : 'A'; fld.as_of = new Date().toISOString().slice(0, 10); fld.note = '다시 조회해 채운 값'; }
+    try { saveLastReport(report); } catch { /* 저장 못 해도 동작 */ }
+  } catch { /* 여전히 실패 — 버튼이 다시 살아난다 */ }
+}
+
 function airSecHtml(M) {
   const A = M && M.air;
   if (!A) return '';
@@ -4742,7 +4763,7 @@ function evidenceCard(report) {
     pop.hidden = !open; b.setAttribute('aria-expanded', String(open));
   });
   document.addEventListener('click', (e) => { if (!box.contains(e.target)) box.querySelectorAll('.evc-pop').forEach((p) => { p.hidden = true; }); });
-  box.querySelector('[data-evc-csv]').addEventListener('click', () => downloadCSV(report));
+  box.querySelector('[data-evc-csv]').addEventListener('click', (e) => { downloadCSV(report); const b = e.currentTarget, o = b.textContent; b.textContent = '받았습니다 ✓'; b.classList.add('is-done'); setTimeout(() => { b.textContent = o; b.classList.remove('is-done'); }, 1600); });
   box.querySelector('[data-evc-all]').addEventListener('click', () => { const t = document.querySelector('.rfold-bar'); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
   show('why');
   return box;
@@ -5299,10 +5320,11 @@ async function siteDeepExtract(name, url) {
   return res && res.data ? res.data : null;
 }
 // 오케스트레이터: 휴리스틱(항상) + LLM(키 있을 때) 병합. LLM 값 우선, 공백은 휴리스틱으로 채움.
-async function siteDeepAnalyze(name, hpUrl, seeds) {
+async function siteDeepAnalyze(name, hpUrl, seeds, opts = {}) {
   const heur = await siteDeepHeuristic(name, hpUrl, seeds).catch(() => null);
   let llm = null, llmErr = null;
-  try { llm = await siteDeepExtract(name, hpUrl); } catch (e) { llmErr = e && e.message ? e.message : String(e); }
+  // 조회 때 자동으로 돌릴 때는 무료 키워드 분석만 — AI 웹조사(유료 호출)는 버튼을 눌렀을 때만
+  if (!opts.noLlm) { try { llm = await siteDeepExtract(name, hpUrl); } catch (e) { llmErr = e && e.message ? e.message : String(e); } }
   const data = mergeDeep(llm, heur && heur.data ? heur.data : null);
   const source = llm ? (heur && heur.data ? 'ai+kw' : 'ai') : 'kw';
   const base = (heur && heur.base) || hpUrl || null;
@@ -5541,7 +5563,7 @@ function shareBasicText(report) {
 }
 async function shareBasic(report, btn) {
   const S = shareBasicText(report);
-  const done = (t) => { const o = btn.textContent; btn.textContent = t; setTimeout(() => { btn.textContent = o; }, 1800); };
+  const done = (t) => { const o = btn.textContent; btn.textContent = t; btn.classList.add('is-done'); setTimeout(() => { btn.textContent = o; btn.classList.remove('is-done'); }, 1800); };
   // 휴대폰은 공유 시트(카톡·문자 등), 그 밖에는 클립보드로 복사한다
   if (navigator.share) {
     try { await navigator.share({ title: S.title, text: S.text }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
@@ -5612,6 +5634,11 @@ function qualityGrade(report) {
   const webHigh = (report.web_risk || []).filter((w) => w.sev === 'high');
   if ((report.web_risk || []).length) add('웹 위험 신호', webHigh.length ? null : true,
     webHigh.length ? `${webHigh.map((w) => w.kind).join(' · ')} — 웹 문구, 공식 확인 필요` : `${report.web_risk.map((w) => w.kind).join(' · ')}(경미) — 확인사항으로 올림`, 'risk');
+  // 재무위험 보도(적자·자본잠식·상장폐지 등) — 공시 재무가 없는 비외감 법인은 기사만이 재무 신호다.
+  // 모나미코스메틱: 모회사 상장폐지 위기·3년 연속 적자 기사가 수집됐는데도 A(중대 위험 없음)가 나왔다. 2건 이상이면 A를 막는다.
+  const finNews = typeof bfFinRisk === 'function' ? bfFinRisk(report) : null;
+  const finWarn = !!(finNews && finNews.n >= 2);
+  if (finNews) add('재무위험 보도', finWarn ? null : true, `${finNews.n}건${finWarn ? ' — 공시 재무로 확인 필요' : '(1건) — 확인사항으로 올림'}`, 'risk');
   // ③ 우수 기준
   add('CGMP', cgmp, cgmp ? '식약처 CGMP 적합업소' : '미등재', 'plus');
   add('공장 소재지', isFullAddr(site) ? true : null, isFullAddr(site) ? '번지까지 확인' : '번지까지 확인 못 함', 'plus');
@@ -5636,7 +5663,7 @@ function qualityGrade(report) {
   else if (rcBad || capImpair || courtBad || admBad) { grade = 'C'; why = [rcBad ? '최근 3년 중대 회수' : '', capImpair ? '자본잠식' : '', courtBad ? '법원 회생·파산 공고' : '', admBad ? '식약처 업무정지·등록취소' : ''].filter(Boolean).join(' · '); }
   else {
     const cautions = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회 불가' : '', !isFullAddr(site) ? '공장 번지 미확인' : '',
-      wfWarn ? '보험상 제조 인력 없음' : '', airWarn ? '제조소 배출시설 폐업·휴업' : '', webHigh.length ? `웹 위험 신호(${webHigh.map((w) => w.kind).join('·')})` : '', admWarn ? `식약처 행정처분 ${MA.n}건` : ''].filter(Boolean);
+      wfWarn ? '보험상 제조 인력 없음' : '', airWarn ? '제조소 배출시설 폐업·휴업' : '', webHigh.length ? `웹 위험 신호(${webHigh.map((w) => w.kind).join('·')})` : '', admWarn ? `식약처 행정처분 ${MA.n}건` : '', finWarn ? `재무위험 보도 ${finNews.n}건` : ''].filter(Boolean);
     const head = webHigh.length ? '웹 위험 신호 확인 전' : '중대 위험 없음';
     if (cgmp && !cautions.length) { grade = 'A'; why = 'CGMP 적합 · 중대 위험 없음'; }
     else { grade = 'B'; why = cgmp ? `CGMP 적합이나 주의: ${cautions.join(' · ')}` : `${head} · CGMP 미등재${cautions.length ? ` · 주의: ${cautions.join(' · ')}` : ''}`; }
@@ -5647,7 +5674,7 @@ function qualityGrade(report) {
   const dataGrade = gs.length ? ['A', 'B', 'C', 'D'][gs[Math.floor(gs.length / 2)]] : 'D';
   // A까지 남은 조건 — 게이지 아래에 '무엇이 있으면 한 단계 오르는지'를 적는다
   const caut = [rc.length === 1 ? '경미 회수 1건' : '', debtHigh ? `부채비율 ${fh.debtRatio}%` : '', !stt ? '사업자 상태 조회' : '', !isFullAddr(site) ? '공장 번지 확인' : '',
-    wfWarn ? '보험상 제조 인력' : '', airWarn ? '제조소 배출시설 가동' : '', webHigh.length ? '웹 위험 신호 해소' : '', admWarn ? '행정처분 공개 기간 경과' : ''].filter(Boolean);
+    wfWarn ? '보험상 제조 인력' : '', airWarn ? '제조소 배출시설 가동' : '', webHigh.length ? '웹 위험 신호 해소' : '', admWarn ? '행정처분 공개 기간 경과' : '', finWarn ? '재무 건전성 확인' : ''].filter(Boolean);
   const toA = grade === 'A' ? [] : grade === 'D' ? [why] : [...(grade === 'C' ? [why] : []), ...(cgmp ? [] : ['CGMP 적합']), ...caut];
   return { grade, why, checks, dataGrade, toA };
 }
@@ -6070,7 +6097,7 @@ function lookupBasisHtml(m, bv) {
   const typed = L && L.typed && stripCorp(L.typed).replace(/\s/g, '') !== stripCorp(m.vendor_name || '').replace(/\s/g, '') ? `입력 「${esc(L.typed)}」 → ` : '';
   const basis = L && L.basis ? esc(L.basis) : (licOk ? '식약처 화장품 제조업 허가 확인' : '금융위 법인 기준');
   const alts = L && L.alts && L.alts.length
-    ? ` · 비슷한 이름의 제조업체 ${L.alts.map((a) => `<button type="button" class="vd-alt" data-alt="${esc(a)}">${esc(a)}</button>`).join('')}` : '';
+    ? ` <details class="vd-alts"><summary>비슷한 이름 ${L.alts.length}곳</summary>${L.alts.map((a) => `<button type="button" class="vd-alt" data-alt="${esc(a)}">${esc(a)}</button>`).join('')}</details>` : '';
   return `<div class="vd-basis${licOk ? '' : ' nolic'}"><i>조회 근거</i>${typed}${basis}${L && L.why && L.why !== '입력한 이름과 같음' ? ` <small>(${esc(L.why)})</small>` : ''}`
     + (licOk ? '' : ' · <b>화장품 제조업 허가 명단에 없음</b>') + alts + '</div>';
 }
@@ -6154,12 +6181,21 @@ function renderVerdict(report) {
     + `<div class="vd-title"><div class="vd-h2row"><h2>${esc(m.vendor_name || '')}</h2>`
     + (m.live ? `<button type="button" class="sv-btn" data-act="save-firm" data-sv-key="${esc(svKey(m.vendor_name || ''))}" data-sv-kind="report">☆ 저장</button>` : '')
     + `</div><div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div>`
+    + (m.live && typeof bfOneLine === 'function' ? `<p class="vd-one">${esc(bfOneLine(report, Q))}</p>` : '')
     + lookupBasisHtml(m, bv)
     + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
     + '</div>';
+  // 이슈 줄 — 위험·불일치만 최대 3건. 「공개자료 미확인 N건」 같은 자료 공백은 이슈가 아니라 아래 줄에 따로 둔다
+  if (m.live && typeof bfIssuesHtml === 'function') html += bfIssuesHtml(report, Q);
   // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
   // 「공백 20」처럼 빠진 것만 세지 않고, 확인된 것과 남은 것을 같은 무게로 센다(프레이밍)
-  if (ups.length || downs.length) {
+  if (m.live && typeof bfIssuesHtml === 'function') {
+    const gapTxt = downs.filter((x) => /^공개자료 미확인/.test(x))[0] || '';
+    if (ups.length || gapTxt) html += `<div class="vd-why">`
+      + (ups.length ? `<div class="vw up"><i>확인됨 <b data-cu="${ups.length}">${ups.length}</b></i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
+      + (gapTxt ? `<div class="vw gap"><i>자료 공백</i><span>${esc(gapTxt.replace(/^공개자료 /, ''))} — 아래 상세 자료에서 「확인 안 됨」으로 표시</span></div>` : '')
+      + `</div>`;
+  } else if (ups.length || downs.length) {
     html += `<div class="vd-why">`
       + (ups.length ? `<div class="vw up"><i>확인됨 <b data-cu="${ups.length}">${ups.length}</b></i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
       + (downs.length ? `<div class="vw down"><i>확인필요 <b data-cu="${downs.length}">${downs.length}</b></i><span>${downs.map(esc).join(' · ')}</span></div>` : '')
@@ -6216,20 +6252,30 @@ function renderVerdict(report) {
   // 화장품 제조업 허가 제조소 — 의약품안전나라 등록 순서(대개 1공장·2공장 순)
   const mkSites = ((m.mfds_sites || []).length ? m.mfds_sites.map((x) => ({ addr: x.addr, detail: x.detail || '' }))
     : siteLines(fct).map((addr) => ({ addr, detail: '' }))).filter((x) => x.addr);
+  // 값에 기준 연도·출처를 붙인다 — 「매출 20억*」만으로는 언제 값인지 알 수 없었다
+  const revI = typeof bfRevenue === 'function' ? bfRevenue(report) : null;
+  const trend = (m.manpower && m.manpower.trend) || [];
+  const empSub = trend.length >= 6 && trend[0].cnt !== trend[trend.length - 1].cnt ? `${trend.length >= 12 ? '1년' : `${trend.length - 1}개월`} ${trend[0].cnt}→${trend[trend.length - 1].cnt}` : '';
+  const bldK = m.bld && m.bld.arch && !m.bld.unit ? m.bld : null;
+  const bldFl = bldK ? Math.max(0, ...(bldK.bldgs || []).map((b) => b.floors || 0)) : 0;
+  // 확인·정상처럼 당연한 칸은 칸을 차지하지 않고 한 줄 표시로 — 문제가 있을 때만 칸으로 올라온다
+  const okBasics = [maker && mkSites.length <= 1 ? '제조업 등록' : '', /계속/.test(bstt) ? '사업자 정상' : '', fct ? '공장 주소 확인' : ''].filter(Boolean);
   const chips = [
     // 제조소가 여럿이면(1공장·2공장…) 칸을 눌러 모든 제조소 주소를 펼쳐 본다
-    ['제조업 등록', maker ? '확인' : '미확인', maker ? 'ok' : 'bad', mkSites.length > 1 ? `제조소 ${mkSites.length}곳 ▾` : '', null, mkSites.length > 1 ? 'mk-sites' : null],
-    ['사업자 상태', /계속/.test(bstt) ? '정상' : (bstt || '미확인'), /계속/.test(bstt) ? 'ok' : 'bad'],
-    ['공장등록', fct ? '확인' : '미확인', fct ? 'ok' : 'warn'],
+    ...(!maker || mkSites.length > 1 ? [['제조업 등록', maker ? '확인' : '미확인', maker ? 'ok' : 'bad', mkSites.length > 1 ? `제조소 ${mkSites.length}곳 ▾` : '', null, mkSites.length > 1 ? 'mk-sites' : null]] : []),
+    ...(/계속/.test(bstt) ? [] : [['사업자 상태', bstt || '미확인', 'bad']]),
+    ...(fct ? [] : [['공장등록', '미확인', 'warn']]),
     // CGMP는 없다고 결격은 아니지만 있으면 확실한 강점이라, 보유했을 때만 색을 준다.
     ['CGMP', cgmp ? '적합' : '미등재', cgmp ? 'good' : 'na'],
     // 5명 이하면 생산 물량·교대 운영을 감당할 수 있는지부터 확인해야 한다.
     ['재직자수', empRaw ? String(empRaw).replace(/\s*·.*$/, '') : '미확인',
       empN == null ? 'na' : (empN <= 5 ? 'warn' : 'num'),
-      cv('제조소 추정 근무 인원') ? (/제조 사업장 미확인|국민연금/.test(empRaw) ? '참고값' : '보험+연금 추정') : (empRaw ? '국민연금(참고)' : '')],
+      empSub || (cv('제조소 추정 근무 인원') ? (/제조 사업장 미확인|국민연금/.test(empRaw) ? '참고값' : '보험+연금 추정') : (empRaw ? '국민연금(참고)' : ''))],
+    ...(bldK ? [['공장', `약 ${Math.round(bldK.arch / 3.305785).toLocaleString()}평`, 'num', [bldFl > 1 ? `${bldFl}층` : '', bldK.firstApr ? `${String(bldK.firstApr).slice(0, 4)} 준공` : ''].filter(Boolean).join(' · ')]] : []),
     ['설립', String(bv('설립일 / 등록일') || '').slice(0, 4) || '미확인', bv('설립일 / 등록일') ? 'num' : 'na'],
     ['매출', revF ? revF.value + (revF.grade === 'C' ? '*' : '') : '미확인',
-      revEok == null || !isFinite(revEok) ? 'na' : (revEok <= 0 ? 'bad' : 'num')],
+      revEok == null || !isFinite(revEok) ? 'na' : (revEok <= 0 ? 'bad' : 'num'),
+      revI ? `${revI.year}년 · ${revI.ext ? '외부 사이트' : '공시'}` : ''],
     // 부채비율 — 자본잠식이면 비율 자체가 성립하지 않는다. 숫자 대신 상태를 적는다.
     ...(fh ? [['부채비율',
       fh.equity != null && fh.equity <= 0 ? '자본잠식'
@@ -6252,7 +6298,8 @@ function renderVerdict(report) {
     return href
       ? `<a class="vch vch-${t} vch-link" href="${esc(href)}">${inner}</a>`
       : `<div class="vch vch-${t}">${inner}</div>`;
-  }).join('') + `</div>`;
+  }).join('') + `</div>`
+    + (okBasics.length ? `<div class="vd-oks">${okBasics.map((x) => `<span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>${esc(x)}</span>`).join('')}</div>` : '');
   // 제조소 목록(접힘) — 칸을 누르면 펼친다. 지도·공장 면적(로드뷰)으로 바로 간다.
   if (mkSites.length > 1) {
     html += `<div class="vd-sites" id="vdSites" hidden><div class="vd-sites-h">화장품 제조업 허가 제조소 <b>${mkSites.length}곳</b> <small>의약품안전나라 등록 순서</small></div><ol>`
@@ -6285,15 +6332,14 @@ function renderVerdict(report) {
     const tab = document.getElementById('rtab-area'); if (tab) tab.click();
     window.dispatchEvent(new CustomEvent('vs-site', { detail: b.dataset.addr }));
   });
-  const todoAll = box.querySelector('[data-act="todo-all"]');
-  if (todoAll) {
+  box.querySelectorAll('[data-act="todo-all"]').forEach((todoAll) => {
     todoAll.addEventListener('click', () => {
       const d = document.querySelector('details.rsec[data-fold="check"]');
       if (!d) return;
       d.open = true;
       d.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
     });
-  }
+  });
   const svb = box.querySelector('[data-act="save-firm"]');
   if (svb) {
     svPaintBtn(svb);
@@ -6426,6 +6472,18 @@ function buildVisitChecklist(report) {
     if (items.some((i) => i.text === c.detail)) return;
     add(c.severe ? 'high' : 'mid', '기준정보', c.detail || c.label, `교차검증 · ${c.label}`, '', '기준정보');
   });
+  // 보험 업종이 제조업이 아닌 제조소 · 공장 소유 여부 — 공개 자료로는 못 가리는 것을 질문으로 남긴다
+  { const W = report.meta && report.meta.workforce;
+    if (W && W.indOdd) { const s0 = (W.sites || []).find((x) => x.atSite) || {}; const ind = (s0.gy && s0.gy.ind) || (s0.sj && s0.sj.ind) || '';
+      add('mid', '인력', `제조소 주소의 고용·산재보험 업종이 「${ind || '화장품 제조 아님'}」입니다 — 생산직이 이 사업장 소속인지, 도급·파견 인력 비중은 얼마인지 확인`, '고용·산재보험 업종', '업종이 도매업이면 생산을 다른 법인·외주 인력이 맡고 있을 수 있음', '기준정보'); }
+    const bl = report.meta && report.meta.bld, fin = report.finance || [];
+    const assets = Number(String(((fin.find((x) => x.key === '총자산' && x.value) || {}).value) || '').replace(/[^0-9.]/g, ''));
+    const jiga = report.meta && report.meta.geo && report.meta.geo.site && report.meta.geo.site.parcel && report.meta.geo.site.parcel.jiga;
+    const land = jiga && bl && bl.plat ? (jiga * bl.plat) / 1e8 : null;
+    if (bl && bl.arch && !bl.unit) {
+      if (assets && land && assets < land) add('mid', '공장', `총자산(${assets}억)이 부지 공시가(약 ${Math.round(land)}억)보다 작습니다 — 공장이 임차이거나 모회사·관계사 소유일 수 있으니 소유 관계와 임대 기간을 확인`, '재무 ↔ 부지 공시가', '임차 공장은 계약 만료·이전 리스크가 있음', '기준정보');
+      else if (!assets) add('low', '공장', '공장 토지·건물이 자가인지 임차인지(모회사·관계사 소유 포함) 확인', '공시 재무 없음', '자산 규모를 알 수 없어 소유 여부를 가릴 수 없음', '기준정보'); }
+  }
   (report.recalls || []).slice(0, 8).forEach((r) => {
     add('high', '기준정보', `회수·판매중지 이력 — ${r.reason || '원인·재발방지책 확인'}`,
       [r.date, r.product].filter(Boolean).join(' · ') || '식약처 이력', '', '기준정보');
@@ -7618,6 +7676,21 @@ function foldSec(id, title, sub, ...content) {
   sm.innerHTML = `<span class="rsec-t">${esc(title)}</span>${sub ? `<span class="rsec-s">${sub}</span>` : ''}<span class="rsec-c" aria-hidden="true"></span>`;
   d.appendChild(sm);
   content.filter(Boolean).forEach((c) => d.appendChild(c));
+  // 펼침·접힘 — 높이가 부드럽게 열리고 닫힌다(움직임 줄이기·인쇄에서는 바로)
+  sm.addEventListener('click', (e) => {
+    if (e.target.closest('a, button, input, label')) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !d.animate) return;
+    e.preventDefault();
+    if (d._anim) { d._anim.cancel(); d._anim = null; }
+    const h0 = d.offsetHeight, opening = !d.open;
+    if (opening) d.open = true; else d.classList.add('closing');
+    const hSum = sm.offsetHeight + 2;
+    const h1 = opening ? d.offsetHeight : hSum;
+    d.style.overflow = 'hidden';
+    const a = d.animate([{ height: `${opening ? Math.min(h0, hSum) : h0}px` }, { height: `${h1}px` }], { duration: Math.min(420, 200 + Math.abs(h1 - h0) * 0.12), easing: 'cubic-bezier(.2, .8, .2, 1)' });
+    d._anim = a;
+    a.onfinish = a.oncancel = () => { d.style.overflow = ''; d.classList.remove('closing'); if (!opening && d._anim === a) d.open = false; if (d._anim === a) d._anim = null; };
+  });
   d.addEventListener('toggle', () => {
     if (FOLD_ALWAYS_SHUT.has(id)) return;
     const st = foldGet(); st[id] = d.open;
@@ -7751,6 +7824,8 @@ function render(report, opts = {}) {
     if (report._diff) root.appendChild(el('div', 'pdiff' + (report._diff.added.length ? ' has-risk' : ''), diffBlockHtml(report._diff)));
     snapSave(report);
     root.appendChild(evidenceCard(report));
+    // 역량 요약 · 제조 실재성 · 같은 시·군 업체 — 접힌 상세를 열지 않아도 2·3차 정보가 보이게
+    if (typeof briefBlock === 'function') { const bb = briefBlock(report); if (bb) root.appendChild(bb); }
   }
 
   // 조회 메타는 판단에 쓰이지 않으니 아래로 내리고 한 줄로 줄인다
@@ -7792,7 +7867,11 @@ function render(report, opts = {}) {
   const fbar = el('div', 'rfold-bar', `<span>상세 자료</span>${legendHtml}<button type="button" class="nb-btn sm" data-fold-all="1">모두 펼치기</button><button type="button" class="nb-btn sm" data-fold-all="0">모두 접기</button>`);
   fbar.addEventListener('click', (e) => { const b = e.target.closest('[data-fold-all]'); if (b) foldAll(root, b.dataset.foldAll === '1'); });
   root.appendChild(fbar);
-  root.appendChild(foldSec('core', '기업 정보 · 생산역량 · 재무', `항목 ${allF.length - gapN}개 확인${gapN ? ` · 공백 ${gapN}` : ''}`, core));
+  // 접힌 채로도 핵심 값이 보이게 — 매출 · 인원 · 공백 수
+  const pv = [];
+  { const rv = typeof bfRevenue === 'function' ? bfRevenue(report) : null; if (rv) pv.push(`매출 ${rv.v}억(${rv.year})`);
+    const em = (report.capacity || []).find((x) => x.key === '제조소 추정 근무 인원' && x.value); if (em) pv.push(`인원 ${String(em.value).split('·')[0].trim()}`); }
+  root.appendChild(foldSec('core', '기업 정보 · 생산역량 · 재무', `${pv.length ? `<b class="rsec-pv">${esc(pv.join(' · '))}</b> · ` : ''}항목 ${allF.length - gapN}개 확인${gapN ? ` · 공백 ${gapN}` : ''}`, core));
 
   // ✅ 방문 전 체크리스트 — 웹 기반(기사·채용·기술/제품) 실사 제안(실데이터일 때)
   //    심층분석 결과가 나중에 도착하면 갱신해야 하므로 id로 찾아 교체 가능하게 둔다.
@@ -7906,6 +7985,7 @@ function render(report, opts = {}) {
             else { mergeOcrIntoDeep(st, imgs); reconcileDeep(st, report); }
             if (report._siteDeep === st) paintDeep(st);
             refreshProductLines(report); refreshVisitChecklist(report); saveLastReport(report);
+            if (typeof refreshBrief === 'function') refreshBrief(report);
           })
           .catch((e) => { st.ocrBusy = null; st.ocrErr = (e && e.message) || 'OCR 실패'; if (report._siteDeep === st) paintDeep(st); });
       });
@@ -7923,7 +8003,7 @@ function render(report, opts = {}) {
       inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
     };
     // url 인자를 주면 그 주소로, 없으면 추적된 홈페이지로 분석
-    const runDeep = (url) => {
+    const runDeep = (url, auto) => {
       report._siteDeep = { loading: true };
       paintDeep(report._siteDeep);
       // 확정 사이트 우선. 확정 실패라도 최고점 후보(2점 이상)가 있으면 그걸로라도 분석한다
@@ -7941,11 +8021,12 @@ function render(report, opts = {}) {
           if (c.origLink && pickC && c.host === pickC.host && !seeds.includes(c.origLink)) seeds.push(c.origLink);
         });
       }
-      siteDeepAnalyze(report.meta.vendor_name, hpUrl, seeds)
+      siteDeepAnalyze(report.meta.vendor_name, hpUrl, seeds, { noLlm: !!auto })
         .then((state) => {
           report._siteDeep = reconcileDeep(state, report);   // 공식 API와 대조해 모순을 표시
 
           paintDeep(report._siteDeep);
+          if (typeof refreshBrief === 'function') refreshBrief(report);   // 역량 요약의 설비·인증·CAPA
           refreshProductLines(report);   // 홈페이지 제품 분류를 생산 제품군 카드의 '추정' 근거로
           refreshVisitChecklist(report); // 인증·제형·설비 확인항목을 체크리스트에 반영
           saveLastReport(report);
@@ -7982,6 +8063,16 @@ function render(report, opts = {}) {
       const btn = el('button', 'sd-run', '🔬 심층분석 실행');
       btn.addEventListener('click', () => runDeep());
       sdBox.appendChild(btn);
+      // 홈페이지를 찾았으면 무료 분석은 바로 돌린다 — 버튼을 눌러야만 설비·인증이 보이던 것을 없앤다(업체당 한 번)
+      const autoDeep = () => {
+        const hp = report._homepage;
+        const okHp = hp && (hp.proposed || (Array.isArray(hp.candidates) && hp.candidates.some((c) => (c.score || 0) >= 2)));
+        if (!okHp || report._deepAuto || report._siteDeep || currentReport !== report || !getProxy() || !sdBox.isConnected) return;
+        Object.defineProperty(report, '_deepAuto', { configurable: true, value: true });
+        runDeep(undefined, true);
+      };
+      if (report._homepage !== undefined) setTimeout(autoDeep, 0);
+      else if (report._hpP) report._hpP.then(() => setTimeout(autoDeep, 50)).catch(() => {});
       const man = el('div');
       man.innerHTML = sdManualRow('');
       sdBox.appendChild(man);

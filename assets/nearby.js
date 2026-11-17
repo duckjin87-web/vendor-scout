@@ -1172,6 +1172,9 @@ function mountReportTabs(root, report, actions, areaEl) {
       // 탭 줄은 sticky라 붙어 있을 때 그 위치로는 원래 자리를 알 수 없다 → 붙지 않는 패널의 윗변으로 잰다.
       // (enter 애니메이션의 translate가 섞이기 전에 잰다)
       p.classList.remove('enter');
+      // 옮겨 가는 방향으로 밀려 들어온다(오른쪽 탭이면 오른쪽에서)
+      const ti = (id) => tabs.findIndex((t) => t.id === id);
+      p.style.setProperty('--pane-dx', `${ti(tab) > ti(prev) ? 28 : -28}px`);
       const topH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--topbar-h')) || 0;
       const lim = topH + bar.offsetHeight;
       const pt = p.getBoundingClientRect().top;
