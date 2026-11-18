@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 244;
+const BUILD = 245;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2621,7 +2621,9 @@ async function liveLookup(name) {
       // 한국콜마: 명단의 「한국콜마(주)」 사업자번호가 분할 뒤 「한국콜마홀딩스(주)」 것이라 지주사 리포트가 바로 나왔다.
       const renamed = !!(f && nkeyL(f.corpNm) !== nkeyL(one.corpNm));
       const others = ledC.filter((c) => c !== one), fscSim = noLic.filter((c) => !f || dg(c.bzno) !== dg(f.bzno));
-      if (!renamed && !others.length && !fscSim.length) {
+      // 이름이 정말 가까운 것(이름을 품거나 80% 이상 같음)이 있을 때만 멈춘다 — 71% 정도의 먼 이름까지 묻지 않는다
+      const close = [...others.filter((c) => (c._score || 0) >= 0.8), ...fscSim.filter((c) => (c._sim || 0) >= 0.8)];
+      if (!renamed && !close.length) {
         return { report: await finishLive(one.corpNm, f ? { ...f, _lookup: lookup } : { corpNm: one.corpNm, bzno: one.bzno, addr: one.addr, _lookup: lookup }) };
       }
       const oneC = { ...one, _why: renamed ? `${one._why} · 이 사업자번호의 지금 법인명은 「${f.corpNm}」 — 분할·사명 변경 여부 확인` : one._why };
