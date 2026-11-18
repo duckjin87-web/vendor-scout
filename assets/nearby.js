@@ -1127,7 +1127,7 @@ function mountReportTabs(root, report, actions, areaEl) {
   tabs.push({ id: 'nearby', label: '근처 업체' });
   // 조회 대기 화면에 넘겨 보이던 업계 소식을 여기서 전체 목록으로 다시 본다(프록시가 있어야 조회된다)
   const hasTrend = typeof mountTrendPane === 'function' && typeof getProxy === 'function' && getProxy();
-  if (hasTrend) tabs.push({ id: 'news', label: '관련기사 <small class="rtab-sub">업계</small>' });
+  if (hasTrend) tabs.push({ id: 'news', label: '업계기사' });
   const bar = el('div', 'rtabs');
   bar.setAttribute('role', 'tablist');
   bar.setAttribute('aria-label', '리포트 보기');

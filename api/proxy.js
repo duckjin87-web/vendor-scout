@@ -190,9 +190,10 @@ function handleNaver(url, env, kind) {
 }
 
 // 임의 페이지 텍스트 취득 — 홈페이지 대조·심층분석용. http(s)만, 400KB 상한(SPA 임베드 JSON 수용).
-// 홈페이지 이미지(OCR용) — 화장품 업체 홈페이지는 설비·인증·생산능력을 글자 대신 이미지로 올리는 곳이 많다.
+// 홈페이지 이미지(OCR용)·PDF(service=doc, 12MB까지) — 화장품 업체 홈페이지는 설비·인증·생산능력을 글자 대신 이미지로 올리는 곳이 많다.
 // 브라우저가 남의 도메인 이미지 픽셀을 읽을 수 없어(CORS) 여기서 받아 그대로 돌려준다. 이미지 형식·4MB까지만.
-async function handleImg(url) {
+async function handleImg(url, kind) {
+  const doc = kind === 'doc';
   const target = url.searchParams.get('url');
   if (!target || !/^https?:\/\//i.test(target)) return jsonRes({ error: 'url 파라미터(http/https) 필요' }, 400);
   let host = '';
@@ -202,13 +203,15 @@ async function handleImg(url) {
   try {
     up = await fetch(target, { redirect: 'follow', signal: AbortSignal.timeout(15000), headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-      'Accept': 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8', 'Referer': new URL(target).origin + '/' } });
+      'Accept': doc ? 'application/pdf,*/*;q=0.5' : 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8', 'Referer': new URL(target).origin + '/' } });
   } catch (e) { return jsonRes({ error: '이미지 호출 실패', detail: String(e && e.message || e) }, 502); }
   const ct = (up.headers.get('content-type') || '').toLowerCase();
   if (!up.ok) return jsonRes({ error: `이미지 HTTP ${up.status}` }, 502);
-  if (!/^image\/(png|jpe?g|gif|webp|bmp)/.test(ct)) return jsonRes({ error: '이미지 형식 아님', type: ct.slice(0, 40) }, 415);
+  if (doc ? !/^application\/(pdf|octet-stream)/.test(ct) : !/^image\/(png|jpe?g|gif|webp|bmp)/.test(ct)) return jsonRes({ error: doc ? 'PDF 형식 아님' : '이미지 형식 아님', type: ct.slice(0, 40) }, 415);
   const buf = await up.arrayBuffer();
-  if (buf.byteLength > 4 * 1024 * 1024) return jsonRes({ error: '이미지가 너무 큼(4MB 초과)' }, 413);
+  const lim = doc ? 12 : 4;
+  if (buf.byteLength > lim * 1024 * 1024) return jsonRes({ error: `파일이 너무 큼(${lim}MB 초과)` }, 413);
+  if (doc && new TextDecoder().decode(new Uint8Array(buf.slice(0, 5))) !== '%PDF-') return jsonRes({ error: 'PDF 아님' }, 415);
   return new Response(buf, { status: 200, headers: { 'Content-Type': ct, 'Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*' } });
 }
 async function handleFetchPage(url) {
@@ -496,6 +499,7 @@ export default async function handler(req) {
     if (service === 'naverLocal')      return handleNaver(url, env, 'local');
     if (service === 'fetchPage')       return handleFetchPage(url);
     if (service === 'img')             return handleImg(url);
+    if (service === 'doc')             return handleImg(url, 'doc');   // 회사소개서·카탈로그 PDF(심층분석)
     if (service === 'ntsStatus')       return handleNtsStatus(url, env);
     if (service === 'ntsValidate')     return handleNtsValidate(url, env);
     if (service === 'siteExtract')     return handleSiteExtract(url, env);

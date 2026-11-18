@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 242;
+const BUILD = 244;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -628,6 +628,78 @@ function harvestFromHtml(html, baseUrl) {
   const text = parts.filter(Boolean).join('\n');
   return { text, bodyLen: body.length, totalLen: text.length };
 }
+// ── 사이트 유형 판별 ── 수집 전략과 결과 신뢰도 표시에 쓴다
+function siteTypeOf(html, first) {
+  const h = String(html || '');
+  const builder = /cdn\.imweb\.me|imweb/i.test(h) ? '아임웹' : /cafe24|echosting/i.test(h) ? '카페24' : /wixstatic|wix\.com/i.test(h) ? 'Wix'
+    : /sixshop/i.test(h) ? '식스샵' : /godomall|nhn-commerce/i.test(h) ? '고도몰' : /gnuboard|\/g5\/|g5_/i.test(h) ? '그누보드' : /wp-content|wordpress/i.test(h) ? '워드프레스'
+      : /modoo\.at/i.test(h) ? '네이버 모두' : null;
+  const frame = /<frameset|<frame\b/i.test(h);
+  const spa = (first && first.bodyLen < 400) && /id=["'](?:__next|app|root|__nuxt)["']|__NUXT__|__NEXT_DATA__|ng-version|data-reactroot/i.test(h);
+  const imgN = (h.match(/<img\b/gi) || []).length;
+  const imgHeavy = !!first && first.bodyLen < 1200 && imgN >= 6;
+  const label = frame ? '프레임 구조' : spa ? '자바스크립트 렌더링(SPA)' : imgHeavy ? '이미지 위주' : builder ? `${builder} 사이트` : '일반 HTML';
+  return { label, builder, frame, spa, imgHeavy };
+}
+const decodeURIComponentSafe = (u) => { try { return decodeURIComponent(u); } catch { return String(u || ''); } };
+const sameSite = (u, base) => { try { return new URL(u).hostname.replace(/^www\./, '') === new URL(base).hostname.replace(/^www\./, ''); } catch { return false; } };
+// 사이트맵(.xml) — 사이트맵 색인이면 한 단계 더 들어간다
+async function sitemapUrls(baseUrl) {
+  const origin = new URL(baseUrl).origin;
+  const read = async (u) => { const p = await proxyOnlyGet('fetchPage', { url: u }).catch(() => null); return String((p && p.text) || ''); };
+  let xml = await read(`${origin}/sitemap.xml`);
+  if (!/<loc>/i.test(xml)) { const rb = await read(`${origin}/robots.txt`); const sm = (rb.match(/sitemap:\s*(\S+)/i) || [])[1]; if (sm) xml = await read(sm); }
+  let locs = [...xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1].replace(/&amp;/g, '&'));
+  if (/<sitemapindex/i.test(xml)) {
+    const subs = await Promise.all(locs.slice(0, 3).map(read));
+    locs = subs.flatMap((x) => [...x.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1].replace(/&amp;/g, '&')));
+  }
+  return locs.filter((u) => sameSite(u, baseUrl) && !/\.(jpg|png|gif|pdf|zip)$/i.test(u)).slice(0, 400);
+}
+// 회사소개서·카탈로그 PDF 링크
+function extractPdfLinks(html, baseUrl) {
+  const out = [], re = /<a\b[^>]*href\s*=\s*["']([^"']+\.pdf(?:\?[^"']*)?)["'][^>]*>([\s\S]{0,200}?)<\/a>/gi; let m;
+  while ((m = re.exec(String(html || ''))) && out.length < 8) {
+    let href; try { href = new URL(m[1], baseUrl).href; } catch { continue; }
+    const name = htmlToText(m[2]).trim() || decodeURIComponentSafe(href.split('/').pop());
+    const w = /(소개서|회사\s*소개|브로슈어|브로셔|brochure|catalog|카탈로그|company|profile|introduc|설비|공장|factory|인증)/i.test(`${name} ${href}`) ? 2 : 1;
+    out.push({ href, name, w });
+  }
+  return out.sort((a, b) => b.w - a.w);
+}
+// PDF 본문 — pdf.js(UMD)로 앞 15쪽 글자를 꺼낸다. 글자가 없는(스캔) PDF는 빈 값
+let _pdfjsP = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (_pdfjsP) return _pdfjsP;
+  const V = '3.11.174', base = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${V}`;
+  _pdfjsP = new Promise((ok, no) => {
+    const sc = document.createElement('script'); sc.src = `${base}/pdf.min.js`;
+    sc.onload = async () => {
+      const L = window.pdfjsLib; if (!L) { no(new Error('PDF 엔진 로드 실패')); return; }
+      // 다른 도메인 워커는 바로 못 띄운다 — 내용을 받아 blob 주소로 띄운다
+      try { const w = await (await fetch(`${base}/pdf.worker.min.js`)).text(); L.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([w], { type: 'text/javascript' })); } catch { /* 메인 스레드로 처리 */ }
+      ok(L);
+    };
+    sc.onerror = () => { _pdfjsP = null; no(new Error('PDF 엔진 로드 실패(네트워크)')); };
+    document.head.appendChild(sc);
+  });
+  return _pdfjsP;
+}
+async function pdfText(href) {
+  const r = await fetch(buildProxyUrl({ service: 'doc', url: href }), { signal: AbortSignal.timeout(30000) });
+  if (!r.ok) return '';
+  const buf = await r.arrayBuffer();
+  const L = await loadPdfJs();
+  const doc = await L.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;
+  const out = [];
+  for (let i = 1; i <= Math.min(15, doc.numPages); i++) {
+    const pg = await doc.getPage(i); const tc = await pg.getTextContent();
+    out.push(tc.items.map((x) => x.str).join(' '));
+  }
+  return out.join('\n').replace(/[ \t]{2,}/g, ' ');
+}
+
 async function gatherSiteText(baseUrl, companyName, seedUrls) {
   const got = await fetchPageSmart(baseUrl);
   const html = got.html;
@@ -677,11 +749,40 @@ async function gatherSiteText(baseUrl, companyName, seedUrls) {
   targets = targets.slice(0, 14);   // 회사소개 계열만 받고 설비·제품 페이지를 놓치던 문제
   const rawHtmls = [html];
   const rawPages = [{ u: baseUrl, h: html }];   // 이미지 주소를 페이지 기준으로 풀기 위해(OCR)
-  const subs = await Promise.all(targets.map((u) =>
+  // ① 사이트 유형 — 수집 방법을 고르고 결과를 믿을 만한지 알리는 데 쓴다
+  const siteType = siteTypeOf(html, first);
+  // ② 메뉴가 자바스크립트로만 그려지거나 관련 링크가 적으면 사이트맵에서 페이지를 찾는다
+  const via = { sitemap: 0, depth2: 0, pdf: 0 };
+  if (scored.length < 4 || siteType.spa) {
+    const sm = await sitemapUrls(baseUrl).catch(() => []);
+    sm.map((u) => ({ u, w: relRank(decodeURIComponentSafe(u)) })).filter((x) => x.w >= 2).sort((a, b) => b.w - a.w)
+      .forEach((x) => { const k = x.u.replace(/\/+$/, ''); if (!seen.has(k) && targets.length < 20) { seen.add(k); targets.push(x.u); via.sitemap++; } });
+  }
+  const fetchAll = (list) => Promise.all(list.map((u) =>
     proxyOnlyGet('fetchPage', { url: u }).then((p) => ({ u, h: (p && p.text) || '' })).catch(() => null)));
-  subs.forEach((s) => {
-    if (s && s.h) { const r = harvestFromHtml(s.h, s.u); rawPages.push(s); if (r.text) { texts.push(r.text); pages.push(s.u); rawHtmls.push(s.h); } }
+  const pageTexts = [{ u: baseUrl, t: first.text, kind: 'html' }];
+  const take = (subs) => subs.forEach((s) => {
+    if (s && s.h) { const r = harvestFromHtml(s.h, s.u); rawPages.push(s); if (r.text) { texts.push(r.text); pages.push(s.u); rawHtmls.push(s.h); pageTexts.push({ u: s.u, t: r.text, kind: 'html' }); } }
   });
+  const subs = await fetchAll(targets);
+  take(subs);
+  // ③ 두 번째 층 — 설비·인증 페이지가 「회사소개」 아래 하위 메뉴에 있는 사이트가 많다(관련도 높은 것만 6개)
+  const deeper = [];
+  subs.filter(Boolean).forEach((s) => {
+    if (!s.h || relRank(decodeURIComponentSafe(s.u)) < 2) return;
+    extractLinks(s.h, s.u).forEach((l) => {
+      const k = l.href.replace(/\/+$/, ''), w = Math.max(relRank(l.anchor || ''), relRank(decodeURIComponentSafe(l.href)));
+      if (w >= 3 && !seen.has(k) && !/wr_id=|\bidx=|articleView|view\.php\?/i.test(l.href) && sameSite(l.href, baseUrl)) { seen.add(k); deeper.push(l.href); }
+    });
+  });
+  if (deeper.length) { const d2 = await fetchAll(deeper.slice(0, 6)); take(d2); via.depth2 = d2.filter((x) => x && x.h).length; }
+  // ④ 회사소개서·카탈로그 PDF — 설비 목록·생산능력이 PDF에만 있는 경우가 많다(최대 2개, 앞 15쪽)
+  const pdfLinks = [];
+  rawPages.forEach((pg) => extractPdfLinks(pg.h, pg.u).forEach((x) => { if (!pdfLinks.some((y) => y.href === x.href)) pdfLinks.push(x); }));
+  for (const pl of pdfLinks.slice(0, 2)) {
+    const t = await pdfText(pl.href).catch(() => '');
+    if (t && t.replace(/\s/g, '').length > 80) { texts.push(t); pages.push(pl.href); pageTexts.push({ u: pl.href, t, kind: 'pdf', name: pl.name }); via.pdf++; }
+  }
 
   const homeText = texts.join('\n');
   // ★ 홈페이지 본문과 웹 검색 텍스트는 절대 합치지 않는다.
@@ -703,6 +804,8 @@ async function gatherSiteText(baseUrl, companyName, seedUrls) {
     webText: webText.slice(0, 100000),        // 참고용(키워드 전용)
     pages, webFallback: !!webText, thin: first.bodyLen < 400,
     html: rawHtmls.join('\n').slice(0, 600000), // 설비 추정용 원본(이미지 태그 분석)
+    pageTexts: pageTexts.map((x) => ({ ...x, t: x.t.slice(0, 120000) })),   // 페이지별 본문 — 용어가 어느 페이지에서 나왔는지
+    siteType, via, pdfFound: pdfLinks.length,
     ocrCands: ocrCandidates(rawPages),          // 글자가 든 것으로 보이는 이미지(OCR 버튼용)
     resolvedUrl: baseUrl,
   };
@@ -1036,7 +1139,8 @@ function mergeOcrIntoDeep(state, imgs) {
   CERT_PATTERNS.forEach((c) => {
     if (have.has(c.label) || !c.re.test(all)) return;
     const ev = pickSentences(all, c.re, { cap: 1 })[0] || null;
-    (tabs.cert || (tabs.cert = [])).push({ label: c.label, grp: c.grp, evidence: `[이미지 글자 · ${whereOf(c.re)}] ${ev ? ev.slice(0, 100) : ''}`, ocr: true, ...certOwnership(ev) });
+    const img = withText.find((x) => c.re.test(x.text));
+    (tabs.cert || (tabs.cert = [])).push({ label: c.label, grp: c.grp, evidence: `[이미지 글자 · ${whereOf(c.re)}] ${ev ? ev.slice(0, 100) : ''}`, ocr: true, page: img ? img.url : null, ...certOwnership(ev) });
     found.cert++;
   });
   // 설비·인증 용어
@@ -1045,7 +1149,14 @@ function mergeOcrIntoDeep(state, imgs) {
       const list = tabs[key] || (tabs[key] = []);
       const grp = list.find((x) => x.grp === g.grp) || (list.push({ grp: g.grp, terms: [] }), list[list.length - 1]);
       const low = new Set(grp.terms.map((t) => t.toLowerCase().replace(/\s/g, '')));
-      g.terms.forEach((t) => { const k = t.toLowerCase().replace(/\s/g, ''); if (!low.has(k)) { grp.terms.push(`${t} (이미지)`); low.add(k); if (key === 'equipTerms') found.equip++; } });
+      g.terms.forEach((t) => {
+        const k = t.toLowerCase().replace(/\s/g, '');
+        // 본문에도 있던 용어면 '교차 확인'으로 남기고, 새 용어면 이미지 출처로 더한다
+        const hit = withText.find((x) => x.text.toLowerCase().replace(/\s/g, '').includes(k));
+        const ts = d.termSrc || (d.termSrc = {}); const a = ts[k] || (ts[k] = []); if (hit && !a.some((x) => x.u === hit.url)) a.push({ kind: 'img', u: hit.url });
+        const tp = d.termPages || (d.termPages = {}); if (hit && !tp[k]) tp[k] = hit.url;
+        if (!low.has(k)) { grp.terms.push(`${t} (이미지)`); low.add(k); if (key === 'equipTerms') found.equip++; }
+      });
     });
   };
   mergeTerms('equipTerms', EQUIP_LEX);
@@ -1054,7 +1165,7 @@ function mergeOcrIntoDeep(state, imgs) {
   const capaSeen = new Set((tabs.capa || []).map((c) => `${c.kind}|${c.value}`));
   withText.forEach((x) => extractCapa(x.text).forEach((c) => {
     const k = `${c.kind}|${c.value}`; if (capaSeen.has(k)) return; capaSeen.add(k);
-    (tabs.capa || (tabs.capa = [])).push({ ...c, context: `[이미지 · ${x.file}] ${c.context}`, ocr: true });
+    (tabs.capa || (tabs.capa = [])).push({ ...c, context: `[이미지 · ${x.file}] ${c.context}`, ocr: true, page: x.url });
     found.capa++;
   }));
   state.ocr = { at: Date.now(), tried: imgs.length, read: withText.length, found,
@@ -1193,6 +1304,19 @@ async function siteDeepHeuristic(name, hpUrl, seeds) {
   // ④ 사이트에 실제 표기된 설비·인증 용어를 그대로 회수(카테고리 라벨보다 구체적)
   const equipTerms = extractLexicon(T, EQUIP_LEX);
   const certTerms = extractLexicon(T, CERT_LEX);
+  // ⑤ 용어·인증·수치가 어느 페이지(또는 PDF)에서 나왔는지 — 화면의 출처 표시와 교차 확인에 쓴다
+  const termSrc = {};
+  const kOf = (t) => String(t).toLowerCase().replace(/\s/g, '');
+  const note = (key, kind, u) => { const a = termSrc[key] || (termSrc[key] = []); if (!a.some((x) => x.kind === kind && x.u === u)) a.push({ kind, u }); };
+  (g.pageTexts || []).forEach((pg) => {
+    [...extractLexicon(pg.t, EQUIP_LEX), ...extractLexicon(pg.t, CERT_LEX)].forEach((grp) => grp.terms.forEach((t) => note(kOf(t), pg.kind, pg.u)));
+    CERT_PATTERNS.forEach((c) => { if (c.re.test(pg.t)) note(kOf(c.label), pg.kind, pg.u); });
+  });
+  const pageHas = (needle) => { const n = String(needle || '').replace(/\s+/g, ' ').slice(0, 40); if (!n) return null; const pg = (g.pageTexts || []).find((x) => x.t.replace(/\s+/g, ' ').includes(n)); return pg ? pg.u : null; };
+  certDetail.forEach((c) => { c.page = (termSrc[kOf(c.label)] || [])[0] ? termSrc[kOf(c.label)][0].u : pageHas(c.evidence); });
+  capaItems.forEach((c) => { c.page = pageHas(c.value) || pageHas(c.context); });
+  const termPages = {};
+  Object.entries(termSrc).forEach(([k, a]) => { termPages[k] = a[0].u; });
   const tabs = {
     cert: certDetail.length ? certDetail : null,
     certTerms: certTerms.length ? certTerms : null,
@@ -1204,12 +1328,13 @@ async function siteDeepHeuristic(name, hpUrl, seeds) {
     company_name: name || null, business_type, product_categories, production_items,
     quality_certifications, production_sites, equipment, rnd_centers, export_markets,
     hq_address: addrM ? addrM[1].trim() : null, phone: phoneM ? phoneM[1] : null, notable,
-    keywords: keywords.length ? keywords : null, equipment_inferred, tabs,
+    keywords: keywords.length ? keywords : null, equipment_inferred, tabs, termSrc, termPages,
   };
   const any = Object.entries(data).some(([k, v]) => k !== 'company_name' && v != null && (!Array.isArray(v) || v.length));
   return {
     data: any ? data : null, source: 'heuristic', pages: g.pages, base: baseUrl, ocrCands: g.ocrCands || [],
-    harvest: { webFallback: !!g.webFallback, thin: !!g.thin, chars: g.text.length },
+    harvest: { webFallback: !!g.webFallback, thin: !!g.thin, chars: g.text.length, siteType: g.siteType, via: g.via, pdfFound: g.pdfFound,
+      pdfs: (g.pageTexts || []).filter((x) => x.kind === 'pdf').map((x) => ({ u: x.u, name: x.name })) },
     reason: any ? null : '페이지에서 의미 있는 텍스트를 찾지 못했습니다(이미지 전용 사이트 가능)',
   };
 }
@@ -2480,6 +2605,7 @@ async function liveLookup(name) {
   const ledC = await ledgerCandidates(name).catch(() => null);
   if (ledC) {
     const exactL = ledC.filter((c) => c._exact);
+    const nkeyL = (v) => stripCorp(v || '').replace(/\s/g, '');
     const fscOf = (l) => cands.find((c) => dg(c.bzno).length === 10 && dg(c.bzno) === dg(l.bzno));
     // 명단에 없는 금융위 법인 — 같은 이름이어도 화장품 제조업 허가가 없다. 참고로만 아래에 둔다
     const noLic = cands.filter((c) => c._sim >= 0.62 && !ledC.some((l) => dg(l.bzno).length === 10 && dg(l.bzno) === dg(c.bzno)))
@@ -2491,7 +2617,15 @@ async function liveLookup(name) {
         basis: `식약처 화장품 제조업 허가 명단의 「${one.corpNm}」${one.bzno ? `(사업자 ${one.bzno})` : ''}${one.pdate ? ` · ${one.pdate} 허가` : ''}`, alts };
       // 금융위 후보 첫 30건에 없으면 사업자번호로 한 번 더 찾는다 — 없으면 법인번호가 비어 재무를 못 부른다
       const f = fscOf(one) || (await fscByBz(one.corpNm, one.bzno).catch(() => ({}))).pick;
-      return { report: await finishLive(one.corpNm, f ? { ...f, _lookup: lookup } : { corpNm: one.corpNm, bzno: one.bzno, addr: one.addr, _lookup: lookup }) };
+      // 비슷한 이름이 더 있거나, 사업자번호의 지금 법인명이 명단 이름과 다르면 바로 조회하지 않고 고르게 한다.
+      // 한국콜마: 명단의 「한국콜마(주)」 사업자번호가 분할 뒤 「한국콜마홀딩스(주)」 것이라 지주사 리포트가 바로 나왔다.
+      const renamed = !!(f && nkeyL(f.corpNm) !== nkeyL(one.corpNm));
+      const others = ledC.filter((c) => c !== one), fscSim = noLic.filter((c) => !f || dg(c.bzno) !== dg(f.bzno));
+      if (!renamed && !others.length && !fscSim.length) {
+        return { report: await finishLive(one.corpNm, f ? { ...f, _lookup: lookup } : { corpNm: one.corpNm, bzno: one.bzno, addr: one.addr, _lookup: lookup }) };
+      }
+      const oneC = { ...one, _why: renamed ? `${one._why} · 이 사업자번호의 지금 법인명은 「${f.corpNm}」 — 분할·사명 변경 여부 확인` : one._why };
+      return { candidates: [oneC, ...others, ...fscSim], name, source: 'ledger', similar: false, pick: true };
     }
     // 주간 명단에 이름이 딱 맞는 업체가 없으면, 명단 반영 전 신규 허가일 수 있다 — 식약처 공개 API·의약품안전나라를 한 번 더 본다.
     // 예전에는 비슷한 이름이 하나라도 있으면 거기서 멈춰, 이번 주 허가 업체(제이티코스)는 후보에도 안 나왔다.
@@ -3615,6 +3749,9 @@ function hireTerms(posts) {
 
 // 수집된 공고를 연도·직종으로 집계하고 신호를 판정한다. 전부 '추정'이며 근거를 함께 남긴다.
 function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile, hpHints, workAddrs) {
+  // 최근 3개년(올해 포함)만 본다 — 그보다 오래된 공고는 지금 인력 상황을 말해 주지 않는다. 날짜를 모르는 공고는 남긴다.
+  { const minY = new Date().getFullYear() - 2;
+    posts = (posts || []).filter((p) => !p.dates || !p.dates.length || p.dates.some((d) => Number(String(d).slice(0, 4)) >= minY)); }
   if (!posts || !posts.length) return { ok: false, reason: '채용 사이트에서 이 업체 공고를 찾지 못했습니다', posts: [], heads: heads || [], extProfile: extProfile || [], hpHints: hpHints || [], workAddrs: workAddrs || [] };
   const now = new Date();
   const curY = now.getFullYear();
@@ -4071,7 +4208,7 @@ function renderCandidates(name, cands, source, similar) {
     box.appendChild(el('div', 'candhead', source === 'none'
       ? `「${esc(name)}」와 비슷한 <b>화장품 제조업 허가 업체를 찾지 못했습니다</b>`
         + `<span class="candsub">식약처 화장품 제조업 명단(4천여 곳)과 의약품안전나라에서 찾았습니다. 아래는 제조업 허가가 없는 법인이라 참고로만 보세요</span>`
-      : `「${esc(name)}」${similar ? '와 <b>비슷한 이름의 화장품 제조업체</b>' : ' 화장품 제조업체'} <b>${lic.length}곳</b> — 조회할 업체를 고르세요`
+      : `「${esc(name)}」${similar ? '와 <b>비슷한 이름의 화장품 제조업체</b>' : ' 화장품 제조업체'} <b>${lic.length}곳</b>${noLic.length ? ` · 비슷한 이름의 법인 ${noLic.length}곳` : ''} — 조회할 업체를 고르세요`
         + `<span class="candsub">식약처 화장품 제조업 허가 명단 기준 · 업체마다 후보가 된 이유를 적었습니다</span>`));
   } else {
   const headSrc = isMfds ? '식약처 화장품제조업 등록업체 기준'
@@ -4118,7 +4255,7 @@ function renderCandidates(name, cands, source, similar) {
     lic.forEach((c) => box.appendChild(card0(c)));
     if (noLic.length) {
       const d = el('details', 'cand-nolic-box');
-      d.open = source === 'none';
+      d.open = source === 'none' || noLic.length <= 6;
       d.innerHTML = `<summary>화장품 제조업 허가 명단에 없는 동명·유사 법인 ${noLic.length}곳 <small>금융위 법인 · 참고용</small></summary>`;
       noLic.forEach((c) => d.appendChild(card0(c)));
       box.appendChild(d);
@@ -5073,8 +5210,7 @@ function renderCheckWeb(report) {
       html += `<li class="ib-${esc(t.tone)}">` +
         `<span class="ib-date">${esc(g.date)}</span>` +
         `<span class="ib-tag ib-tag-${esc(t.tone)}">${esc(t.tag)}</span>` +
-        `<div class="ib-body"><a href="${esc(t.link || '#')}" target="_blank" rel="noopener">${esc(t.title)}</a>${relB(t.rel)}` +
-        (t.desc ? `<div class="ib-desc">${esc(t.desc)}</div>` : '');
+        `<div class="ib-body">${wiHtml(t.title, t.desc, t.link, relB(t.rel))}`;
       if (rest.length) {
         html += `<details class="ib-more"><summary>외 ${rest.length}건`
           + (tags.length > 1 ? ` · ${esc(tags.slice(1).join('·'))} 포함` : '') + `</summary><ul>`
@@ -5093,8 +5229,8 @@ function renderCheckWeb(report) {
     oem.forEach((o) => {
       const tagCls = o.tag === '채용' ? 'ot-hire' : o.tag === '기업보고서' ? 'ot-report' : o.tag === '제조원/납품' ? 'ot-oem' : 'ot-etc';
       const t = o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.title || o.link)}</a>` : esc(o.title || '');
-      html += `<li><div class="ot-t"><span class="ot-tag ${tagCls}">${esc(o.tag || '언급')}</span>${t}${relB(o.rel)}</div>` +
-        (o.desc ? `<div class="ot-d">${esc(o.desc)}</div>` : '') + `</li>`;
+      void t;
+      html += `<li><div class="ot-t"><span class="ot-tag ${tagCls}">${esc(o.tag || '언급')}</span>${wiHtml(o.title || o.link, o.desc, o.link, relB(o.rel))}</div></li>`;
     });
     html += '</ul>';
     if (oem.some((o) => o.tag === '기업보고서')) {
@@ -5117,9 +5253,7 @@ function renderCheckWeb(report) {
       const title = String(n.title || '').replace(/<\/?b>/g, '');
       const desc = String(n.description || '').replace(/<\/?b>/g, '');
       const date = n.pubDate ? new Date(n.pubDate).toLocaleDateString('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
-      html += `<li><a href="${esc(n.link || '#')}" target="_blank" rel="noopener" class="ntitle">${esc(title)}</a>` +
-        `<div class="ndesc">${esc(desc.slice(0, 120))}${desc.length > 120 ? '…' : ''}</div>` +
-        `<div class="nmeta">${esc(date)}${relB(n._rel)}</div></li>`;
+      html += `<li>${wiHtml(title, desc, n.link, date ? `<span class="nmeta">${esc(date)}</span>` : '', relB(n._rel))}</li>`;
     });
     html += '</ul>';
   }
@@ -5137,7 +5271,22 @@ function renderCheckWeb(report) {
       + `</details>`;
   }
   box.innerHTML = html;
+  bindWebItems(box);
   return box;
+}
+// 웹 자료 한 줄 — 제목만 보이고, 한 번 누르면 기사 요약이 펼쳐지고, 한 번 더 누르면 원문으로 간다
+function wiHtml(title, desc, link, after, after2) {
+  const t = esc(String(title || '').replace(/<\/?b>/g, '')), d = String(desc || '').replace(/<\/?b>/g, '').trim();
+  return `<div class="wi"><a class="wi-t" href="${esc(link || '#')}" target="_blank" rel="noopener" aria-expanded="false">${t}</a>${after || ''}`
+    + `<div class="wi-d"><div>${d ? esc(d.slice(0, 220)) + (d.length > 220 ? '…' : '') : '요약이 없습니다.'}${link ? ' <span class="wi-go">한 번 더 누르면 원문으로 이동 ↗</span>' : ''}${after2 || ''}</div></div></div>`;
+}
+function bindWebItems(box) {
+  box.addEventListener('click', (e) => {
+    const a = e.target.closest('.wi-t'); if (!a) return;
+    const w = a.closest('.wi');
+    if (!w.classList.contains('open')) { e.preventDefault(); box.querySelectorAll('.wi.open').forEach((x) => { x.classList.remove('open'); x.querySelector('.wi-t').setAttribute('aria-expanded', 'false'); }); w.classList.add('open'); a.setAttribute('aria-expanded', 'true'); }
+    else if (!a.getAttribute('href') || a.getAttribute('href') === '#') e.preventDefault();
+  });
 }
 
 // 🧑‍🏭 채용공고 추적 렌더 — 추정임을 숨기지 않는다. 수집 편향과 해석의 갈림길을 함께 적는다.
@@ -5151,7 +5300,7 @@ function renderHiring(h) {
   }
   const yrs = Object.keys(h.byYear).sort();
   const maxN = Math.max(1, ...Object.values(h.byYear));
-  let html = `<h4>채용공고 추적 <span>공고 ${h.posts.length}건${h.spanYears ? ` · ${h.spanYears}개년 확인` : ''}</span></h4>`;
+  let html = `<h4>채용공고 추적 <span>최근 3개년 공고 ${h.posts.length}건${h.spanYears ? ` · ${h.spanYears}개년 확인` : ''}</span></h4>`;
 
   // 판정 신호 — 가장 중요한 결론이므로 맨 위
   if (h.signals.length) {
@@ -5222,13 +5371,13 @@ function renderHiring(h) {
 
   if (h.affil && h.affil.length) html += `<div class="hire-warn">이름이 비슷한 계열·동명 회사 공고는 집계에서 뺐습니다: ${esc(h.affil.join(', '))}</div>`;
   // 근거 원문 — 추정의 출처를 사용자가 직접 열어볼 수 있어야 한다
-  const show = h.posts.slice(0, 6);
-  html += `<div class="hire-sec">공고 원문 <em>클릭 시 해당 사이트</em></div><ul class="hire-list">`
-    + show.map((p) => `<li><span class="hdt">${esc((p.dates[0] || '').slice(0, 7) || '—')}</span>`
+  // 공고 원문은 접어 둔다 — 필요할 때만 펼쳐 본다
+  html += `<details class="hire-raw"><summary>공고 원문 ${h.posts.length}건 <em>최근 3개년 · 클릭 시 해당 사이트</em></summary><ul class="hire-list">`
+    + h.posts.slice(0, 20).map((p) => `<li><span class="hdt">${esc((p.dates[0] || '').slice(0, 7) || '—')}</span>`
       + `<a href="${esc(p.link)}" target="_blank" rel="noopener">${esc(p.title.slice(0, 60))}</a>`
       + `<span class="hrl">${esc(p.role)}</span></li>`).join('')
-    + (h.posts.length > show.length ? `<li class="more">외 ${h.posts.length - show.length}건</li>` : '')
-    + '</ul>';
+    + (h.posts.length > 20 ? `<li class="more">외 ${h.posts.length - 20}건</li>` : '')
+    + '</ul></details>';
   // 한계 고지 — 이걸 빼면 추정이 사실처럼 읽힌다
   html += `<div class="hire-warn">※ 마감된 공고는 사이트에서 내려가 검색에 잡히지 않습니다. 과거일수록 적게 집계되며`
     + (h.undated ? `, 날짜를 확인하지 못한 공고가 ${h.undated}건 있습니다` : '')
@@ -5274,8 +5423,8 @@ function renderHomepageInto(box, hp) {
   }
   const others = (hp.candidates || []).filter((c) => !p || c.host !== p.host);
   if (others.length) {
-    html += `<div class="hp-cands"><i>후보</i>` + others.map((c) =>
-      `<a href="${esc(c.url)}" target="_blank" rel="noopener" class="hp-cand">${esc(c.host)}${c.matches.length ? ` <b>${c.matches.join('·')}</b>` : ''}${c.score ? ` <em>${c.score}점</em>` : ''}</a>`).join('') + `</div>`;
+    html += `<details class="hp-cands-d"><summary>다른 후보 ${others.length}곳 보기</summary><div class="hp-cands">` + others.map((c) =>
+      `<a href="${esc(c.url)}" target="_blank" rel="noopener" class="hp-cand">${esc(c.host)}${c.matches.length ? ` <b>${c.matches.join('·')}</b>` : ''}${c.score ? ` <em>${c.score}점</em>` : ''}</a>`).join('') + `</div></details>`;
   }
   box.innerHTML = html;
 }
@@ -5407,7 +5556,11 @@ function renderSiteDeepInto(box, state) {
   }
   // 수집 범위 — 몇 페이지를 봤는지 알아야 '없다'는 결과를 믿을 수 있다
   if (Array.isArray(state.pages) && state.pages.length) {
-    html += `<div class="sd-scope">수집 ${state.pages.length}개 페이지`
+    const V = (hv && hv.via) || {};
+    html += `<div class="sd-scope">${hv && hv.siteType ? `<b class="sd-type">${esc(hv.siteType.label)}</b> ` : ''}수집 ${state.pages.length}개 페이지`
+      + (V.sitemap ? ` (사이트맵 ${V.sitemap})` : '') + (V.depth2 ? ` · 하위 메뉴 ${V.depth2}` : '')
+      + (hv && hv.pdfs && hv.pdfs.length ? ` · PDF ${hv.pdfs.map((x) => `<a href="${esc(x.u)}" target="_blank" rel="noopener">${esc(String(x.name || 'PDF').slice(0, 24))}</a>`).join(', ')}` : '')
+      + (state.ocr ? ` · 이미지 글자 ${state.ocr.read}장` : '')
       + (hv && hv.chars ? ` · 본문 ${Math.round(hv.chars / 1000)}천자` : '')
       + ` <em>이 범위 안에서 찾은 내용입니다</em></div>`;
   }
@@ -5419,9 +5572,19 @@ function renderSiteDeepInto(box, state) {
   const capa = tabs.capa || [];
   const nTerms = (list) => list.reduce((s, g) => s + g.terms.length, 0);
   // 사이트에 실제 표기된 용어를 그룹별 칩으로
+  // 용어마다 어디서 나왔는지(본문·PDF·이미지) — 두 종류 이상에서 나오면 「교차 확인」
+  const TS = d.termSrc || {};
+  const SRCN = { html: '본문', pdf: 'PDF', img: '이미지' };
+  const termChip = (t) => {
+    const k = String(t).replace(/\s*\(이미지\)$/, '').toLowerCase().replace(/\s/g, '');
+    const a = TS[k] || [], kinds = [...new Set(a.map((x) => x.kind))];
+    const href = a[0] ? a[0].u : null;
+    const lab = `${esc(String(t).replace(/\s*\(이미지\)$/, ''))}<i>${kinds.length ? kinds.map((x) => SRCN[x] || x).join('·') : /\(이미지\)$/.test(t) ? '이미지' : '본문'}</i>${kinds.length >= 2 ? '<b class="lex-x" title="두 종류 이상의 자료에서 확인">교차</b>' : ''}`;
+    return href ? `<a class="lex-chip" href="${esc(href)}" target="_blank" rel="noopener" title="${esc(href)}">${lab}</a>` : `<span class="lex-chip">${lab}</span>`;
+  };
   const termBlock = (list, note) => list.length
     ? list.map((g) => `<div class="sd-sec">${esc(g.grp)} <em>${g.terms.length}건</em></div>` +
-        `<div class="lex-chips">${g.terms.map((t) => `<span class="lex-chip">${esc(t)}</span>`).join('')}</div>`).join('') +
+        `<div class="lex-chips">${g.terms.map(termChip).join('')}</div>`).join('') +
       (note ? `<div class="sd-mini">${note}</div>` : '')
     : '';
   const eqi = d.equipment_inferred;
@@ -5457,7 +5620,7 @@ function renderSiteDeepInto(box, state) {
           `<li class="cert-${esc(c.level || 'own')}"><span class="cert-b">${esc(c.label)}</span>` +
           (c.level && c.level !== 'own' ? `<span class="cert-lv">${esc({ conflict: '⚠ 공식자료와 불일치', mention: '언급만 확인', weak: '근거 약함' }[c.level] || c.level)}</span>` : '') +
           (c.why ? `<i class="cert-why">${esc(c.why)}</i>` : '') +
-          (c.evidence ? `<em>${esc(c.evidence)}</em>` : '') + `</li>`).join('') + '</ul>';
+          (c.evidence ? `<em>${esc(c.evidence)}${c.page ? ` <a href="${esc(c.page)}" target="_blank" rel="noopener">출처</a>` : ''}</em>` : '') + `</li>`).join('') + '</ul>';
       }
       // 사이트에 그대로 적혀 있던 품질시스템·밸리데이션·규제 용어
       html += termBlock(certTerms, '사이트에 표기된 용어를 그대로 회수한 것입니다(원문 표현).');
@@ -5506,7 +5669,7 @@ function renderSiteDeepInto(box, state) {
         list.slice(0, 6).forEach((c) => {
           html += `<li><span class="capa-kind">${esc(kind)}</span>` +
             `<span class="capa-val">${esc(c.value)}</span>` +
-            `<div class="capa-ctx">…${esc(c.context)}…</div></li>`;
+            `<div class="capa-ctx">…${esc(c.context)}…${c.page ? ` <a href="${esc(c.page)}" target="_blank" rel="noopener">출처</a>` : ''}</div></li>`;
         });
       }
       html += '</ul><div class="sd-mini">홈페이지 게재 수치 — 설계 CAPA와 실가동은 다를 수 있습니다. 가동률·MOQ·리드타임은 방문 확인.</div>';
@@ -6186,10 +6349,10 @@ function renderVerdict(report) {
     + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
     + '</div>';
   // 이슈 줄 — 위험·불일치만 최대 3건. 「공개자료 미확인 N건」 같은 자료 공백은 이슈가 아니라 아래 줄에 따로 둔다
-  if (m.live && typeof bfIssuesHtml === 'function') html += bfIssuesHtml(report, Q);
+
   // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
   // 「공백 20」처럼 빠진 것만 세지 않고, 확인된 것과 남은 것을 같은 무게로 센다(프레이밍)
-  if (m.live && typeof bfIssuesHtml === 'function') {
+  if (m.live && typeof bfOneLine === 'function') {
     const gapTxt = downs.filter((x) => /^공개자료 미확인/.test(x))[0] || '';
     if (ups.length || gapTxt) html += `<div class="vd-why">`
       + (ups.length ? `<div class="vw up"><i>확인됨 <b data-cu="${ups.length}">${ups.length}</b></i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
@@ -7824,8 +7987,7 @@ function render(report, opts = {}) {
     if (report._diff) root.appendChild(el('div', 'pdiff' + (report._diff.added.length ? ' has-risk' : ''), diffBlockHtml(report._diff)));
     snapSave(report);
     root.appendChild(evidenceCard(report));
-    // 역량 요약 · 제조 실재성 · 같은 시·군 업체 — 접힌 상세를 열지 않아도 2·3차 정보가 보이게
-    if (typeof briefBlock === 'function') { const bb = briefBlock(report); if (bb) root.appendChild(bb); }
+
   }
 
   // 조회 메타는 판단에 쓰이지 않으니 아래로 내리고 한 줄로 줄인다
@@ -7844,18 +8006,23 @@ function render(report, opts = {}) {
 
   // 기업 기본정보 · 생산역량 · 재무 — 대시보드 바로 아래, '방문 전 확인필요' 위에 둔다.
   // 확인사항을 읽기 전에 어떤 회사인지(규모·인원·재무)를 먼저 보게 하려는 것이다.
+  // 카테고리별로 두 묶음 — 「기업 · 재무」와 「생산 · 역량」
   const core = el('div', 'blocks core-blocks');
+  const coreProd = el('div', 'blocks core-blocks');
   const btl = m.live ? bizTimelineBlock(report) : null;
   if (btl) core.appendChild(btl);
   core.appendChild(block('기업 기본정보', '', visible(report.basic), 'basic'));
   // 공장 면적은 '공장 면적' 탭에서 자세히 본다(실데이터일 때). 리포트에는 칸을 두지 않는다.
   const areaTab = renderAreaTab(report);
-  core.appendChild(block('생산역량 · 인원', '',
-    visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod'));
+  const prodB = block('생산역량 · 인원', '',
+    visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod');
+  // 역량 요약(제형·설비·인증·생산능력·재무)은 같은 이야기라 이 칸 아래에 출처와 함께 붙인다
+  if (typeof capSumEl === 'function') { const cs = capSumEl(report); if (cs) prodB.appendChild(cs); }
+  coreProd.appendChild(prodB);
   const plB = productLineBlock(report);
-  if (plB) core.appendChild(plB);
+  if (plB) coreProd.appendChild(plB);
   const wfB = workforceBlock(report);
-  if (wfB) core.appendChild(wfB);
+  if (wfB) coreProd.appendChild(wfB);
   if (!excl.has('finance')) core.appendChild(financeBlock(report));
   const allF = [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])];
   const gapN = allF.filter((x) => x.data_gap || x.value == null).length;
@@ -7871,7 +8038,13 @@ function render(report, opts = {}) {
   const pv = [];
   { const rv = typeof bfRevenue === 'function' ? bfRevenue(report) : null; if (rv) pv.push(`매출 ${rv.v}억(${rv.year})`);
     const em = (report.capacity || []).find((x) => x.key === '제조소 추정 근무 인원' && x.value); if (em) pv.push(`인원 ${String(em.value).split('·')[0].trim()}`); }
-  root.appendChild(foldSec('core', '기업 정보 · 생산역량 · 재무', `${pv.length ? `<b class="rsec-pv">${esc(pv.join(' · '))}</b> · ` : ''}항목 ${allF.length - gapN}개 확인${gapN ? ` · 공백 ${gapN}` : ''}`, core));
+  const bizF = [...(report.basic || []), ...(report.finance || [])], prodF = report.capacity || [];
+  const gapOf = (a) => a.filter((x) => x.data_gap || x.value == null).length;
+  const pvBiz = [pv.find((x) => /^매출/.test(x)), (() => { const e = (report.basic || []).find((x) => x.key === '설립일 / 등록일' && x.value); return e ? `설립 ${String(e.value).slice(0, 4)}` : ''; })()].filter(Boolean);
+  const pvProd = [pv.find((x) => /^인원/.test(x)), m.bld && m.bld.arch && !m.bld.unit ? `공장 ${Math.round(m.bld.arch / 3.305785).toLocaleString()}평` : ''].filter(Boolean);
+  const subOf = (pvs, arr) => `${pvs.length ? `<b class="rsec-pv">${esc(pvs.join(' · '))}</b> · ` : ''}항목 ${arr.length - gapOf(arr)}개 확인${gapOf(arr) ? ` · 공백 ${gapOf(arr)}` : ''}`;
+  root.appendChild(foldSec('core', '기업 · 재무', subOf(pvBiz, bizF), core));
+  root.appendChild(foldSec('prod', '생산 · 역량', subOf(pvProd, prodF), coreProd));
 
   // ✅ 방문 전 체크리스트 — 웹 기반(기사·채용·기술/제품) 실사 제안(실데이터일 때)
   //    심층분석 결과가 나중에 도착하면 갱신해야 하므로 id로 찾아 교체 가능하게 둔다.
@@ -8027,6 +8200,10 @@ function render(report, opts = {}) {
 
           paintDeep(report._siteDeep);
           if (typeof refreshBrief === 'function') refreshBrief(report);   // 역량 요약의 설비·인증·CAPA
+          // 본문이 적은(이미지 위주·SPA) 사이트는 이미지 글자 읽기를 바로 이어서 돌린다
+          { const st = report._siteDeep, hv = st && st.harvest;
+            const thin = hv && (hv.thin || (hv.siteType && (hv.siteType.imgHeavy || hv.siteType.spa)) || (hv.chars || 0) < 3000);
+            if (st && thin && (st.ocrCands || []).length && !st.ocr && !st.ocrBusy) { const b = sdBox.querySelector('.sd-ocr-run'); if (b) setTimeout(() => b.click(), 300); } }
           refreshProductLines(report);   // 홈페이지 제품 분류를 생산 제품군 카드의 '추정' 근거로
           refreshVisitChecklist(report); // 인증·제형·설비 확인항목을 체크리스트에 반영
           saveLastReport(report);
@@ -8100,7 +8277,9 @@ function render(report, opts = {}) {
   }
   root.appendChild(foldSec('more', '채용공고 · 홈페이지 · 근거 링크', '', blocks));
 
-  // 범례는 상세 자료 머리(접기 막대 옆)로 옮겼다 — 맨 아래에 있으면 등급을 읽을 때 이미 지나가 있다
+  // 상세는 카테고리 순서로 다시 놓는다 — 확인할 것 → 회사 → 생산 → 웹 활동 → 근거 자료 → 조회 정보
+  ['check', 'core', 'prod', 'web', 'more'].forEach((id) => { const d = root.querySelector(`:scope > details.rsec[data-fold="${id}"]`); if (d) root.appendChild(d); });
+  ['.srcstat', '.metaline'].forEach((q) => { const x = root.querySelector(`:scope > ${q}`); if (x) root.appendChild(x); });
   // 출처 — 맨 아래 한 줄로 간략히
   if (report.meta && report.meta.live) {
     const at = report.meta.query_at ? new Date(report.meta.query_at) : null;

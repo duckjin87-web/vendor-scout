@@ -1,0 +1,47 @@
+name: Diagnose lookup candidates
+
+# 배포된 사이트에서 상호 조회 → 후보 선택 단계가 뜨는지(바로 리포트로 가지 않는지) 확인한다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      names: { description: '조회할 상호(| 구분)', required: true, type: string, default: '한국콜마|코스맥스|모나미코스메틱' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Check
+        env:
+          SITE: ${{ inputs.site }}
+          NAMES: ${{ inputs.names }}
+        run: |
+          npm i -s playwright@1.56.1 2>&1 | tail -2
+          npx -y playwright@1.56.1 install --with-deps chromium 2>&1 | tail -1
+          cat > d.mjs <<'JS'
+          import { chromium } from 'playwright';
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3000));
+          const b = await chromium.launch();
+          const page = await b.newPage();
+          page.on('pageerror', (e) => n('pageerror ' + e.message));
+          await page.goto(process.env.SITE.replace(/\/$/, '') + '/');
+          await page.evaluate((s) => { localStorage.clear(); localStorage.setItem('vs_proxy', s.replace(/\/$/, '') + '/api/proxy'); }, process.env.SITE);
+          await page.reload(); await page.waitForTimeout(2500);
+          n('build ' + await page.evaluate(() => BUILD));
+          for (const nm of process.env.NAMES.split('|')) {
+            const r = await page.evaluate(async (q) => {
+              const res = await liveLookup(q).catch((e) => ({ err: e.message }));
+              if (res.err) return `에러 ${res.err}`;
+              if (res.candidates) return `후보 ${res.candidates.length}건 :: ${res.candidates.slice(0, 10).map((c) => `${c.corpNm}${c.noLicense ? '(허가없음)' : ''}/${c.bzno || ''}/${c._why || ''}`).join(' ‖ ')}`;
+              return `바로 리포트 → ${res.report && res.report.meta && res.report.meta.vendor_name}`;
+            }, nm);
+            n(`[${nm}] ${r}`);
+          }
+          await b.close();
+          JS
+          node d.mjs
