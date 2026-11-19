@@ -1455,7 +1455,7 @@ function assembleLiveReport(name, corp, res) {
         ? '★ 제품명 앞머리에서 2건 이상 반복된 표기입니다 — 실제 납품 브랜드일 가능성이 높지만 추정입니다. '
           + '업체가 말하는 거래처와 대조해 보시고, 차이가 크면 그 이유를 물어보세요.'
         : (rl.length ? '제품명에서 반복되는 브랜드 표기를 찾지 못했습니다 — 자사 브랜드 위주이거나 제품명에 브랜드를 안 쓰는 경우' : why('rpt', rptEmpty))),
-    f('CGMP 적합업소', hasCgmp ? `적합 (식약처 GMP 등재)${gmpRows.length > 1 ? ` · 명단 ${gmpRows.length}줄${gmpSites.length ? `(${gmpSites.join(' · ')}${gmpRows.length > gmpSites.length ? ' 외 본사 등록분' : ''})` : ''}` : gmpSites.length ? ` · ${gmpSites[0]}` : ''}${cgFirst ? ` · ${cgFirst.date.slice(0, 7)} 기사 확인` : ''}` : null, hasCgmp ? 'A' : (gmpOther.length ? 'C' : 'D'), '식약처 GMP API', hasCgmp ? today : null,
+    f('CGMP 적합업소', hasCgmp ? `적합 (식약처 GMP 등재)${gmpSites.length ? ` · 등재 제조소 ${gmpSites.join(' · ')}` : ''}${gmpRows.some((r) => !String(r.MFTR_ADDR || r.mftrAddr || '').trim()) && gmpSites.length ? ' · 주소 없는 본사 등록분 1줄' : ''}${cgFirst ? ` · ${cgFirst.date.slice(0, 7)} 기사 확인` : ''}` : null, hasCgmp ? 'A' : (gmpOther.length ? 'C' : 'D'), '식약처 GMP API', hasCgmp ? today : null,
       hasCgmp ? (gmpPrev ? `★ 식약처 명단에는 분할·사명 변경 전 사업자번호(${corp._lookup.prevBz})로 올라 있습니다 — 같은 상호의 지금 법인으로 연결했습니다. ` : '') + (cgFirst
         ? ''
         : '★ 인증일은 공개되지 않습니다 — 식약처 명단(API)에 날짜 칸이 없어 표기하지 않습니다. ※ 방문 때 CGMP 적합 증명서 발급일을 확인하세요.'
@@ -1823,7 +1823,7 @@ function assembleLiveReport(name, corp, res) {
         : (!R.factory ? '자료 미제출/미등록' : (!R.factory.ok ? briefErr(R.factory.err) : (fctList.length ? `${fctList.length}건 조회 · 상호 미일치` : '공장등록 0건(미등록/임대 가능)'))) },
     // GMP: API가 응답했으면 체크(✓), 미해당은 빨간색으로 표시
     (R.gmp && R.gmp.ok)
-      ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: true, warn: !hasCgmp, detail: (hasCgmp ? `CGMP 적합업소 명단 확인${gmpRows.length > 1 ? ` · ${gmpRows.length}줄` : ''}${gmpPrev ? ' · 옛 사업자번호로 등재' : ''}` : gmpOther.length ? `확인 필요 — 같은 상호가 다른 사업자번호로 ${gmpOther.length}줄 등재(적합업체 ${gmpList.length}곳 중)` : `미해당 — 적합업체 ${gmpList.length}곳 중 미등재(CGMP 미인증)`) + savedNote(R.gmp.data) }
+      ? { key: 'gmp', name: '식약처 GMP (CGMP)', ok: true, warn: !hasCgmp, detail: (hasCgmp ? `CGMP 적합업소 명단 확인${gmpSites.length ? ` · 제조소 ${gmpSites.length}곳` : ''}${gmpPrev ? ' · 옛 사업자번호로 등재' : ''}` : gmpOther.length ? `확인 필요 — 같은 상호가 다른 사업자번호로 ${gmpOther.length}줄 등재(적합업체 ${gmpList.length}곳 중)` : `미해당 — 적합업체 ${gmpList.length}곳 중 미등재(CGMP 미인증)`) + savedNote(R.gmp.data) }
       : stat('gmp', 'gmp', '식약처 GMP (CGMP)', null, 'GMP 목록 조회 실패'),
     (R.naverNews && R.naverNews.ok)
       ? { key: 'news', name: '네이버 뉴스검색', ok: !!news, warn: !news, detail: news ? `${news.length}건 관련기사` : `업체명 포함 기사 없음 (검색결과 ${newsItems.length}건 중)` }
