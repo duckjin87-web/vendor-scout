@@ -44,12 +44,33 @@ jobs:
                   const rep = await (c0.mfds ? finishLiveMfds(q, c0) : finishLive(q, { ...c0, _lookup: c0._lookup }));
                   const v = (k) => ((rep.basic || []).find((x) => x.key === k) || {}).value;
                   first = ` ⇒ 첫 후보 조회: ${rep.meta.vendor_name} · 사업자 ${v('사업자등록번호')} · 제조업 등록 ${v('제조업 등록') || '없음'} · 대표 ${v('대표자')} · 판정 ${qualityGrade(rep).grade} · CGMP ${((rep.capacity || []).find((x) => x.key === 'CGMP 적합업소') || {}).value || '없음'} · 소스 ${(rep.meta.src_status || []).filter((x) => ['gmp', 'maker', 'nedrug', 'factory', 'nps'].includes(x.key)).map((x) => `${x.key}:${x.ok ? 'ok' : 'x'}(${String(x.detail || '').slice(0, 50)})`).join(' / ')}`;
+                  first += ` ‖ 환경: ${['대기 배출시설 신고', '폐수 배출시설 신고', '자체 제조 근거'].map((k) => { const x = (rep.capacity || []).find((y) => y.key === k); return `${k}=${x ? x.value : '칸 없음'}`; }).join(' / ')} · water ${JSON.stringify((rep.meta.src_status || []).find((x) => x.key === 'water') || null)}`;
+                  window.__rep = rep;
                 } catch (e) { first = ` ⇒ 첫 후보 조회 실패 ${e.message}`; }
                 return `후보 ${res.candidates.length}건 :: ${res.candidates.slice(0, 6).map((c) => `${c.corpNm}${c.noLicense ? '(허가없음)' : ''}${c.licSucc ? '(허가승계)' : ''}/${c.bzno || ''}`).join(' ‖ ')}${first}`;
               }
               return `바로 리포트 → ${res.report && res.report.meta && res.report.meta.vendor_name}`;
             }, nm);
             n(`[${nm}] ${r}`);
+            // 공장 면적 탭 — 폐수 칸과 환산기 동작
+            const ui = await page.evaluate(async () => {
+              if (!window.__rep) return '리포트 없음';
+              render(window.__rep); await new Promise((r) => setTimeout(r, 1500));
+              const tab = document.querySelector('#rtab-area'); if (!tab) return '공장 면적 탭 없음';
+              tab.click(); await new Promise((r) => setTimeout(r, 2500));
+              const card = document.querySelector('.at-cat-air'); if (!card) return '환경 카드 없음';
+              const head = card.querySelector('h3') ? card.querySelector('h3').textContent : '';
+              const inp = card.querySelector('[data-ww-in]'); if (!inp) return `${head} · 환산기 없음 :: ${card.textContent.replace(/\s+/g, ' ').slice(0, 400)}`;
+              inp.value = '10'; inp.dispatchEvent(new Event('input', { bubbles: true }));
+              const o1 = card.querySelector('[data-ww-out]').textContent.replace(/\s+/g, ' ');
+              card.querySelector('[data-ww-kind="3"]').click();
+              const o2 = card.querySelector('[data-ww-out]').textContent.replace(/\s+/g, ' ');
+              card.querySelector('[data-ww-clear]') && card.querySelector('[data-ww-clear]').click();
+              const w = card.querySelector('.at-water'); 
+              return `${head} :: 폐수칸 ${w ? w.textContent.replace(/\s+/g, ' ').slice(0, 500) : '없음'} :: 10㎥ → ${o1.slice(0, 260)} :: 3종 → ${o2.slice(0, 200)}`;
+            }).catch((e) => '탭 오류 ' + e.message);
+            n(`[${nm} 공장면적] ${ui}`);
+            await page.evaluate(() => { window.__rep = null; });
           }
           await b.close();
           JS
