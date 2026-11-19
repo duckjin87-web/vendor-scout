@@ -1,0 +1,58 @@
+name: Diagnose water TMS discharge API
+
+# 한국환경공단 수질TMS 부착사업장 배출량(15164812) — 포털 명세에서 요청주소·항목을 읽고 시험 호출한다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      name: { description: '사업장명', required: true, type: string, default: '한국콜마' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          NM: ${{ inputs.name }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3500));
+          const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36' };
+          const KEY = encodeURIComponent(process.env.KEY);
+          const urls = new Set();
+          for (const id of ['15164812', '15057129', '15059088']) {
+            try {
+              const h = await (await fetch(`https://www.data.go.kr/data/${id}/openapi.do`, { headers: UA })).text();
+              const txt = h.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<style[\s\S]*?<\/style>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+              const t = (txt.match(/<title>([^<]*)/) || [])[1] || txt.slice(0, 80);
+              [...h.matchAll(/https?:\/\/apis?\.data\.go\.kr\/[A-Za-z0-9_\/]+/g)].forEach((m) => urls.add(m[0]));
+              n(`[${id}] ${t} :: ${[...h.matchAll(/https?:\/\/apis?\.data\.go\.kr\/[A-Za-z0-9_\/]+/g)].map((m) => m[0]).filter((v, i, a) => a.indexOf(v) === i).join(' , ')}`);
+              for (const w of ['상세기능', '요청변수', '출력결과', '방류량', '유량']) { const a = txt.indexOf(w); if (a >= 0) n(`[${id} ${w}] ${txt.slice(a, a + 1500)}`); }
+              // 오퍼레이션 목록(swagger)
+              const sw = h.match(/swaggerUrl\s*=\s*['"]([^'"]+)/) || h.match(/(\/tcs\/dss\/selectApiDetailFunction[^'"]*)/);
+              if (sw) n(`[${id} swagger] ${sw[1]}`);
+            } catch (e) { n(`[${id}] 실패 ${e.message}`); }
+          }
+          // swagger JSON
+          for (const id of ['15164812']) {
+            try {
+              const r = await fetch(`https://www.data.go.kr/catalog/${id}/openapi.json`, { headers: UA });
+              const t = await r.text(); n(`[${id} catalog] ${r.status} ${t.slice(0, 3000)}`);
+              try { const j = JSON.parse(t); const base = (j.servers && j.servers[0] && j.servers[0].url) || (j.host ? `https://${j.host}${j.basePath || ''}` : '');
+                for (const [p, v] of Object.entries(j.paths || {})) { urls.add(base + p); const g = v.get || {}; n(`[op] ${base}${p} :: ${(g.summary || '')} :: 파라미터 ${(g.parameters || []).map((x) => x.name).join(',')} :: 응답 ${JSON.stringify(g.responses || {}).slice(0, 1500)}`); }
+              } catch {}
+            } catch (e) { n('catalog 실패 ' + e.message); }
+          }
+          for (const u of urls) {
+            if (/apis\.data\.go\.kr\/?$/.test(u)) continue;
+            for (const ex of [`&type=json&numOfRows=5&pageNo=1&bplcNm=${encodeURIComponent(process.env.NM)}`, '&type=json&numOfRows=3&pageNo=1', '&numOfRows=3&pageNo=1']) {
+              try { const r = await fetch(`${u}?serviceKey=${KEY}${ex}`); n(`[호출 ${u} ${ex.slice(0, 40)}] ${r.status} :: ${(await r.text()).slice(0, 2000)}`); } catch (e) { n(`[호출 ${u}] 실패 ${e.message}`); }
+            }
+          }
+          JS
+          node d.mjs
