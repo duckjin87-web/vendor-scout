@@ -47,7 +47,8 @@ function bfFacts(report) {
     const reE = /((?:분석|시험|충전|제조|포장|생산)\s*(?:장비|설비|라인)\s*\d+\s*(?:종|대|기|개|라인))/g;
     while ((m = reE.exec(s.t))) add('equip', m[1].replace(/\s+/g, ' '), s);
     if (typeof extractLexicon === 'function') extractLexicon(s.t, EQUIP_LEX).forEach((g) => g.terms.slice(0, 6).forEach((t) => add('equip', t, s)));
-    if (typeof CERT_PATTERNS !== 'undefined') CERT_PATTERNS.forEach((c) => { if (c.re.test(s.t)) add('cert', c.label, s); });
+    // CGMP는 식약처 명단만 근거로 쓴다 — 기사 속 CGMP는 해외 법인(무석 등)·계열사 얘기일 수 있다
+    if (typeof CERT_PATTERNS !== 'undefined') CERT_PATTERNS.forEach((c) => { if (!/CGMP|우수화장품/.test(c.label) && c.re.test(s.t)) add('cert', c.label, s); });
   });
   return F;
 }

@@ -1340,8 +1340,12 @@ function assembleLiveReport(name, corp, res) {
       && !String(n.title).split(/[\s,·…"'“”‘’()[\]]+/).some((w) => { const c = w.replace(/\(주\)|㈜|주식회사/g, ''); return c.startsWith(cgCore) && c.length > cgCore.length && !/^(?:이|가|은|는|의|와|과|도|에|,)$/.test(c.slice(cgCore.length)); })
       // 미국 FDA·UL cGMP 같은 해외 인증은 식약처 CGMP가 아니다
       && !/\bUL\b|FDA|美|미국|EU|유럽|NSF|WHO|호주|TGA|할랄/.test(n.title))
-    .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5).map(({ title, link, date }) => ({ title, link, date }));
-  const cgFirst = cgmpNews[0] || null;
+    // 어느 공장 얘기인지 — 무석(우시) 중국 법인이면 그렇게 밝히고, 다른 해외 공장 얘기는 이 회사 국내 CGMP가 아니라 뺀다
+    .map((n) => { const t = `${n.title} ${n.desc}`; return { ...n, site: /무석|우시|Wuxi|无锡/i.test(t) ? '무석(중국 법인)' : /중국|베이징|북경|광저우|상하이|상해|해외\s*법인|현지\s*법인|캐나다|베트남|인도네시아|태국/.test(t) ? 'abroad' : '국내' }; })
+    .filter((n) => n.site !== 'abroad')
+    .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5).map(({ title, link, date, site }) => ({ title, link, date, site }));
+  // 기사 날짜는 인증일이 아니다 — 판정일은 식약처 공개 자료에 없어 어디에도 「취득 시기」로 쓰지 않는다
+  const cgFirst = null;
   const capacity = [
     // ★ 생산역량 칸에는 '제조소에 실제로 몇 명이 있나' 한 줄만 둔다.
     //   전체 근로자 구성·사업장별 내역·인력 추이·공장등록 신고값은 아래 「인력 · 사업장 구성」 표로 옮겼다.
@@ -1453,8 +1457,9 @@ function assembleLiveReport(name, corp, res) {
         : (rl.length ? '제품명에서 반복되는 브랜드 표기를 찾지 못했습니다 — 자사 브랜드 위주이거나 제품명에 브랜드를 안 쓰는 경우' : why('rpt', rptEmpty))),
     f('CGMP 적합업소', hasCgmp ? `적합 (식약처 GMP 등재)${gmpRows.length > 1 ? ` · 명단 ${gmpRows.length}줄${gmpSites.length ? `(${gmpSites.join(' · ')}${gmpRows.length > gmpSites.length ? ' 외 본사 등록분' : ''})` : ''}` : gmpSites.length ? ` · ${gmpSites[0]}` : ''}${cgFirst ? ` · ${cgFirst.date.slice(0, 7)} 기사 확인` : ''}` : null, hasCgmp ? 'A' : (gmpOther.length ? 'C' : 'D'), '식약처 GMP API', hasCgmp ? today : null,
       hasCgmp ? (gmpPrev ? `★ 식약처 명단에는 분할·사명 변경 전 사업자번호(${corp._lookup.prevBz})로 올라 있습니다 — 같은 상호의 지금 법인으로 연결했습니다. ` : '') + (cgFirst
-        ? `★ 취득 시기 추정: ${cgFirst.date} 「${cgFirst.title.slice(0, 60)}」 기사 — 식약처 공개 명단에는 판정일이 없어 이 업체의 CGMP 인증 기사 중 가장 이른 것으로 가늠했습니다. ※ 방문 때 CGMP 적합 증명서의 발급일로 확인하세요. ISO/할랄/비건은 공개 API 없음`
-        : '★ 판정일은 공개되지 않습니다 — 식약처 명단(API)에 날짜 칸이 없고, 이 업체의 CGMP 인증 기사도 찾지 못했습니다. ※ 방문 때 CGMP 적합 증명서 발급일을 확인하세요. ISO/할랄/비건은 공개 API 없음')
+        ? ''
+        : '★ 인증일은 공개되지 않습니다 — 식약처 명단(API)에 날짜 칸이 없어 표기하지 않습니다. ※ 방문 때 CGMP 적합 증명서 발급일을 확인하세요.'
+          + (cgmpNews.length ? ` 관련 기사: ${cgmpNews.slice(0, 3).map((n) => `「${n.title.slice(0, 40)}」(${n.site === '국내' ? n.date.slice(0, 7) : `${n.site} · ${n.date.slice(0, 7)}`})`).join(' · ')}` : '') + ' ISO/할랄/비건은 공개 API 없음')
         : gmpOther.length
           ? `⚠ 확인 필요 — 식약처 CGMP 명단에 같은 상호 「${gmpOther[0].ENTP_NAME || name}」가 다른 사업자번호(${gmpOther.map((r) => r.BIZRNO).filter(Boolean).join(', ')})로 ${gmpOther.length}줄 있습니다. 분할·사명 변경 전 번호이거나 같은 이름의 다른 회사일 수 있어 「미등재」로 단정하지 않았습니다. CGMP 적합 증명서로 확인하세요.`
           : why('gmp', 'CGMP 미등재 — 그 외 인증은 공개 API 없음(방문 확인)')),

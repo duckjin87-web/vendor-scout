@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 249;
+const BUILD = 250;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -5059,7 +5059,7 @@ function evidenceLinks(report) {
   (report.web_risk || []).forEach((w) => add('위험 신호', w.title, w.link));
   (report.oem_trace || []).forEach((t) => add('웹 언급', t.title, t.link));
   (report.news || []).forEach((n) => add('뉴스', n.title, n.originallink || n.link));
-  ((report.meta || {}).cgmp_news || []).forEach((n) => add('CGMP 기사', n.title, n.link));
+  ((report.meta || {}).cgmp_news || []).filter((n) => n.site !== 'abroad').forEach((n) => add(n.site && n.site !== '국내' ? `CGMP 기사 · ${n.site}` : 'CGMP 기사', n.title, n.link));
   const hp = report._homepage && report._homepage.proposed; if (hp) add('홈페이지', hp.title || hp.host, hp.origLink || hp.url);
   [...(report.basic || []), ...(report.capacity || []), ...(report.finance || [])].forEach((f) => {
     (String(f.note || '').match(/https?:\/\/[^\s)\]」]+/g) || []).forEach((u) => add(f.key, f.source, u.replace(/[.,]$/, '')));
@@ -6030,8 +6030,8 @@ function bizEvents(report) {
   // 판정일을 모르면 연혁에 '조회한 날'로 찍지 않는다(예전엔 모든 CGMP 업체가 2026년 취득처럼 보였다)
   const cgList = cgmpOn ? [...(M.cgmp_news || []), ...tl.filter((t) => /CGMP/i.test(`${t.title || ''} ${t.desc || ''}`))]
     .filter((t) => dOf(t.date)).sort((a, b) => String(a.date).localeCompare(String(b.date))) : [];
-  const cgNews = cgList[0];
-  if (cgNews) push(dOf(cgNews.date), 'CGMP 인증 기사', 'cgmp', { why: `${String(cgNews.title || '').slice(0, 60)} — 취득 시기 추정(판정일 비공개)` });
+  // 기사 날짜는 인증일이 아니다 — 확인된 인증일이 없으면 연혁에 CGMP를 찍지 않는다
+  void cgList;
 
   // ② 재무 — 해마다 찍지 않고 '선을 넘은 해'만. 결산 기준이라 그해 12월에 둔다
   const fin = (report.finance_history || []).filter((d) => d.src !== 'ext' && d.year);
@@ -6182,7 +6182,7 @@ function bizTimelineBlock(report) {
   const b = el('div', 'block full cat-basic btl');
   const note = bizEventNote(ev);
   const issueN = ev.filter((e) => BIZ_ISSUE.has(e.kind)).length;
-  b.innerHTML = `<h3>업체 연혁<span class="cnt">${ev.length}건${issueN ? ` · <b class="bt-iss">이슈 ${issueN}</b>` : ''} · 허가·제조소·CGMP·재무·인원·기사</span></h3>`
+  b.innerHTML = `<h3>업체 연혁<span class="cnt">${ev.length}건${issueN ? ` · <b class="bt-iss">이슈 ${issueN}</b>` : ''} · 허가·제조소·재무·인원·기사</span></h3>`
     + `<div class="bt-wrap">${timelineSvg(ev)}</div><div class="bt-hint">← 옆으로 밀어 전체 보기 →</div>`
     + bizIssueList(ev)
     + (note ? `<p class="bt-note">${esc(note)}</p>` : '');
