@@ -238,7 +238,8 @@ a:hover { text-decoration: underline; }
 .field .fnote .fsrc b { font-weight: 700; }
 /* 화면에서는 출처 열을 숨기고 두 칸(항목 | 값)으로 — 출처는 「!」에서 본다. 인쇄는 세 칸 그대로 */
 @media screen {
-  .field { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
+  /* 항목 열 너비를 모든 칸에서 같게 — 칸 폭이 달라도 값이 같은 세로선에서 시작한다 */
+  .field { grid-template-columns: 9.6em minmax(0, 1fr); }
   .field .src { display: none; }
 }
 /* 펼친 설명은 3칸을 가로질러 한 덩어리로 — 값 칸 안에서 좁게 흐르면 더 읽기 나쁘다 */
@@ -512,7 +513,7 @@ footer .wrap { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-
   .summary { grid-template-columns: 1fr; text-align: left; }
   
   
-  .field { grid-template-columns: 1fr 1fr; }
+  .field { grid-template-columns: 7.6em minmax(0, 1fr); }
   .field .src { grid-column: 1 / -1; text-align: left; }
 }
 
@@ -2940,7 +2941,7 @@ details.s3-cov { padding: 0; border-left: 0; background: none; }
 .bf-cap { margin-top: 12px; padding: 12px 14px 4px; border-top: 1px solid var(--rule); }
 .bf-cap h4 { margin: 0 0 10px; font-size: 13.5px; font-weight: 800; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .bf-cap h4 small { font-size: 11.5px; font-weight: 500; color: var(--muted); }
-.bf-row { display: grid; grid-template-columns: 5.4em minmax(0, 1fr); gap: 10px; padding: 8px 0; border-top: 1px solid var(--rule); align-items: baseline; }
+.bf-row { display: grid; grid-template-columns: 6.6em minmax(0, 1fr); gap: 10px; padding: 8px 0; border-top: 1px solid var(--rule); align-items: baseline; }
 .bf-row:first-of-type { border-top: 0; padding-top: 0; }
 .bf-k { font-size: 12px; color: var(--muted); font-weight: 600; }
 .bf-v { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
@@ -3024,12 +3025,15 @@ a.lex-chip { text-decoration: none; color: inherit; } a.lex-chip:hover { border-
 
 /* 2열 배치 — 기업 기본정보(짧은 값 | 긴 값), 생산역량(필드 | 역량 요약) */
 .bk-2c { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
-.bk-2c > .bk-col { min-width: 0; }
-.bk-2c > .bk-col.wide { border-left: 1px solid var(--rule); }
+.bk-2c > .field { min-width: 0; border-bottom: 1px solid var(--border); align-items: baseline; }
+.bk-2c > .field.wide { border-left: 1px solid var(--rule); }
+.bk-2c > .field:nth-last-child(-n+2) { border-bottom: 0; }
+.prod-left { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.prod-left > .block { min-width: 0; }
 .prod-2c { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .prod-2c > .block { min-width: 0; }
 .cat-cap .bf-cap { margin-top: 0; border-top: 0; padding: 12px 14px 8px; }
-@media (max-width: 760px) { .bk-2c, .prod-2c { grid-template-columns: minmax(0, 1fr); } .bk-2c > .bk-col.wide { border-left: 0; border-top: 1px solid var(--rule); } }
+@media (max-width: 760px) { .bk-2c, .prod-2c { grid-template-columns: minmax(0, 1fr); } .bk-2c > .field.wide { border-left: 0; } .bk-2c > .field.fld-pad { display: none; } .bk-2c > .field:nth-last-child(2) { border-bottom: 1px solid var(--border); } }
 /* 첫 화면 — 판정 아래 재무 위험 한 줄, 연락처는 업체명 옆 */
 .vd-risk { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 800; color: var(--risk); text-align: center; }
 .vd-h2row .vd-contact { margin: 0 0 0 4px; }

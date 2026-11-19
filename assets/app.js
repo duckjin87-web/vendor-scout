@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 246;
+const BUILD = 247;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4484,9 +4484,14 @@ function block(title, icon, fields, cat) {
   // 기업 기본정보는 2열 — 짧은 값(번호·상태·대표)은 왼쪽, 긴 값(주소·등록 내역)은 넓은 오른쪽
   if (cat === 'basic' && filled.length > 4) {
     const RIGHT = /주소|소재지|제조업 등록|책임판매업|진위|업종/;
-    const two = el('div', 'bk-2c'), L = el('div', 'bk-col'), R = el('div', 'bk-col wide');
-    filled.forEach((f) => (RIGHT.test(f.key) ? R : L).appendChild(fieldRow(f)));
-    two.appendChild(L); two.appendChild(R); b.appendChild(two); b.classList.add('full');
+    // 왼쪽·오른쪽을 한 줄씩 짝지어 같은 행에 놓는다 — 양쪽 행 높이와 구분선이 맞는다
+    const two = el('div', 'bk-2c');
+    const Ls = filled.filter((f) => !RIGHT.test(f.key)), Rs = filled.filter((f) => RIGHT.test(f.key));
+    for (let i = 0; i < Math.max(Ls.length, Rs.length); i++) {
+      two.appendChild(Ls[i] ? fieldRow(Ls[i]) : el('div', 'field fld-pad'));
+      const r = Rs[i] ? fieldRow(Rs[i]) : el('div', 'field fld-pad'); r.classList.add('wide'); two.appendChild(r);
+    }
+    b.appendChild(two); b.classList.add('full');
   } else filled.forEach((f) => b.appendChild(fieldRow(f)));
   if (gaps.length) {
     const d = el('details', 'gapfold');
@@ -8038,12 +8043,13 @@ function render(report, opts = {}) {
     visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod');
   // 생산역량 · 인원(왼쪽)과 역량 요약(오른쪽)을 2열로 — 같은 이야기를 나란히 본다
   const cs = typeof capSumEl === 'function' ? capSumEl(report) : null;
-  if (cs) {
-    const two = el('div', 'prod-2c'), capB = el('div', 'block cat-cap');
-    capB.appendChild(cs); two.appendChild(prodB); two.appendChild(capB); coreProd.appendChild(two);
-  } else coreProd.appendChild(prodB);
+  // 생산 제품군은 생산역량 · 인원 바로 밑에 붙인다(왼쪽 열 안에서 이어지게)
   const plB = productLineBlock(report);
-  if (plB) coreProd.appendChild(plB);
+  if (cs) {
+    const two = el('div', 'prod-2c'), left = el('div', 'prod-left'), capB = el('div', 'block cat-cap');
+    left.appendChild(prodB); if (plB) left.appendChild(plB);
+    capB.appendChild(cs); two.appendChild(left); two.appendChild(capB); coreProd.appendChild(two);
+  } else { coreProd.appendChild(prodB); if (plB) coreProd.appendChild(plB); }
   const wfB = workforceBlock(report);
   if (wfB) coreProd.appendChild(wfB);
   if (!excl.has('finance')) core.appendChild(financeBlock(report));
