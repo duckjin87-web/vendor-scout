@@ -1,0 +1,61 @@
+name: Diagnose wastewater standard data
+
+# 전국폐수배출사업장표준데이터(15139223) — 표준데이터 API의 항목·필터·건수와 특정 상호 줄을 본다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      kw: { description: '찾을 상호(| 구분)', required: true, type: string, default: '한국콜마|코스맥스|모나미|콜마' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          KW: ${{ inputs.kw }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3500));
+          const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36' };
+          const KEY = encodeURIComponent(process.env.KEY);
+          const BASE = 'https://api.data.go.kr/openapi/tn_pubr_public_wastewater_emission_site_api';
+          const get = async (qs) => { const r = await fetch(`${BASE}?serviceKey=${KEY}&type=json&${qs}`); const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch {} return { s: r.status, t, j }; };
+          const items = (j) => { const b = j && j.response && j.response.body; let it = b && b.items; if (it && it.item) it = it.item; return { it: Array.isArray(it) ? it : it ? [it] : [], total: b && b.totalCount }; };
+          // 포털 상세 — 항목 설명
+          try {
+            const h = await (await fetch('https://www.data.go.kr/data/15139223/standard.do', { headers: UA })).text();
+            const txt = h.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<style[\s\S]*?<\/style>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+            for (const w of ['항목명', '표준항목', '제공기관', '갱신', '업종구분', '배출량', '종별']) { const a = txt.indexOf(w); if (a >= 0) n(`[포털 ${w}] ${txt.slice(Math.max(0, a - 100), a + 1400)}`); }
+          } catch (e) { n('포털 실패 ' + e.message); }
+          const f = await get('pageNo=1&numOfRows=3');
+          const x = items(f.j);
+          n(`[1쪽] ${f.s} total ${x.total} :: ${f.t.slice(0, 2500)}`);
+          const keys = Object.keys(x.it[0] || {});
+          n(`[항목] ${keys.join(',')}`);
+          // 필터 파라미터 시험 — 상호 필드 후보
+          for (const kw of process.env.KW.split('|')) {
+            for (const p of ['bplcNm', 'bsshNm', 'entrpsNm', 'cmpnyNm', 'bizplcNm', 'wsteBplcNm']) {
+              const r = await get(`pageNo=1&numOfRows=20&${p}=${encodeURIComponent(kw)}`);
+              const y = items(r.j);
+              if (y.total != null && y.total !== x.total) { n(`[${kw} · ${p}] total ${y.total} :: ${y.it.slice(0, 8).map((o) => JSON.stringify(o)).join(' ‖ ')}`); break; }
+            }
+          }
+          // 전체 수집 후 직접 검색(필터가 안 먹을 때 대비) — 1000건씩
+          const all = []; const tot = Number(x.total || 0);
+          for (let pg = 1; pg <= Math.min(80, Math.ceil(tot / 1000)); pg++) { const r = await get(`pageNo=${pg}&numOfRows=1000`); const y = items(r.j); all.push(...y.it); if (!y.it.length) { n(`[수집 ${pg}] 비어 ${r.s} ${r.t.slice(0, 200)}`); break; } }
+          n(`[수집] ${all.length}/${tot}`);
+          if (all.length) {
+            // 항목별 값 분포(코드형 항목 파악)
+            for (const k of keys) { const m = new Map(); all.forEach((o) => { const v = String(o[k] ?? ''); m.set(v, (m.get(v) || 0) + 1); }); if (m.size <= 40) n(`[분포 ${k}] ${[...m].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([v, c]) => `${v}:${c}`).join(' · ')}`); else n(`[분포 ${k}] 고유 ${m.size} 예: ${[...m.keys()].slice(0, 6).join(' / ')}`); }
+            const cos = all.filter((o) => /화장품/.test(JSON.stringify(o)));
+            n(`[화장품 언급] ${cos.length}건 :: ${cos.slice(0, 6).map((o) => JSON.stringify(o)).join(' ‖ ')}`);
+            for (const kw of process.env.KW.split('|')) { const h = all.filter((o) => JSON.stringify(o).includes(kw)); n(`[${kw}] ${h.length}건 :: ${h.slice(0, 10).map((o) => JSON.stringify(o)).join(' ‖ ')}`); }
+          }
+          JS
+          node d.mjs
