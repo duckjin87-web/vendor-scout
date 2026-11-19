@@ -49,7 +49,9 @@ jobs:
                 } catch (e) { first = ` ⇒ 첫 후보 조회 실패 ${e.message}`; }
                 return `후보 ${res.candidates.length}건 :: ${res.candidates.slice(0, 6).map((c) => `${c.corpNm}${c.noLicense ? '(허가없음)' : ''}${c.licSucc ? '(허가승계)' : ''}/${c.bzno || ''}`).join(' ‖ ')}${first}`;
               }
-              return `바로 리포트 → ${res.report && res.report.meta && res.report.meta.vendor_name}`;
+              window.__rep = res.report || null;
+              const rp = res.report || {};
+              return `바로 리포트 → ${rp.meta && rp.meta.vendor_name} · 환경: ${['대기 배출시설 신고', '폐수 배출시설 신고', '자체 제조 근거'].map((k) => { const x = (rp.capacity || []).find((y) => y.key === k); return `${k}=${x ? x.value : '칸 없음'}`; }).join(' / ')}`;
             }, nm);
             n(`[${nm}] ${r}`);
             // 공장 면적 탭 — 폐수 칸과 환산기 동작
