@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 248;
+const BUILD = 249;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2630,7 +2630,7 @@ async function liveLookup(name) {
       // 한국콜마: 명단 「한국콜마(주)」(307-81-02816)는 분할 뒤 한국콜마홀딩스 번호이고, 제조는 새 한국콜마(주)(307-81-38444)가 한다.
       const succ = renamed ? fscSim.find((c) => nkeyL(c.corpNm) === nkeyL(one.corpNm) && dg(c.bzno) !== dg(one.bzno)) : null;
       if (succ) {
-        const sLookup = { typed: name, via: 'ledger-succ', matched: succ.corpNm, bzno: succ.bzno || null,
+        const sLookup = { typed: name, via: 'ledger-succ', matched: succ.corpNm, bzno: succ.bzno || null, prevBz: one.bzno || null, prevNm: f.corpNm,
           why: `식약처 명단 이름과 같은 지금 법인 — 명단에는 분할 전 사업자번호(${one.bzno})로 올라 있음`,
           basis: `식약처 화장품 제조업 허가 명단의 「${one.corpNm}」${one.pdate ? `(${one.pdate} 허가)` : ''} — 명단의 사업자번호 ${one.bzno}는 지금 「${f.corpNm}」 번호라, 같은 이름의 지금 법인 「${succ.corpNm}」(사업자 ${succ.bzno})로 조회`,
           alts: [f.corpNm] };
@@ -2770,9 +2770,9 @@ function stripCorp(s) {
   return String(s || '').replace(/\(주\)|\(유\)|\(재\)|\(사\)|㈜|주식회사|유한회사/g, '').trim();
 }
 // 목록에서 상호가 실제 일치하는 레코드만 반환(불일치 시 null — 남의 회사 데이터 오염 방지). samples.js와 동일 로직.
-function matchByNameApp(name, list) {
+function matchByNameApp(name, list, all) {
   const key = stripCorp(name).replace(/\s/g, '');
-  if (key.length < 2 || !Array.isArray(list)) return null;
+  if (key.length < 2 || !Array.isArray(list)) return all ? [] : null;
   // 예전에는 '값이 검색어를 품으면' 같은 회사로 봤다. 그래서 '(주)화인글로벌'(평택, 폐업) 리포트에
   // '(주)화인글로벌랩'(인천)의 제조업 허가·CGMP·공장이 붙었다. 이제 법인격·공백을 뗀 상호가 같거나,
   // 뒤에 지점 표기 괄호만 붙은 경우('인코스(인천지점)')만 같은 회사로 본다.
@@ -2780,21 +2780,39 @@ function matchByNameApp(name, list) {
     const gn = stripCorp(String(v == null ? '' : v)).replace(/\s/g, '');
     return gn === key || (gn.startsWith(key) && /^\([^)]*\)$/.test(gn.slice(key.length)));
   };
+  if (all) return list.filter((it) => it && Object.values(it).some(same));
   return list.find((it) => it && Object.values(it).some(same)) || null;
 }
 // 사업자번호를 아는 회사면 레코드의 사업자번호가 다를 때 버린다 — 상호가 같아도 남의 회사다
+// bzno — 사업자번호 하나, 또는 [지금 번호, 옛 번호…](분할·사명 변경으로 공공 명단에 옛 번호가 남은 경우)
+// 한국콜마: 식약처 CGMP·제조업 명단의 「한국콜마(주)」가 분할 전 번호(307-81-02816)라, 지금 번호(307-81-38444)로만
+// 대조하면 같은 회사를 '남의 회사'로 버려 CGMP 「미등재」가 나왔다.
 function matchFirm(name, bzno, list) {
   if (!Array.isArray(list)) return null;
-  const bz = String(bzno || '').replace(/\D/g, '');
+  const bzs = (Array.isArray(bzno) ? bzno : [bzno]).map((x) => String(x || '').replace(/\D/g, '')).filter((x) => x.length === 10);
   const bzOf = (r) => String(findBznoIn(r) || '').replace(/\D/g, '');
-  if (bz.length === 10) {
-    const byBz = list.find((r) => r && bzOf(r) === bz);
-    if (byBz) return byBz;
+  const pick = (r) => r;
+  if (bzs.length) {
+    const byBz = list.find((r) => r && bzs.includes(bzOf(r)));
+    if (byBz) return pick(byBz);
   }
-  const hit = matchByNameApp(name, list);
-  if (hit && bz.length === 10) { const hb = bzOf(hit); if (hb.length === 10 && hb !== bz) return null; }
-  return hit;
+  // 같은 상호 줄을 모두 본다 — 첫 줄만 보고 버리면 뒤의 맞는 줄(다른 제조소)을 놓친다
+  const hits = matchByNameApp(name, list, true);
+  if (!hits.length) return null;
+  if (!bzs.length) return pick(hits[0]);
+  const ok = hits.find((h) => { const hb = bzOf(h); return hb.length !== 10 || bzs.includes(hb) || isBranchOf(hb, bzs); });
+  return ok ? pick(ok) : null;
 }
+// 지점 사업자번호(가운데 85) — 본점과 앞 3자리가 같으면 같은 회사의 지점으로 본다
+function isBranchOf(hb, bzs) { return hb.slice(3, 5) === '85' && bzs.some((b) => b.slice(0, 3) === hb.slice(0, 3)); }
+// 상호는 같은데 사업자번호가 다른 줄 — 남의 회사일 수도, 분할·사명 변경일 수도 있다. 버리지 말고 「확인 필요」로 알린다
+function sameNameOtherBz(name, bzno, list) {
+  if (!Array.isArray(list)) return [];
+  const bzs = (Array.isArray(bzno) ? bzno : [bzno]).map((x) => String(x || '').replace(/\D/g, '')).filter((x) => x.length === 10);
+  if (!bzs.length) return [];
+  return matchByNameApp(name, list, true).filter((h) => { const hb = String(findBznoIn(h) || '').replace(/\D/g, ''); return hb.length === 10 && !bzs.includes(hb) && !isBranchOf(hb, bzs); });
+}
+window.sameNameOtherBz = sameNameOtherBz;
 window.matchFirm = matchFirm;
 
 // NPS(B552015) 응답 파서 — resultType=json이면 서버가 500 크래시 → XML로 받아 파싱.
@@ -4154,14 +4172,23 @@ async function liveBackfill(res, corp, name, nm) {
   }
 }
 
+// 이 회사로 볼 사업자번호들 — 지금 번호 + (분할·사명 변경으로 공공 명단에 남은) 옛 번호
+function corpBzSet(corp) {
+  const out = [];
+  const add = (v) => { const d = String(v || '').replace(/\D/g, ''); if (d.length === 10 && !out.includes(d)) out.push(d); };
+  if (corp) { add(corp.bzno); if (corp._lookup && corp._lookup.prevBz) add(corp._lookup.prevBz); }
+  return out;
+}
+window.corpBzSet = corpBzSet;
 // 방문지 후보 주소 — 산단공 공장 · 식약처 제조소 · 연금 사업장. sig가 바뀌면 방문지 단계를 다시 돈다.
 function liveSiteInputs(res, corp, name) {
   const fList = res.factory && res.factory.ok ? listOf(factoryProd(res.factory.data), ['response.body.items.item', 'body.items', 'items']) : [];
-  const fHit = matchFirm(name, corp && corp.bzno, fList);   // 같은 회사만(한 건뿐이라고 남의 공장을 쓰지 않는다)
+  const bzSet = corpBzSet(corp);
+  const fHit = matchFirm(name, bzSet, fList);   // 같은 회사만(한 건뿐이라고 남의 공장을 쓰지 않는다)
   const fAddr = fHit ? (fHit.rnAdres ?? fHit.lnmAdres ?? fHit.lotNoAddr ?? fHit.roadNmAddr ?? fHit.adres ?? fHit.ADRES ?? fHit.fctryAddr ?? null) : null;
   const mList = res.maker && res.maker.ok ? listOf(res.maker.data, ['response.body.items.item', 'body.items', 'items']) : [];
   const looksAddr = (v) => /[가-힣]{2,}(시|군|구|읍|면)\s|[가-힣]+(로|길)\s?\d/.test(String(v || ''));
-  const mkHit = matchFirm(name, corp && corp.bzno, mList); // 같은 회사만(남의 회사 주소 오염 방지)
+  const mkHit = matchFirm(name, bzSet, mList); // 같은 회사만(남의 회사 주소 오염 방지)
   const mAddr = mkHit ? (joinAddrFields(mkHit) || Object.values(mkHit).find(looksAddr) || null) : null;
   // 제조소가 여러 곳이면 공개 API에 곳마다 한 건씩 온다 — 같은 회사(사업자번호·상호) 건을 모두 모은다
   const sameCo = mkHit ? mList.filter((r) => r === mkHit || (mkHit.BIZRNO && r.BIZRNO === mkHit.BIZRNO) || (mkHit.ENTP_NAME && r.ENTP_NAME === mkHit.ENTP_NAME)) : [];
