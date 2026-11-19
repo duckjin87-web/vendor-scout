@@ -1,0 +1,42 @@
+name: Update wastewater discharge index (weekly)
+
+# 전국폐수배출사업장표준데이터 → data/water/latest.json(리포트의 「환경 · 대기·폐수」 대조용 색인).
+# 매주 월요일 아침(한국 시간 09:23)에 받는다 — 지자체 자료가 매월 초 병합되므로 주 1회면 충분하다. 키는 Secret에만 있다.
+on:
+  schedule:
+    - cron: '23 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: water
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build
+        env:
+          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        run: node scripts/build-water.mjs
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data/water)" ]; then
+            git add data/water
+            git commit -m "water: 폐수배출사업장 색인 갱신 ($(date -u +%F))"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          else
+            echo "변경 없음 — 커밋 생략"
+          fi
