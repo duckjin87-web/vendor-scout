@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 247;
+const BUILD = 248;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2626,6 +2626,19 @@ async function liveLookup(name) {
       if (!renamed && !close.length) {
         return { report: await finishLive(one.corpNm, f ? { ...f, _lookup: lookup } : { corpNm: one.corpNm, bzno: one.bzno, addr: one.addr, _lookup: lookup }) };
       }
+      // 분할·사명 변경 — 명단 이름과 똑같은 「지금 법인」이 따로 있으면 그쪽이 실제 제조사다.
+      // 한국콜마: 명단 「한국콜마(주)」(307-81-02816)는 분할 뒤 한국콜마홀딩스 번호이고, 제조는 새 한국콜마(주)(307-81-38444)가 한다.
+      const succ = renamed ? fscSim.find((c) => nkeyL(c.corpNm) === nkeyL(one.corpNm) && dg(c.bzno) !== dg(one.bzno)) : null;
+      if (succ) {
+        const sLookup = { typed: name, via: 'ledger-succ', matched: succ.corpNm, bzno: succ.bzno || null,
+          why: `식약처 명단 이름과 같은 지금 법인 — 명단에는 분할 전 사업자번호(${one.bzno})로 올라 있음`,
+          basis: `식약처 화장품 제조업 허가 명단의 「${one.corpNm}」${one.pdate ? `(${one.pdate} 허가)` : ''} — 명단의 사업자번호 ${one.bzno}는 지금 「${f.corpNm}」 번호라, 같은 이름의 지금 법인 「${succ.corpNm}」(사업자 ${succ.bzno})로 조회`,
+          alts: [f.corpNm] };
+        const sc = { ...succ, noLicense: false, licSucc: true, pdate: one.pdate, addr: succ.addr || one.addr, _lookup: sLookup,
+          _why: `식약처 제조업 허가 명단의 「${one.corpNm}」과 같은 이름의 지금 법인 — 분할로 사업자번호가 바뀐 것으로 보임` };
+        const oldC = { ...f, noLicense: true, _why: `식약처 명단에 남은 옛 사업자번호(${one.bzno})의 지금 법인 — 지주사·존속법인일 수 있음` };
+        return { candidates: [sc, oldC, ...others, ...fscSim.filter((c) => c !== succ)], name, source: 'ledger', similar: false, pick: true };
+      }
       const oneC = { ...one, _why: renamed ? `${one._why} · 이 사업자번호의 지금 법인명은 「${f.corpNm}」 — 분할·사명 변경 여부 확인` : one._why };
       return { candidates: [oneC, ...others, ...fscSim], name, source: 'ledger', similar: false, pick: true };
     }
@@ -4233,7 +4246,7 @@ function renderCandidates(name, cands, source, similar) {
       c.pdate ? esc(c.pdate) + ' 허가' : '',
       c.addr ? esc(c.addr) : '',
     ].filter(Boolean).join(' · ');
-    const tag = (c.mfds ? '<span class="cand-tag">화장품 제조업 허가</span>' : '')
+    const tag = (c.mfds ? '<span class="cand-tag">화장품 제조업 허가</span>' : c.licSucc ? '<span class="cand-tag">화장품 제조업 허가 · 명단 이름 일치</span>' : '')
       + (c.noLicense ? '<span class="cand-nolic">제조업 허가 없음</span>' : '')
       + (c._why ? `<span class="cand-sim">${esc(c._why)}</span>` : c._sim != null ? `<span class="cand-sim">표기 유사 ${Math.round(c._sim * 100)}%</span>` : '');
     card.innerHTML = `<div class="cn">${esc(c.corpNm || '(상호미상)')}${tag}</div><div class="cm">${meta || '추가정보 없음'}</div>`;

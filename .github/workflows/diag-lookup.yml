@@ -37,7 +37,16 @@ jobs:
             const r = await page.evaluate(async (q) => {
               const res = await liveLookup(q).catch((e) => ({ err: e.message }));
               if (res.err) return `에러 ${res.err}`;
-              if (res.candidates) return `후보 ${res.candidates.length}건 :: ${res.candidates.slice(0, 10).map((c) => `${c.corpNm}${c.noLicense ? '(허가없음)' : ''}/${c.bzno || ''}/${c._why || ''}`).join(' ‖ ')}`;
+              if (res.candidates) {
+                const c0 = res.candidates[0];
+                let first = '';
+                try {
+                  const rep = await (c0.mfds ? finishLiveMfds(q, c0) : finishLive(q, { ...c0, _lookup: c0._lookup }));
+                  const v = (k) => ((rep.basic || []).find((x) => x.key === k) || {}).value;
+                  first = ` ⇒ 첫 후보 조회: ${rep.meta.vendor_name} · 사업자 ${v('사업자등록번호')} · 제조업 등록 ${v('제조업 등록') || '없음'} · 대표 ${v('대표자')} · 판정 ${qualityGrade(rep).grade}`;
+                } catch (e) { first = ` ⇒ 첫 후보 조회 실패 ${e.message}`; }
+                return `후보 ${res.candidates.length}건 :: ${res.candidates.slice(0, 6).map((c) => `${c.corpNm}${c.noLicense ? '(허가없음)' : ''}${c.licSucc ? '(허가승계)' : ''}/${c.bzno || ''}`).join(' ‖ ')}${first}`;
+              }
               return `바로 리포트 → ${res.report && res.report.meta && res.report.meta.vendor_name}`;
             }, nm);
             n(`[${nm}] ${r}`);
