@@ -26,7 +26,7 @@ jobs:
           const KEY = encodeURIComponent(process.env.KEY);
           const BASE = 'https://api.data.go.kr/openapi/tn_pubr_public_wastewater_emission_site_api';
           const get = async (qs) => { const r = await fetch(`${BASE}?serviceKey=${KEY}&type=json&${qs}`); const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch {} return { s: r.status, t, j }; };
-          const items = (j) => { const b = j && j.response && j.response.body; let it = b && b.items; if (it && it.item) it = it.item; return { it: Array.isArray(it) ? it : it ? [it] : [], total: b && b.totalCount }; };
+          const items = (j) => { const b = j && ((j.response && j.response.body) || j.body); let it = b && b.items; if (it && it.item) it = it.item; return { it: Array.isArray(it) ? it : it ? [it] : [], total: b && b.totalCount }; };
           // 포털 상세 — 항목 설명
           try {
             const h = await (await fetch('https://www.data.go.kr/data/15139223/standard.do', { headers: UA })).text();
@@ -56,6 +56,14 @@ jobs:
             const cos = all.filter((o) => /화장품/.test(JSON.stringify(o)));
             n(`[화장품 언급] ${cos.length}건 :: ${cos.slice(0, 6).map((o) => JSON.stringify(o)).join(' ‖ ')}`);
             for (const kw of process.env.KW.split('|')) { const h = all.filter((o) => JSON.stringify(o).includes(kw)); n(`[${kw}] ${h.length}건 :: ${h.slice(0, 10).map((o) => JSON.stringify(o)).join(' ‖ ')}`); }
+            const by = new Map(); all.forEach((o) => { const k = o.insttNm || o.ctpvNm; by.set(k, (by.get(k) || 0) + 1); });
+            n(`[제공 기관] ${by.size}곳 :: ${[...by].map(([k, c]) => `${k}:${c}`).join(' · ')}`);
+          }
+          // 국립환경과학원 전국오염원조사 산업계 — 업소별 폐수 발생·방류량이 있는지
+          for (const u of ['https://apis.data.go.kr/1480523/IndryService/getIndryInfo', 'https://apis.data.go.kr/1480523/IndryService/getIndryList']) {
+            for (const ex of ['&type=json&numOfRows=3&pageNo=1', '&numOfRows=3&pageNo=1']) {
+              try { const r = await fetch(`${u}?serviceKey=${KEY}${ex}`); n(`[${u.split('/').pop()} ${ex}] ${r.status} :: ${(await r.text()).slice(0, 1800)}`); } catch (e) { n('실패 ' + e.message); }
+            }
           }
           JS
           node d.mjs
