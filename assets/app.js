@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 245;
+const BUILD = 246;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4481,7 +4481,13 @@ function block(title, icon, fields, cat) {
   const filled = fields.filter((f) => !(f.data_gap || f.value == null) || isPend(f));
   b.appendChild(el('h3', null, `${icon ? `<span class="ic">${icon}</span>` : ''}${esc(title)}`
     + `<span class="cnt">${fields.length}개 필드${gaps.length ? ' · 공백 ' + gaps.length : ''}</span>`));
-  filled.forEach((f) => b.appendChild(fieldRow(f)));
+  // 기업 기본정보는 2열 — 짧은 값(번호·상태·대표)은 왼쪽, 긴 값(주소·등록 내역)은 넓은 오른쪽
+  if (cat === 'basic' && filled.length > 4) {
+    const RIGHT = /주소|소재지|제조업 등록|책임판매업|진위|업종/;
+    const two = el('div', 'bk-2c'), L = el('div', 'bk-col'), R = el('div', 'bk-col wide');
+    filled.forEach((f) => (RIGHT.test(f.key) ? R : L).appendChild(fieldRow(f)));
+    two.appendChild(L); two.appendChild(R); b.appendChild(two); b.classList.add('full');
+  } else filled.forEach((f) => b.appendChild(fieldRow(f)));
   if (gaps.length) {
     const d = el('details', 'gapfold');
     d.appendChild(el('summary', null, `<span class="gf-n">확인 안 됨 ${gaps.length}건</span>`
@@ -6318,6 +6324,15 @@ function anchorHtml(report) {
   return `<div class="vd-anchor"><div class="anc-h">규모 <small>국민연금 ${esc(String(R.ym || '').replace('-', '.'))} · 화장품 제조업 허가 사업장 ${R.n.toLocaleString()}곳 기준${R.rank ? ` · ${esc(R.rank.sido)} ${R.rank.n}곳` : ''}</small></div>${rows.join('')}</div>`;
 }
 
+// 재무 위험 한 줄 — 자본잠식 · 부채비율 200% 이상 · 재무위험 보도 2건 이상일 때만
+function finRiskTag(report) {
+  const fh = report.finance_health;
+  if (fh && fh.equity != null && fh.equity <= 0) return `자본잠식${fh.year ? ` (${fh.year})` : ''}`;
+  if (fh && fh.debtRatio != null && fh.debtRatio >= 200) return `부채비율 ${fh.debtRatio}%${fh.year ? ` (${fh.year})` : ''}`;
+  const fr = typeof bfFinRisk === 'function' ? bfFinRisk(report) : null;
+  if (fr && fr.n >= 2) return `재무위험 보도 ${fr.n}건`;
+  return '';
+}
 function renderVerdict(report) {
   const m = report.meta || {};
   const Q = qualityGrade(report);
@@ -6341,20 +6356,23 @@ function renderVerdict(report) {
   // 예전엔 판정 문구가 따로 떠 있다가 좁은 화면에서 게이지 밑으로 내려가 조회 근거 줄을 덮었다.
   let html = `<div class="vd-head">`
     + `<div class="vd-left"><button type="button" class="vd-badge vd-gz badge-${esc(g)}" data-act="verdict-why" aria-haspopup="dialog" title="판단 기준 보기">${gaugeSvg(g)}<b>${g === 'D' ? '불가' : esc(g)}</b><span>종합판정 ⓘ</span></button>`
-    + `<div class="vd-verd">${esc(v.label)}<small class="vd-qwhy">${esc(Q.why)}</small>`
+    // 판정 아래에는 재무 위험이 있을 때만 그 위험을 짧게 — 판정 사유 전체는 ⓘ(판단 기준)에서 본다
+    + `<div class="vd-verd">${esc(v.label)}${finRiskTag(report) ? `<small class="vd-risk">${esc(finRiskTag(report))}</small>` : (m.live ? '' : `<small class="vd-qwhy">${esc(Q.why)}</small>`)}`
     + `</div></div>`
     + `<div class="vd-title"><div class="vd-h2row"><h2>${esc(m.vendor_name || '')}</h2>`
     + (m.live ? `<button type="button" class="sv-btn" data-act="save-firm" data-sv-key="${esc(svKey(m.vendor_name || ''))}" data-sv-kind="report">☆ 저장</button>` : '')
+    + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div>`
     + `</div><div class="vd-sub">${esc(sector)}${region ? ` · ${esc(region)}` : ''}</div>`
     + (m.live && typeof bfOneLine === 'function' ? `<p class="vd-one">${esc(bfOneLine(report, Q))}</p>` : '')
     + lookupBasisHtml(m, bv)
-    + `<div class="vd-contact" data-vd-contact>${contactHtml(report)}</div></div>`
-    + '</div>';
+    + '</div></div>';
   // 이슈 줄 — 위험·불일치만 최대 3건. 「공개자료 미확인 N건」 같은 자료 공백은 이슈가 아니라 아래 줄에 따로 둔다
 
   // 판정 근거 — 무엇이 좋아서/걸려서 이 등급인지
   // 「공백 20」처럼 빠진 것만 세지 않고, 확인된 것과 남은 것을 같은 무게로 센다(프레이밍)
   if (m.live && typeof bfOneLine === 'function') {
+    // 첫 화면은 판정·요약만 — 확인된 항목과 자료 공백 줄은 뺀다(상세 자료에서 본다)
+  } else if (false) {
     const gapTxt = downs.filter((x) => /^공개자료 미확인/.test(x))[0] || '';
     if (ups.length || gapTxt) html += `<div class="vd-why">`
       + (ups.length ? `<div class="vw up"><i>확인됨 <b data-cu="${ups.length}">${ups.length}</b></i><span>${ups.map(esc).join(' · ')}</span></div>` : '')
@@ -8018,9 +8036,12 @@ function render(report, opts = {}) {
   const areaTab = renderAreaTab(report);
   const prodB = block('생산역량 · 인원', '',
     visible(report.capacity).filter((x) => !(areaTab && x.key === '공장 건축면적 (건평)')), 'prod');
-  // 역량 요약(제형·설비·인증·생산능력·재무)은 같은 이야기라 이 칸 아래에 출처와 함께 붙인다
-  if (typeof capSumEl === 'function') { const cs = capSumEl(report); if (cs) prodB.appendChild(cs); }
-  coreProd.appendChild(prodB);
+  // 생산역량 · 인원(왼쪽)과 역량 요약(오른쪽)을 2열로 — 같은 이야기를 나란히 본다
+  const cs = typeof capSumEl === 'function' ? capSumEl(report) : null;
+  if (cs) {
+    const two = el('div', 'prod-2c'), capB = el('div', 'block cat-cap');
+    capB.appendChild(cs); two.appendChild(prodB); two.appendChild(capB); coreProd.appendChild(two);
+  } else coreProd.appendChild(prodB);
   const plB = productLineBlock(report);
   if (plB) coreProd.appendChild(plB);
   const wfB = workforceBlock(report);

@@ -461,11 +461,15 @@ function sg3dHtml(report, B) {
   if (reg && reg.arch) { st.refFoot = reg.arch; st.refGfa = reg.tot || D.stat.refGfa; }
   if (!unit && B && B.arch) { st.myFoot = B.arch; st.myGfa = B.tot || D.stat.myGfa; }
   const estB = D.ref.bldgs.filter((b) => b.est), mapFoot = D.ref.bldgs.filter((b) => !b.est).reduce((a, b) => a + sgArea(b.pts), 0);
+  // 그림을 어떻게 세웠는지 — 기본은 접어 두고, 펼치면 한 줄씩 풀어 쓴다
   const covNote = estB.length
-    ? `<p class="s3-cov">한국콜마는 건축물대장 ${estB.length + (D.ref.mainOf ? 1 : D.ref.mapN)}동 기준으로 세웠습니다. `
-      + (D.ref.mainOf ? `지도 윤곽 ${D.ref.mapN}조각은 대장의 <b>${esc(D.ref.mainOf.name)}(${sgPy(D.ref.mainOf.arch)}평)</b> 한 동으로 보며, 지도에는 그 건축면적의 ${Math.round(D.ref.mainOf.cover * 100)}%만 그려져 있습니다. ` : '')
-      + `지도에 없는 <b>${estB.length}동(${estB.map((b) => esc(b.name || '부속동')).join('·')} · ${sgPy(estB.reduce((a, b) => a + (b.arch || sgArea(b.pts)), 0))}평)</b>은 대장의 건축면적·층수로 빈 땅에 세웠습니다 — <b>점선 상자는 위치·모양이 추정</b>입니다.</p>`
-    : cov != null && cov < 0.8 ? `<p class="s3-cov">⚠ 지도에 그려진 한국콜마 건물은 ${D.ref.bldgs.length}동 ${sgPy(D.stat.refFoot)}평으로 건축물대장 건축면적(${sgPy(reg.arch)}평)의 ${Math.round(cov * 100)}%입니다. 그림은 지도에 있는 동만, 숫자는 대장 기준입니다.</p>` : '';
+    ? `<details class="s3-cov"><summary>한국콜마 그림은 건축물대장 ${estB.length + (D.ref.mainOf ? 1 : D.ref.mapN)}동 기준 · 점선 ${estB.length}동은 위치 추정 <span>자세히</span></summary><ul>`
+      + `<li><b>기준 자료</b> — 한국콜마 세종(관정리 732) 필지의 건축물대장에는 ${estB.length + (D.ref.mainOf ? 1 : D.ref.mapN)}개 동이 올라 있습니다. 그림의 동 수·바닥 면적·층수는 이 대장 값을 따릅니다.</li>`
+      + (D.ref.mainOf ? `<li><b>본동</b> — 지도(브이월드)에는 건물 윤곽이 ${D.ref.mapN}조각으로 나뉘어 그려져 있는데, 이 조각들은 대장의 <b>${esc(D.ref.mainOf.name)}</b>(건축면적 ${sgPy(D.ref.mainOf.arch)}평${D.ref.mainOf.floors ? `, 지상 ${D.ref.mainOf.floors}층` : ''}) 한 동으로 봤습니다. 지도 윤곽은 이 동 건축면적의 ${Math.round(D.ref.mainOf.cover * 100)}%만 덮고 있어, 실제 건물은 그림보다 넓습니다.</li>` : '')
+      + `<li><b>지도에 없는 동</b> — ${estB.map((b) => `${esc(b.name || '부속동')}(${sgPy(b.arch || sgArea(b.pts))}평 · ${b.floors}층)`).join(', ')}은 지도에 윤곽이 없습니다. 대장의 건축면적과 층수만큼의 상자를 부지 안 빈 땅에 세웠습니다.</li>`
+      + '<li><b>점선 상자</b> — 크기와 높이는 대장 값이지만, 놓인 위치와 모양은 추정입니다. 실제 배치는 위성 사진이나 방문 때 확인하세요.</li>'
+      + `<li><b>숫자</b> — 오른쪽의 바닥 면적·연면적·「콜마 대비 %」는 그림이 아니라 대장 값으로 계산합니다.</li></ul></details>`
+    : cov != null && cov < 0.8 ? `<details class="s3-cov"><summary>지도에 그려진 한국콜마 건물은 대장 건축면적의 ${Math.round(cov * 100)}% <span>자세히</span></summary><ul><li>지도에는 ${D.ref.bldgs.length}동 ${sgPy(D.stat.refFoot)}평만 그려져 있고, 건축물대장 건축면적은 ${sgPy(reg.arch)}평입니다.</li><li>그림은 지도에 있는 동만 보여 주고, 숫자는 대장 기준입니다.</li></ul></details>` : '';
   const pct = (a, b) => (b ? `${Math.max(1, Math.round((a / b) * 100))}%` : '—');
   const bar = (lab, a, b, unitTxt) => {
     const mx = Math.max(a, b) || 1;
