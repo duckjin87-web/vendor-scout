@@ -1,0 +1,40 @@
+name: Diagnose CGMP list
+
+# 식약처 CGMP 적합업소 API를 프록시로 직접 받아 전체 건수·페이지·항목 이름과 특정 상호 줄을 본다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      kw: { description: '찾을 상호 글자(| 구분)', required: true, type: string, default: '콜마|코스맥스|모나미|피엘' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Probe
+        env:
+          SITE: ${{ inputs.site }}
+          KW: ${{ inputs.kw }}
+        run: |
+          cat > d.mjs <<'JS'
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3500));
+          const get = async (q) => { const r = await fetch(`${process.env.SITE}/api/proxy?service=gmp&${new URLSearchParams(q)}`); const t = await r.text(); try { return JSON.parse(t); } catch { return { raw: t.slice(0, 400), status: r.status }; } };
+          const itemsOf = (j) => { const b = (j && (j.body || (j.response && j.response.body))) || {}; let it = b.items; if (it && it.item) it = it.item; return { items: Array.isArray(it) ? it : it ? [it] : [], total: b.totalCount, page: b.pageNo, rows: b.numOfRows }; };
+          for (const rows of ['500', '100']) { const j = await get({ numOfRows: rows, pageNo: '1' }); const x = itemsOf(j); n(`rows=${rows}: 받은 ${x.items.length}건 · totalCount ${x.total} · numOfRows ${x.rows} ${x.items.length ? '' : JSON.stringify(j).slice(0, 300)}`); }
+          // 전체를 페이지로 모은다
+          const all = []; let total = null;
+          for (let pg = 1; pg <= 20; pg++) { const x = itemsOf(await get({ numOfRows: '100', pageNo: String(pg) })); total = x.total; all.push(...x.items); if (!x.items.length || all.length >= Number(total || 0)) break; }
+          n(`페이지 수집: ${all.length}건 / totalCount ${total} · 항목 이름 ${Object.keys(all[0] || {}).join(',')}`);
+          const names = new Set(all.map((r) => JSON.stringify(Object.values(r).filter((v) => typeof v === 'string' && /[가-힣]/.test(v)).slice(0, 2))));
+          n(`고유 업체·주소 조합 ${names.size}`);
+          for (const kw of process.env.KW.split('|')) {
+            const hit = all.filter((r) => JSON.stringify(r).includes(kw));
+            n(`[${kw}] ${hit.length}건 :: ${hit.slice(0, 12).map((r) => JSON.stringify(r)).join(' ‖ ').slice(0, 3000)}`);
+          }
+          JS
+          node d.mjs
