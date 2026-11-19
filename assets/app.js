@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 252;
+const BUILD = 253;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -4818,12 +4818,13 @@ function wwCalcHtml(v, M) {
   const mLo = dLo * days / 12, mHi = dHi == null ? null : dHi * days / 12;
   const pcs = (ton) => Math.round(ton * 10000);              // 100g(≈100mL) 기준 1톤 = 1만 개
   const B = M && M.bld;
-  const per = B && B.tot && dLo ? Math.round(((dHi != null ? (dLo + dHi) / 2 : dLo) * 1000) / (B.tot / 3.305785)) : null;   // 연면적 평당 하루 kg
+  const perRaw = B && B.tot && dLo ? ((dHi != null ? (dLo + dHi) / 2 : dLo) * 1000) / (B.tot / 3.305785) : null;   // 연면적 평당 하루 kg
+  const per = perRaw == null ? null : perRaw >= 10 ? Math.round(perRaw).toLocaleString() : perRaw.toFixed(perRaw >= 1 ? 1 : 2);
   return `<div class="ww-out"><div class="vd-chips">`
     + `<div class="vch vch-num"><i>하루 제조 추정</i><b>${rng(dLo, dHi, '톤')}<small>폐수 ${rng(lo, hi, '㎥')} × 1/5</small></b></div>`
     + `<div class="vch vch-num"><i>한 달 제조 추정</i><b>${rng(mLo, mHi, '톤')}<small>연 ${days}일 가동${c && c.days ? '(대기 신고)' : '(월 22일 가정)'}</small></b></div>`
     + `<div class="vch vch-num"><i>개수 환산</i><b>${mHi == null ? `월 ${pcs(mLo).toLocaleString()}개 이상` : `월 ${pcs(mLo).toLocaleString()}${mHi !== mLo ? `~${pcs(mHi).toLocaleString()}` : ''}개`}<small>100g(100mL) 제품 기준</small></b></div>`
-    + (per != null ? `<div class="vch vch-num"><i>공장 규모 대비</i><b>평당 하루 ${per.toLocaleString()}kg<small>연면적 약 ${Math.round(B.tot / 3.305785).toLocaleString()}평</small></b></div>` : '')
+    + (per != null ? `<div class="vch vch-num"><i>공장 규모 대비</i><b>평당 하루 ${per}kg<small>연면적 약 ${Math.round(B.tot / 3.305785).toLocaleString()}평</small></b></div>` : '')
     + `</div><p class="xfoot">환산 기준: 폐수 10톤 → 제조 약 2톤(1/5). 세척수 비중·CIP 설비·제형(워터리스·파우더)에 따라 크게 달라지는 <b>가늠치</b>입니다. ${v.m3 > 0 ? '' : `${v.kind}종은 법정 구간(${rng(lo, hi, '㎥/일')})으로 계산했습니다.`}</p></div>`;
 }
 function waterSecHtml(M) {
@@ -4853,7 +4854,7 @@ function waterSecHtml(M) {
   h += `<div class="ww-calc" data-ww-nm="${esc(nm)}"><h4 class="at-sub">폐수량으로 제조량 가늠 <small>폐수 10톤 → 제조 약 2톤</small></h4>`
     + `<div class="ww-in"><label>하루 폐수 배출량 <input type="number" min="0" step="0.1" inputmode="decimal" data-ww-in value="${v && v.m3 > 0 ? v.m3 : ''}" placeholder="예: 10"> ㎥(톤)/일</label>`
     + `<span class="ww-or">또는 종별</span><span class="ww-kinds" role="group" aria-label="폐수배출시설 종별">${[1, 2, 3, 4, 5].map((k) => `<button type="button" class="nb-btn sm${v && !(v.m3 > 0) && v.kind === k ? ' dark' : ''}" data-ww-kind="${k}" title="${WW_KIND[k][1] == null ? `${WW_KIND[k][0]}㎥/일 이상` : `${WW_KIND[k][0]}~${WW_KIND[k][1]}㎥/일`}">${k}종</button>`).join('')}</span>`
-    + (v ? '<button type="button" class="nb-btn sm" data-ww-clear>지우기</button>' : '') + '</div>'
+    + `<button type="button" class="nb-btn sm" data-ww-clear${v ? '' : ' hidden'}>지우기</button></div>`
     + `<div data-ww-out>${wwCalcHtml(v, M)}</div></div>`;
   return h + '</div>';
 }
@@ -7889,7 +7890,7 @@ function renderAreaTab(report) {
   };
 
   // 폐수량 → 제조량 환산 — 입력할 때마다 결과 칸만 다시 그린다(탭 전체를 다시 그리면 입력 포커스가 날아간다)
-  const wwRedraw = (box, v) => { const o = box.querySelector('[data-ww-out]'); if (o) o.innerHTML = wwCalcHtml(v, M); box.querySelectorAll('[data-ww-kind]').forEach((b) => b.classList.toggle('dark', !!(v && !(v.m3 > 0) && v.kind === Number(b.dataset.wwKind)))); };
+  const wwRedraw = (box, v) => { const o = box.querySelector('[data-ww-out]'); if (o) o.innerHTML = wwCalcHtml(v, M); box.querySelectorAll('[data-ww-kind]').forEach((b) => b.classList.toggle('dark', !!(v && !(v.m3 > 0) && v.kind === Number(b.dataset.wwKind)))); const cl = box.querySelector('[data-ww-clear]'); if (cl) cl.hidden = !v; };
   wrap.addEventListener('input', (e) => {
     const inp = e.target.closest('[data-ww-in]'); if (!inp) return;
     const box = inp.closest('.ww-calc'); const m3 = Number(inp.value);
