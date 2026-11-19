@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 251;
+const BUILD = 252;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2960,6 +2960,46 @@ async function airLookup(bzno, nm, siteAddrs) {
   return { rows, queried: qs.length };
 }
 
+// ── 폐수배출사업장(전국폐수배출사업장표준데이터) ──
+// 매주 GitHub Actions(water.yml)가 만든 data/water/latest.json 색인에서 찾는다(배출량·종별 칸은 원자료에 없다).
+// 사업자번호가 없어 상호와 제조소 주소로 대조한다. 도로명 '산단로 24'는 여러 도시에 있으므로
+// 주소 대조는 시군구가 같을 때만 인정한다. 자료를 낸 시군구가 일부뿐이라(2026-11: 32곳) 제조소 지역이
+// 제공 목록에 있는지도 함께 돌려준다 — '신고 없음'과 '그 지역 자료 없음'은 다른 말이다.
+let _waterP = null;
+function lotKeyOf(addr) {
+  const m = String(addr || '').match(/([가-힣0-9]+(?:동|리|가))\s*(산\s?)?(\d+(?:-\d+)?)(?![\d])/);
+  return m ? `${m[1]}${m[2] ? '산' : ''}${m[3]}` : '';
+}
+async function waterLookup(nm, addrs) {
+  if (!_waterP) _waterP = fetch(`data/water/latest.json?v=${BUILD}-${new Date().toISOString().slice(0, 10)}`, { cache: 'no-cache' })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`색인 HTTP ${r.status}`)))).catch((e) => { _waterP = null; throw e; });
+  const D = await _waterP;
+  const key = stripCorp(nm).replace(/\s/g, '');
+  const sites = [...new Set((addrs || []).filter(Boolean).map(String))].map((t) => ({ t, road: roadKeyOf(t), lot: lotKeyOf(t) }));
+  // 기관명 '경기도 평택시' · '대구광역시 북구' — 끝 두 토큰이 모두 주소에 있어야 같은 지역
+  //   구 이름(북구·강서구)은 여러 도시에 있어 시·도 앞 두 글자까지 본다. 시·군은 이름만 본다
+  //   (도 이름이 바뀐 곳 — 전북특별자치도·전남광주통합특별시 — 은 옛 주소 표기와 앞 글자가 달라서)
+  const inArea = (inst, t) => {
+    const p = String(inst || '').split(/\s+/).filter(Boolean); const last = p[p.length - 1];
+    if (!last || !t.includes(last)) return false;
+    return !/구$/.test(last) || p.length < 2 || t.includes(p[0].slice(0, 2));
+  };
+  const covered = sites.length ? D.inst.filter((x) => sites.some((s) => inArea(x, s.t))) : [];
+  const rows = [];
+  for (const r of D.rows) {
+    const [name, road, lot, ti, ii, ymd] = r;
+    const inst = D.inst[ii];
+    const rn = stripCorp(name).replace(/\s/g, '').replace(/\(.*?\)|제?\d+공장$|공장$/g, '');
+    const nameEq = !!key && rn === key;   // 앞부분만 같은 다른 회사(○○홀딩스)는 넣지 않는다
+    const hit = sites.find((s) => inArea(inst, s.t) && ((s.road && s.road === roadKeyOf(road)) || (s.lot && s.lot === lotKeyOf(lot))));
+    if (!hit && !nameEq) continue;
+    rows.push({ name, addr: road || lot, lot, kind: D.tp[ti] || '', inst, ymd: ymd || null, atSite: !!hit, nameEq, site: hit ? hit.t : null });
+  }
+  rows.sort((a, b) => (b.atSite - a.atSite) || (b.nameEq - a.nameEq));
+  return { rows, covered, builtAt: D.builtAt, total: D.total, instN: D.inst.length, siteN: sites.length };
+}
+window.waterLookup = waterLookup;
+
 // ── 금융위 재무 조회 (최신 연도 확보 강화) ──
 // 한 페이지만 받으면 레코드가 많은 법인은 최신 회계연도가 잘려 옛 자료만 남는다.
 // ① 여러 페이지를 모아 받고 ② 그래도 최신이 오래됐으면 최근 연도를 bizYear로 직접 조회해 보완.
@@ -4232,6 +4272,10 @@ async function liveSiteStage(res, corp, name) {
     await bldAttachUnit(res.bld.data, bldQueried, [fAddr, ...mAddrs, ...nedS.map((x) => `${x.addr} ${x.detail || ''}`),
       ...((site && site.cands) || []).map((c) => c.addr), (res.nedrug && res.nedrug.data && res.nedrug.data.addrLine) || '']).catch(() => {});
   }
+  // 폐수배출사업장 — 선정된 공장 주소와 제조소·공장등록 주소로 대조(정적 색인이라 빠르다)
+  try {
+    res.water = { ok: true, data: await waterLookup(bnm, [site && site.addr, fAddr, ...mAddrs, ...nedAddrs, ...((site && site.cands) || []).map((c) => c.addr)]) };
+  } catch (e) { res.water = { ok: false, err: e && e.message ? e.message : String(e) }; }
 
   return sig;
 }
@@ -4751,6 +4795,67 @@ function airSecHtml(M) {
   if (ins.length) h += '<ul class="xins">' + ins.map(([k, t]) => `<li class="${k}">${t}</li>`).join('') + '</ul>';
   h += '<p class="xfoot">출처: 행정안전부 대기오염물질 배출시설 설치 사업장(지자체 인허가). 공장 신고는 사업자번호가 비었거나 지점 번호인 경우가 많아 사업자번호·상호·제조소 주소로 함께 찾습니다.</p></div>';
   return h;
+}
+
+// ── 폐수배출사업장(공장 면적 탭 · 환경) + 폐수량 → 제조량 환산 ──
+// 공개 표준데이터에는 배출량·종별이 없다. 허가증·현장 확인으로 얻은 하루 배출량(또는 종별)을 넣으면
+// 「폐수 10톤 → 제조 약 2톤」(1/5) 기준으로 하루·한 달 제조량을 가늠한다. 입력은 업체별로 이 브라우저에 남는다.
+const WW_RATIO = 0.2;
+// 물환경보전법 시행령 별표13 — 1일 폐수배출량 기준 사업장 종별(㎥/일)
+const WW_KIND = { 1: [2000, null], 2: [700, 2000], 3: [200, 700], 4: [50, 200], 5: [0, 50] };
+const WW_KEY = 'vs_ww';
+const wwGet = (nm) => { try { return (JSON.parse(localStorage.getItem(WW_KEY) || '{}'))[nm] || null; } catch { return null; } };
+const wwSet = (nm, v) => { try { const o = JSON.parse(localStorage.getItem(WW_KEY) || '{}'); if (v) o[nm] = v; else delete o[nm]; localStorage.setItem(WW_KEY, JSON.stringify(o)); } catch { /* 저장 못 해도 계산은 된다 */ } };
+function wwCalcHtml(v, M) {
+  if (!v || (!(v.m3 > 0) && !v.kind)) return '<p class="ww-out ww-empty">하루 폐수 배출량(㎥ = 톤)을 넣거나 종별을 고르면 제조량을 환산합니다.</p>';
+  const A = M && M.air;
+  const c = A && A.rows ? (A.rows.find((r) => r.atSite && !r.isClosed) || A.rows.find((r) => r.atSite)) : null;
+  const days = c && c.days ? c.days : 264;                     // 대기 신고 가동일수, 없으면 월 22일 × 12
+  const lo = v.m3 > 0 ? v.m3 : WW_KIND[v.kind][0], hi = v.m3 > 0 ? v.m3 : WW_KIND[v.kind][1];
+  const t = (x) => (x >= 100 ? Math.round(x).toLocaleString() : x >= 10 ? x.toFixed(0) : x.toFixed(1).replace(/\.0$/, ''));
+  const rng = (a, b, u) => (b == null ? `${t(a)}${u} 이상` : a === b ? `${t(a)}${u}` : `${t(a)}~${t(b)}${u}`);
+  const dLo = lo * WW_RATIO, dHi = hi == null ? null : hi * WW_RATIO;
+  const mLo = dLo * days / 12, mHi = dHi == null ? null : dHi * days / 12;
+  const pcs = (ton) => Math.round(ton * 10000);              // 100g(≈100mL) 기준 1톤 = 1만 개
+  const B = M && M.bld;
+  const per = B && B.tot && dLo ? Math.round(((dHi != null ? (dLo + dHi) / 2 : dLo) * 1000) / (B.tot / 3.305785)) : null;   // 연면적 평당 하루 kg
+  return `<div class="ww-out"><div class="vd-chips">`
+    + `<div class="vch vch-num"><i>하루 제조 추정</i><b>${rng(dLo, dHi, '톤')}<small>폐수 ${rng(lo, hi, '㎥')} × 1/5</small></b></div>`
+    + `<div class="vch vch-num"><i>한 달 제조 추정</i><b>${rng(mLo, mHi, '톤')}<small>연 ${days}일 가동${c && c.days ? '(대기 신고)' : '(월 22일 가정)'}</small></b></div>`
+    + `<div class="vch vch-num"><i>개수 환산</i><b>${mHi == null ? `월 ${pcs(mLo).toLocaleString()}개 이상` : `월 ${pcs(mLo).toLocaleString()}${mHi !== mLo ? `~${pcs(mHi).toLocaleString()}` : ''}개`}<small>100g(100mL) 제품 기준</small></b></div>`
+    + (per != null ? `<div class="vch vch-num"><i>공장 규모 대비</i><b>평당 하루 ${per.toLocaleString()}kg<small>연면적 약 ${Math.round(B.tot / 3.305785).toLocaleString()}평</small></b></div>` : '')
+    + `</div><p class="xfoot">환산 기준: 폐수 10톤 → 제조 약 2톤(1/5). 세척수 비중·CIP 설비·제형(워터리스·파우더)에 따라 크게 달라지는 <b>가늠치</b>입니다. ${v.m3 > 0 ? '' : `${v.kind}종은 법정 구간(${rng(lo, hi, '㎥/일')})으로 계산했습니다.`}</p></div>`;
+}
+function waterSecHtml(M) {
+  const W = M && M.water;
+  if (!W) return '';
+  const nm = M.vendor_name || '';
+  const v = wwGet(nm);
+  const c = W.rows.find((r) => r.atSite);
+  const chip = (k, val, sub, t) => `<div class="vch vch-${t || 'num'}"><i>${esc(k)}</i><b>${esc(val)}${sub ? `<small>${esc(sub)}</small>` : ''}</b></div>`;
+  let h = `<div class="at-water"><h4 class="at-sub">폐수 배출시설</h4><div class="vd-chips">`
+    + chip('제조소 주소 등재', c ? '있음' : W.covered ? '없음' : '지역 자료 없음', c ? '제조소 주소와 일치' : W.covered ? '자료를 낸 지역' : `자료 제공 시군구 ${W.instN}곳 밖`, c ? 'num' : 'na')
+    + (c ? chip('업종 구분', c.kind || '—', c.ymd ? `기준일 ${c.ymd}` : '') : '')
+    + '</div>';
+  if (W.rows.length) {
+    h += '<div class="xt-wrap"><table class="xt"><thead><tr><th>사업장</th><th class="hide-m">주소</th><th>업종 구분</th><th class="hide-m">관할</th><th class="hide-m">기준일</th></tr></thead><tbody>'
+      + W.rows.map((r) => `<tr class="${r.atSite ? 'main' : ''}"><td>${r.atSite ? `<b>${esc(r.name)}</b>` : esc(r.name)}<br>${r.atSite ? '<span class="xtag t-ok">제조소 주소 일치 ✓</span>' : '<span class="xtag t-oth">같은 상호 · 다른 주소</span>'}</td>`
+        + `<td class="hide-m">${esc(r.addr)}</td><td>${esc(r.kind || '—')}</td><td class="hide-m">${esc(r.inst || '')}</td><td class="hide-m">${esc(r.ymd || '—')}</td></tr>`).join('')
+      + '</tbody></table></div>';
+  }
+  const ins = [];
+  if (c && /화장품/.test(c.kind)) ins.push(['good', '제조소 주소가 <b>「화장품 제조시설」</b> 업종의 폐수배출사업장입니다 — 원료를 섞고 설비를 세척하는 <b>자체 생산 공정</b>이 있다는 직접 근거입니다.']);
+  else if (c) ins.push(['good', `제조소 주소에 폐수배출사업장(${esc(c.kind || '업종 미상')})이 있습니다 — 물을 쓰는 공정이 있다는 근거입니다. 업종이 화장품이 아니면 같은 건물의 다른 업체일 수 있어 확인하세요.`]);
+  else if (W.covered) ins.push(['warn', '자료를 낸 지역인데 제조소 주소로 등재가 없습니다 — 폐수 전량 위탁 처리·소량 면제일 수도, 생산을 다른 곳에 맡기는 구조일 수도 있습니다.']);
+  else ins.push(['info', `이 제조소 지역은 지자체가 표준데이터를 내지 않아 확인할 수 없습니다(전국 ${W.instN}개 시군구만 제공). 현장에서 <b>폐수배출시설 설치 허가·신고증</b>을 보면 종별과 하루 배출량이 적혀 있습니다.`]);
+  h += '<ul class="xins">' + ins.map(([k, t]) => `<li class="${k}">${t}</li>`).join('') + '</ul>';
+  // 폐수량 → 제조량 환산
+  h += `<div class="ww-calc" data-ww-nm="${esc(nm)}"><h4 class="at-sub">폐수량으로 제조량 가늠 <small>폐수 10톤 → 제조 약 2톤</small></h4>`
+    + `<div class="ww-in"><label>하루 폐수 배출량 <input type="number" min="0" step="0.1" inputmode="decimal" data-ww-in value="${v && v.m3 > 0 ? v.m3 : ''}" placeholder="예: 10"> ㎥(톤)/일</label>`
+    + `<span class="ww-or">또는 종별</span><span class="ww-kinds" role="group" aria-label="폐수배출시설 종별">${[1, 2, 3, 4, 5].map((k) => `<button type="button" class="nb-btn sm${v && !(v.m3 > 0) && v.kind === k ? ' dark' : ''}" data-ww-kind="${k}" title="${WW_KIND[k][1] == null ? `${WW_KIND[k][0]}㎥/일 이상` : `${WW_KIND[k][0]}~${WW_KIND[k][1]}㎥/일`}">${k}종</button>`).join('')}</span>`
+    + (v ? '<button type="button" class="nb-btn sm" data-ww-clear>지우기</button>' : '') + '</div>'
+    + `<div data-ww-out>${wwCalcHtml(v, M)}</div></div>`;
+  return h + '</div>';
 }
 
 // 재무 지표 정의 (금액 4종 + 비율 2종), 색상 구분
@@ -7731,7 +7836,16 @@ function renderAreaTab(report) {
       + cat('area', '면적 · 입지', areaPlace)
       + cat('cmp', '3D 규모 비교', cmpPart)
       + cat('truck', '물류 · 화물차 입차', tk)
-      + cat('air', '환경 · 대기배출', air ? { html: air, src: airSrc } : null);
+      + (() => {
+        // 대기 + 폐수를 한 카드로 — 둘 다 '실제로 설비를 돌린다'는 근거다
+        const wat = waterSecHtml(M);
+        const W = M.water;
+        const wSrc = W ? [`전국폐수배출사업장표준데이터(공공데이터포털 · 지자체 제공 · 주간 색인 ${esc(String(W.builtAt || '').slice(0, 10))}) — 상호·주소·업종만 있고 배출량·종별은 없습니다. 자료를 낸 시군구 ${W.instN}곳, ${(W.total || 0).toLocaleString()}개 사업장`,
+          '제조소 주소 대조: 도로명(또는 지번)이 같고 관할 시군구가 같을 때만 같은 곳으로 봅니다',
+          '제조량 환산: 폐수 10톤 → 제조 약 2톤(1/5) · 한 달 = 하루 × 가동일 ÷ 12(가동일은 대기 신고값, 없으면 월 22일)'] : [];
+        const body = `${air ? `<h4 class="at-sub">대기 배출시설</h4>${air}` : ''}${wat}`;
+        return cat('air', '환경 · 대기 · 폐수', body ? { html: body, src: [...airSrc, ...wSrc] } : null);
+      })();
     ui.painted = true;
     if (s3) sgBind3d(wrap, s3.D, nm);
     { const slot = wrap.querySelector('[data-slot="cmp"]'); const cmp = slot ? renderAreaCompare(report) : null; if (cmp) slot.appendChild(cmp); }
@@ -7774,6 +7888,21 @@ function renderAreaTab(report) {
     commit({ queried: addr, ...bld });
   };
 
+  // 폐수량 → 제조량 환산 — 입력할 때마다 결과 칸만 다시 그린다(탭 전체를 다시 그리면 입력 포커스가 날아간다)
+  const wwRedraw = (box, v) => { const o = box.querySelector('[data-ww-out]'); if (o) o.innerHTML = wwCalcHtml(v, M); box.querySelectorAll('[data-ww-kind]').forEach((b) => b.classList.toggle('dark', !!(v && !(v.m3 > 0) && v.kind === Number(b.dataset.wwKind)))); };
+  wrap.addEventListener('input', (e) => {
+    const inp = e.target.closest('[data-ww-in]'); if (!inp) return;
+    const box = inp.closest('.ww-calc'); const m3 = Number(inp.value);
+    const v = m3 > 0 ? { m3 } : null; wwSet(box.dataset.wwNm, v); wwRedraw(box, v);
+  });
+  wrap.addEventListener('click', (e) => {
+    const kb = e.target.closest('[data-ww-kind]'); const cb = e.target.closest('[data-ww-clear]');
+    if (!kb && !cb) return;
+    const box = (kb || cb).closest('.ww-calc');
+    const v = kb ? { kind: Number(kb.dataset.wwKind) } : null;
+    const inp = box.querySelector('[data-ww-in]'); if (inp) inp.value = '';
+    wwSet(box.dataset.wwNm, v); wwRedraw(box, v);
+  });
   wrap.addEventListener('toggle', (e) => {
     if (e.target.classList && e.target.classList.contains('at-cfold')) ui.candOpen = e.target.open;
     if (e.target.classList && e.target.classList.contains('at-more')) ui.more = e.target.open;

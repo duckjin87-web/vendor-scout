@@ -3045,3 +3045,16 @@ details.s3-cov > summary::-webkit-details-marker { display: none; }
 details.s3-cov > summary span { color: var(--accent); font-weight: 700; margin-left: 4px; }
 details.s3-cov[open] > summary span { display: none; }
 details.s3-cov ul { margin: 8px 0 0; padding: 10px 12px 10px 26px; background: var(--gC-bg); border-left: 3px solid var(--gC); border-radius: 0 6px 6px 0; display: grid; gap: 5px; line-height: 1.6; color: var(--text); }
+
+/* ── 환경 · 폐수 배출시설 + 폐수량 → 제조량 환산 ── */
+.at-water { margin-top: 18px; }
+.at-water .at-sub small, .ww-calc .at-sub small { font-weight: 500; color: var(--muted); font-size: 12px; margin-left: 6px; }
+.ww-calc { margin-top: 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--accent-soft); }
+.ww-in { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13.5px; }
+.ww-in label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.ww-in input { width: 7.5em; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; font: inherit; background: var(--surface, #fff); color: var(--text); }
+.ww-or { color: var(--muted); font-size: 12.5px; }
+.ww-kinds { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.ww-out { margin-top: 12px; }
+.ww-out.ww-empty { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+@media (max-width: 560px) { .ww-in label { width: 100%; } }
