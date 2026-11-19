@@ -1190,7 +1190,8 @@ function assembleLiveReport(name, corp, res) {
   const airInfo = airD ? mkAir(airD, siteKeys) : null;
 
   // ── 폐수배출사업장(표준데이터 색인) — 물을 쓰는 생산 공정(세척·유화)이 실제로 있다는 근거 ──
-  const waterD = R.water && R.water.ok ? R.water.data : null;
+  const waterOnF = typeof window !== 'undefined' && !!window.WATER_ON;   // 폐수 기능 숨김 상태면 아무것도 쓰지 않는다
+  const waterD = waterOnF && R.water && R.water.ok ? R.water.data : null;
   const waterInfo = waterD ? (() => {
     const rows = waterD.rows || [];
     const cur = rows.filter((r) => r.atSite);
@@ -1417,7 +1418,7 @@ function assembleLiveReport(name, corp, res) {
         c ? `제조소 주소에 대기오염물질 배출시설 설치 신고가 있습니다${c.permit ? `(인허가 ${c.permit})` : ''} — ${c.isClosed ? '지금 제조소의 배출시설이 폐업·휴업 상태입니다. 가동 여부를 확인하세요' : '보일러·유화·건조 등 생산 설비가 신고된 실제 공장이라는 근거'}. 자세한 내역은 「공장 면적」 탭`
           : '배출시설 신고가 없는 것은 결격이 아닙니다 — 소규모 시설은 신고 대상이 아닐 수 있습니다');
     })(),
-    (() => {
+    ...(waterOnF ? [    (() => {
       const W = waterInfo;
       if (!W) return f('폐수 배출시설 신고', null, 'D', '전국폐수배출사업장표준데이터', null, why('water', '조회 결과 없음'));
       const c = W.rows.find((r) => r.atSite);
@@ -1427,7 +1428,7 @@ function assembleLiveReport(name, corp, res) {
         `표준데이터에 자료를 낸 시군구가 ${W.instN}곳뿐이라 이 제조소 지역은 확인할 수 없습니다 — 결격이 아닙니다`);
       return f('폐수 배출시설 신고', W.rows.length ? '제조소 주소 등재 없음 · 같은 상호 다른 주소 있음' : '제조소 주소 등재 없음', 'B', '전국폐수배출사업장표준데이터(지자체)', today,
         '자료를 낸 지역인데 제조소 주소로 등재가 없습니다 — 폐수를 위탁 처리하거나 소량이라 신고 대상이 아닐 수 있고, 생산을 다른 곳에 맡기는 경우일 수도 있어 확인이 필요합니다');
-    })(),
+    })()] : []),
     // 자체 제조 근거 — 허가·CGMP는 '할 수 있다'는 자격, 배출·인력은 '실제로 돌린다'는 흔적이다
     (() => {
       const airOn = !!(airInfo && airInfo.rows.some((r) => r.atSite && !r.isClosed));
@@ -1437,8 +1438,8 @@ function assembleLiveReport(name, corp, res) {
       const sig = [airOn ? '대기배출 신고(영업)' : '', waterOn ? '폐수배출 등재' : '', wfOn ? '제조소 주소 보험 인력' : ''].filter(Boolean);
       const n = sig.length;
       const val = !lic ? '제조업 허가 미확인' : n >= 2 ? `자체 제조 확인 — ${sig.join(' · ')}` : n === 1 ? `자체 제조 유력 — ${sig[0]}` : '설비 가동 흔적 미확인';
-      const gaps = [!airOn ? '대기배출' : '', !waterOn ? (waterInfo && !waterInfo.covered ? '폐수(지역 자료 없음)' : '폐수') : '', !wfOn ? '보험 인력' : ''].filter(Boolean);
-      return f('자체 제조 근거', val, !lic ? 'D' : n >= 2 ? 'A' : n === 1 ? 'B' : 'C', '대기배출·폐수배출·고용산재보험 대조', today,
+      const gaps = [!airOn ? '대기배출' : '', !waterOnF ? '' : !waterOn ? (waterInfo && !waterInfo.covered ? '폐수(지역 자료 없음)' : '폐수') : '', !wfOn ? '보험 인력' : ''].filter(Boolean);
+      return f('자체 제조 근거', val, !lic ? 'D' : n >= 2 ? 'A' : n === 1 ? 'B' : 'C', waterOnF ? '대기배출·폐수배출·고용산재보험 대조' : '대기배출·고용산재보험 대조', today,
         n >= 2 ? '허가받은 제조소 주소에서 배출시설과 인력이 함께 확인됩니다 — 생산을 직접 하는 공장입니다'
           : n === 1 ? `제조소 주소에서 ${sig[0]}만 확인됩니다${gaps.length ? ` (없음: ${gaps.join('·')})` : ''} — 소규모라 신고 대상이 아닐 수 있으니 현장에서 설비 가동을 확인하세요`
             : lic ? `허가는 있으나 제조소 주소에서 배출시설·인력 흔적이 없습니다 — 생산을 다른 곳에 맡기는(위탁) 구조인지 확인하세요` : '식약처 제조업 허가부터 확인해야 합니다');
@@ -1843,7 +1844,7 @@ function assembleLiveReport(name, corp, res) {
     stat('rpt', 'rpt', '식약처 기능성 보고품목', rl.length ? `${rl.length}건 (5년내 ${fresh.length})` : null,
       rlAll.length ? `상호 일치 0건 (API가 업체명 미필터로 전체 ${rlAll.length}건 반환 — 이 업체 품목 아님)` : '0건 — 기능성 미취급 또는 미신고'),
     stat('insure', 'insure', '고용·산재보험 (사업장·상시인원)', workforce ? `보험 사업장 ${workforce.sites.length}곳 · 상시 ${workforce.total}명` : null, '가입 사업장 0건'),
-    stat('water', 'water', '폐수배출사업장(표준데이터)', waterInfo ? (waterInfo.cur ? `제조소 주소 ${waterInfo.cur}건${waterInfo.cosm ? ' · 화장품 제조시설' : ''}` : waterInfo.covered ? '제조소 주소 등재 없음' : `이 지역 자료 미제공(제공 시군구 ${waterInfo.instN}곳)`) : null, '조회 결과 없음'),
+    ...(waterOnF ? [stat('water', 'water', '폐수배출사업장(표준데이터)', waterInfo ? (waterInfo.cur ? `제조소 주소 ${waterInfo.cur}건${waterInfo.cosm ? ' · 화장품 제조시설' : ''}` : waterInfo.covered ? '제조소 주소 등재 없음' : `이 지역 자료 미제공(제공 시군구 ${waterInfo.instN}곳)`) : null, '조회 결과 없음')] : []),
     stat('air', 'air', '대기배출시설 신고',airInfo ? (airInfo.rows.length ? `${airInfo.rows.length}건${airInfo.cur ? ` · 제조소 주소 ${airInfo.cur}건` : ''}` : '신고 없음(소규모 면제 가능)') : null, '조회 결과 없음'),
     stat('nps', 'nps', '국민연금 (참고)', npsAll.length ? `상호·앞 6자리 일치 사업장 ${npsAll.length}곳${npsConf.length ? ` · 주소/적용일 확인 ${npsConf.length}곳` : ' · 주소 대조 못 함'}${empVal != null ? ` · 가입자 ${empVal}명` : ''}` : null, npsData && npsData.searched ? `상호 검색 ${npsData.searched}건 중 일치 사업장 없음` : '사업장 검색 0건'),
     { key: 'maker', name: '식약처 화장품제조업', ok: !!mk, warn: !mk && !!(R.maker && R.maker.ok),

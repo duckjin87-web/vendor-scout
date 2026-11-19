@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 253;
+const BUILD = 254;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -2965,6 +2965,10 @@ async function airLookup(bzno, nm, siteAddrs) {
 // 사업자번호가 없어 상호와 제조소 주소로 대조한다. 도로명 '산단로 24'는 여러 도시에 있으므로
 // 주소 대조는 시군구가 같을 때만 인정한다. 자료를 낸 시군구가 일부뿐이라(2026-11: 32곳) 제조소 지역이
 // 제공 목록에 있는지도 함께 돌려준다 — '신고 없음'과 '그 지역 자료 없음'은 다른 말이다.
+// 2026-11 검토: 표준데이터에 배출량·허가/신고 구분·허가일이 없고 32개 시군구만 있어 판단 근거로 쓰기 어렵다.
+// 배출량(수질TMS·전국오염원조사)을 붙일 때까지 화면과 조회에서 뺀다 — 코드는 남겨 두고 이 값만 켜면 다시 나온다.
+const WATER_ON = false;
+window.WATER_ON = WATER_ON;
 let _waterP = null;
 function lotKeyOf(addr) {
   const m = String(addr || '').match(/([가-힣0-9]+(?:동|리|가))\s*(산\s?)?(\d+(?:-\d+)?)(?![\d])/);
@@ -4273,7 +4277,7 @@ async function liveSiteStage(res, corp, name) {
       ...((site && site.cands) || []).map((c) => c.addr), (res.nedrug && res.nedrug.data && res.nedrug.data.addrLine) || '']).catch(() => {});
   }
   // 폐수배출사업장 — 선정된 공장 주소와 제조소·공장등록 주소로 대조(정적 색인이라 빠르다)
-  try {
+  if (WATER_ON) try {
     res.water = { ok: true, data: await waterLookup(bnm, [site && site.addr, fAddr, ...mAddrs, ...nedAddrs, ...((site && site.cands) || []).map((c) => c.addr)]) };
   } catch (e) { res.water = { ok: false, err: e && e.message ? e.message : String(e) }; }
 
@@ -4828,7 +4832,7 @@ function wwCalcHtml(v, M) {
     + `</div><p class="xfoot">환산 기준: 폐수 10톤 → 제조 약 2톤(1/5). 세척수 비중·CIP 설비·제형(워터리스·파우더)에 따라 크게 달라지는 <b>가늠치</b>입니다. ${v.m3 > 0 ? '' : `${v.kind}종은 법정 구간(${rng(lo, hi, '㎥/일')})으로 계산했습니다.`}</p></div>`;
 }
 function waterSecHtml(M) {
-  const W = M && M.water;
+  const W = WATER_ON && M && M.water;
   if (!W) return '';
   const nm = M.vendor_name || '';
   const v = wwGet(nm);
@@ -7840,12 +7844,12 @@ function renderAreaTab(report) {
       + (() => {
         // 대기 + 폐수를 한 카드로 — 둘 다 '실제로 설비를 돌린다'는 근거다
         const wat = waterSecHtml(M);
-        const W = M.water;
+        const W = WATER_ON ? M.water : null;
         const wSrc = W ? [`전국폐수배출사업장표준데이터(공공데이터포털 · 지자체 제공 · 주간 색인 ${esc(String(W.builtAt || '').slice(0, 10))}) — 상호·주소·업종만 있고 배출량·종별은 없습니다. 자료를 낸 시군구 ${W.instN}곳, ${(W.total || 0).toLocaleString()}개 사업장`,
           '제조소 주소 대조: 도로명(또는 지번)이 같고 관할 시군구가 같을 때만 같은 곳으로 봅니다',
           '제조량 환산: 폐수 10톤 → 제조 약 2톤(1/5) · 한 달 = 하루 × 가동일 ÷ 12(가동일은 대기 신고값, 없으면 월 22일)'] : [];
-        const body = `${air ? `<h4 class="at-sub">대기 배출시설</h4>${air}` : ''}${wat}`;
-        return cat('air', '환경 · 대기 · 폐수', body ? { html: body, src: [...airSrc, ...wSrc] } : null);
+        const body = W ? `${air ? `<h4 class="at-sub">대기 배출시설</h4>${air}` : ''}${wat}` : air;
+        return cat('air', W ? '환경 · 대기 · 폐수' : '환경 · 대기배출', body ? { html: body, src: [...airSrc, ...wSrc] } : null);
       })();
     ui.painted = true;
     if (s3) sgBind3d(wrap, s3.D, nm);
