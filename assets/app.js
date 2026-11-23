@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 256;
+const BUILD = 257;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3829,7 +3829,7 @@ function analyzeHireDepts(posts) {
   const ymN = (ym) => (ym ? Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1 : null);
   const items = (posts || []).map((p) => {
     const b = p.board || {};
-    const text = `${p.title} ${(b.sectors || []).join(' ')} ${(b.conds || []).join(' ')}`;
+    const text = `${p.title} ${(b.sectors || []).join(' ')} ${(b.conds || []).join(' ')} ${b.site && b.sectors ? '' : String(p.desc || '').slice(0, 200)}`;
     const ym = b.ym || (p.dates && p.dates.length ? [...p.dates].map((d) => (d.length >= 7 ? d.slice(0, 7) : null)).filter(Boolean).sort().pop() || null : null) || hbYmTitle(p.title);
     return { p, b, text, ym, n: ymN(ym), norm: hireNorm(p.title), site: b.site || (String(p.host || '').replace(/^www\.|^m\.|^job\./, '')), open: b.status === 'open', partner: b.belong === 'partner' };
   }).filter((x) => x.norm.length >= 2);
@@ -3864,7 +3864,7 @@ function analyzeHireDepts(posts) {
     const status = [];
     if (openNow) status.push(['now', '지금 충원 중']);
     if (own.length >= 3 && med != null && med <= 6) status.push(['repeat', `반복 충원 · 평균 ${med}개월`]);
-    else if (own.length >= 2 && med != null && med >= 9) status.push(['periodic', '정기 채용']);
+    else if (own.length >= 3 && med != null && med >= 9) status.push(['periodic', '정기 채용']);
     if (ext.length) status.push(['ext', `외부 인력 공고 ${ext.length}`]);
     if (own.length >= 2 && temp / own.length >= 0.5) status.push(['temp', '비정규 위주']);
     return { dept: d, own: own.length, ext: ext.length, months: ms, med, last, lastYm: last != null ? `${Math.floor(last / 12)}-${String(last % 12 + 1).padStart(2, '0')}` : null,
@@ -3894,7 +3894,7 @@ function analyzeHireDepts(posts) {
   const posWeak = repeats.filter((r) => r.avgGap <= 6);
   if (weak.length || posWeak.length) findings.push({ k: 'weak', t: `반복 충원(취약): ${[...new Set([...weak.map((d) => d.dept), ...posWeak.map((r) => `${r.dept}(${r.lvl}·${r.emp})`)])].join(' · ')}`,
     d: '같은 부서·직책을 짧은 간격으로 다시 뽑고 있습니다 — 이탈이 잦거나(업무 강도·처우) 사람을 못 구하는(입지) 자리입니다. 해당 인원의 근속연수와 최근 1년 퇴사 인원을 확인하세요.' });
-  const tempD = dept.filter((d) => d.status.some(([s]) => s === 'temp') || (d.ext && !d.own));
+  const tempD = dept.filter((d) => d.dept !== '시설지원' && (d.status.some(([s]) => s === 'temp') || (d.ext && d.ext >= Math.max(1, d.own))));
   if (tempD.length) findings.push({ k: 'temp', t: `비정규·외부 인력으로 메우는 부서: ${tempD.map((d) => d.dept).join(' · ')}`, d: '계약직·아르바이트·파견(도급) 공고 비중이 큽니다 — 숙련 인력 비율과 라인별 정규직 반장 배치를 확인하세요. 품질 편차의 원인이 되는 경우가 많습니다.' });
   const gapCore = HIRE_CORE.filter((c) => !dept.some((d) => d.dept === c && d.own));
   if (openings.filter((o) => !o.partner).length >= 4 && gapCore.length) findings.push({ k: 'gap', t: `3년간 공고가 없는 핵심 부서: ${gapCore.join(' · ')}`, d: '인원이 안정적이거나, 소수가 겸직하거나, 외부(위탁 시험·외주 생산)에 맡기는 경우입니다 — 해당 기능의 담당 인원수와 수행 방식을 직접 확인하세요.' });
@@ -4180,7 +4180,9 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile, hpH
   const recentRoles = new Set(dated.filter((p) => p.age <= 12).map((p) => p.role));
   const oldRoles = new Set(dated.filter((p) => p.age > 12).map((p) => p.role));
   const newRoles = [...recentRoles].filter((r) => !oldRoles.has(r) && r !== '기타·불명');
-  if (recent >= 3 && recent >= prior * 2) {
+  // 채용 사이트 목록은 진행 중 공고가 많고 지난 공고는 일부만 보여 최근 쪽으로 쏠린다 — 1년 넘은 공고가 3건 이상 확인될 때만 비교한다
+  const olderN = dated.filter((p) => p.age > 12).length;
+  if (olderN >= 3 && recent >= 3 && recent >= prior * 2) {
     signals.push({
       kind: 'expand', level: newRoles.length ? 'high' : 'mid',
       title: '최근 채용 급증 — 증설·증원 가능성',
