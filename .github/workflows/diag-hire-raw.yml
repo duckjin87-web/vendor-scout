@@ -1,13 +1,13 @@
 name: Collect hiring page samples
 
-# 채용 사이트 목록·기업 채용 탭 HTML 표본을 받아 diag-samples 브랜치에 올린다(파서 작성용). main에는 커밋하지 않는다.
+# 채용 사이트 목록·기업 채용 탭 HTML에서 상호가 나오는 자리의 원문 조각을 로그로 남긴다(파서 작성용). 커밋 없음.
 on:
   workflow_dispatch:
     inputs:
       names: { description: '상호(| 구분)', required: true, type: string, default: '한국콜마|에바스코스메틱' }
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   grab:
@@ -24,10 +24,19 @@ jobs:
           import fs from 'node:fs';
           const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', 'Accept-Language': 'ko-KR,ko;q=0.9' };
           const get = async (u) => { try { const r = await fetch(u, { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(25000) }); const b = Buffer.from(await r.arrayBuffer()); const cs = /euc-?kr/i.test(r.headers.get('content-type') || '') || /charset=["']?euc-kr/i.test(b.slice(0, 3000).toString('latin1')) ? 'euc-kr' : 'utf-8'; return { s: r.status, t: new TextDecoder(cs).decode(b), u: r.url }; } catch (e) { return { s: 0, t: '', err: e.message }; } };
-          const save = (f, x) => { fs.writeFileSync(`out/${f}`, x.t || ''); console.log(`::notice::${f} ${x.s} ${x.t ? x.t.length : 0}자 ${x.err || ''} ${x.u || ''}`); return x; };
+          let NM = '';
+          const save = (f, x) => {
+            const t = (x.t || '').replace(/<script(?![^>]*(?:__NEXT_DATA__|application\/(?:ld\+)?json))[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<svg[\s\S]*?<\/svg>/gi, ' ').replace(/\s+/g, ' ');
+            console.log(`::notice::${f} HTTP ${x.s} 원문 ${x.t ? x.t.length : 0}자 ${x.err || ''} ${x.u || ''}`);
+            const key = NM.replace(/\s/g, '');
+            let at = 0, k = 0; const hits = [];
+            while (k < 3) { const j = t.indexOf(key, at); if (j < 0) break; hits.push(j); at = j + 2500; k++; }
+            hits.forEach((j, q) => console.log(`::notice::${f} 조각${q + 1} @${j} :: ${t.slice(Math.max(0, j - 900), j + 1300)}`));
+            return x;
+          };
           let i = 0;
           for (const nm of process.env.NAMES.split('|')) {
-            const k = encodeURIComponent(nm); i++;
+            const k = encodeURIComponent(nm); i++; NM = nm;
             const sr = save(`${i}-saramin-search.html`, await get(`https://www.saramin.co.kr/zf_user/search/recruit?searchword=${k}&recruitPageCount=100`));
             const csn = (sr.t.match(/csn=([A-Za-z0-9%=]+)/) || [])[1];
             if (csn) {
@@ -49,10 +58,3 @@ jobs:
           }
           JS
           node g.mjs
-      - name: Push samples
-        run: |
-          cd out
-          git init -q -b diag-samples
-          git config user.name "github-actions[bot]"; git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A && git commit -qm "hiring page samples $(date -u +%F)"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" diag-samples
