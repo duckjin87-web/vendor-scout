@@ -53,29 +53,10 @@ jobs:
                 posts: h.posts.map((p) => `${(p.dates[0] || '----')}${p.board && p.board.ymEst ? '~' : ''}|${(p.board && p.board.site) || p.host}|${p.board && p.board.belong === 'partner' ? '협력사|' : ''}${p.board && p.board.status ? p.board.status + '|' : ''}${p.title.slice(0, 60)}|${p.desc.slice(0, 80)}`) };
             }, nm);
             if (r.err) { n(`[${nm}] 실패 ${r.err}`); continue; }
-            n(`[${nm} 부서] ${r.dept}`); n(`[${nm} 직책 반복] ${r.rep || '-'}`); n(`[${nm} 해석] ${r.find || '-'} ‖ 신호 ${r.sig || '-'}`);
             n(`[${nm}] ${r.ms}ms · 공고 ${r.n}건(목록 ${r.board} · 검색 원본 ${r.raw}) · 날짜 확보 ${r.dated}건 · 사이트 ${JSON.stringify(r.host)} · 직종 ${JSON.stringify(r.role)} · 계열 제외 ${(r.affil || []).join(',')}`);
             n(`[${nm} 페이지] ${r.diag.join(' ‖ ')}`);
             for (let i = 0; i < r.posts.length; i += 6) n(`[${nm} 공고 ${i + 1}~] ${r.posts.slice(i, i + 6).join(' ‖ ')}`);
-          }
-          // 채용 사이트 '지난 공고' 목록이 열리는지 — fetchPage 프록시로
-          const urls = [
-            'https://www.saramin.co.kr/zf_user/search/recruit?searchword=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88&recruitPage=1',
-            'https://www.saramin.co.kr/zf_user/company-info/view-inner-recruit?csn=a1BxcHFOVkxBNm1xZkMyc0JlYzZUQT09',
-            'https://www.jobkorea.co.kr/Search/?stext=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
-            'https://search.incruit.com/list/search.asp?col=job&kw=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
-            'https://www.alba.co.kr/search/Search.asp?WsSrchWord=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
-            'https://www.albamon.com/total-search?keyword=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
-            'https://www.work24.go.kr/wk/a/b/1200/retriveDtlEmpSrchList.do?srcKeyword=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
-          ];
-          for (const u of urls) {
-            const r = await page.evaluate(async (url) => {
-              try { const x = await proxyOnlyGet('fetchPage', { url }); const t = String((x && x.text) || ''); const txt = t.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-                const dates = (txt.match(/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}|\d{2}\/\d{2}\(.\)|~\s?\d{2}\/\d{2}/g) || []).slice(0, 12);
-                return `HTTP ${x && x.status} · ${t.length}자 · 날짜 ${dates.join(',')} :: ${txt.slice(0, 500)}`; }
-              catch (e) { return '실패 ' + e.message; }
-            }, u);
-            n(`[페이지 ${u.split('/')[2]}] ${r}`);
+            n(`[${nm} 부서] ${r.dept}`); n(`[${nm} 직책 반복] ${r.rep || '-'}`); n(`[${nm} 해석] ${r.find || '-'} ‖ 신호 ${r.sig || '-'}`);
           }
           await b.close();
           JS

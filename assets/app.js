@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 255;
+const BUILD = 256;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3641,6 +3641,12 @@ const hbKey = (s) => stripCorp(s).replace(/\([^)]*\)|\s/g, '').replace(/[-_]?(�
 function hbBelong(company, title, key) {
   const c = hbKey(company);
   if (c && c === key) return 'mine';
+  // 이름이 이 회사로 시작하는 다른 회사(코스맥스 → 코스맥스펫·코스맥스네오·코스맥스비티아이)는 계열사다.
+  // 제목이 '코스맥스(주) …'·'[코스맥스] …'처럼 이 회사 이름을 정확히 내건 경우만(모회사 계정으로 대신 올린 공고) 이 회사로 본다.
+  if (c && key && c.startsWith(key)) {
+    const re = new RegExp(`^\\[?\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(\\(주\\)|㈜|주식회사|\\]|\\s(?![가-힣]{2,}㈜))`);
+    return re.test(String(title || '').trim()) ? 'mine' : null;
+  }
   // 다른 회사가 낸 공고인데 제목에 이 회사 이름(사업장)이 있다 — 파견·도급·구내식당 등 협력사 공고
   if (key && stripCorp(title).replace(/\s/g, '').includes(key)) return 'partner';
   return null;
@@ -3727,13 +3733,13 @@ function hbParseAlba(html) {
     };
   }).filter((x) => x.title);
 }
-async function hireBoards(nm) {
+async function hireBoards(nm, csnHintP) {
   const q = stripCorp(nm).trim();
   const key = hbKey(nm);
   const k = encodeURIComponent(q);
   const get = async (u) => { try { const r = await proxyOnlyGet('fetchPage', { url: u }); return { html: (r && r.text) || '', status: r && r.status }; } catch (e) { return { html: '', err: (e && e.message) || String(e) }; } };
   const [sr, ic, jk, al] = await Promise.all([
-    get(`https://www.saramin.co.kr/zf_user/search/recruit?searchword=${k}&recruitPageCount=40`),
+    get(`https://www.saramin.co.kr/zf_user/search/recruit?searchword=${k}&recruitPageCount=20`),
     get(`https://search.incruit.com/list/search.asp?col=job&kw=${k}&psize=60`),
     get(`https://www.jobkorea.co.kr/Search/?stext=${k}&tabType=recruit`),
     get(`https://www.alba.co.kr/search/Search.asp?WsSrchWord=${k}`),
@@ -3750,9 +3756,12 @@ async function hireBoards(nm) {
   const srItems = hbParseSaraminSearch(sr.html);
   let csn = null, srN = 0;
   srItems.forEach((x) => { if (hbBelong(x.company, x.title, key) === 'mine' && x.csn && !csn) csn = x.csn; });
+  // 사람인 검색 목록은 600KB를 넘어 프록시가 잘라 낸다 — 이 회사 csn은 네이버 검색에 잡힌 사람인 기업정보 링크에서도 얻는다
+  const csnHint = csn ? null : await Promise.resolve(csnHintP).catch(() => null);
   let comp = null;
   if (csn) { const c = await get(`https://www.saramin.co.kr/zf_user/company-info/view-inner-recruit?csn=${csn}`); comp = hbParseSaraminCompany(c.html); }
   const recSeen = new Set();
+  if (!comp && csnHint) { csn = csnHint; const c = await get(`https://www.saramin.co.kr/zf_user/company-info/view-inner-recruit?csn=${csn}`); comp = hbParseSaraminCompany(c.html); }
   if (comp) {
     [...comp.ing, ...comp.closed].forEach((x) => {
       if (!x.rec || recSeen.has(x.rec)) return; recSeen.add(x.rec);
@@ -3888,7 +3897,7 @@ function analyzeHireDepts(posts) {
   const tempD = dept.filter((d) => d.status.some(([s]) => s === 'temp') || (d.ext && !d.own));
   if (tempD.length) findings.push({ k: 'temp', t: `비정규·외부 인력으로 메우는 부서: ${tempD.map((d) => d.dept).join(' · ')}`, d: '계약직·아르바이트·파견(도급) 공고 비중이 큽니다 — 숙련 인력 비율과 라인별 정규직 반장 배치를 확인하세요. 품질 편차의 원인이 되는 경우가 많습니다.' });
   const gapCore = HIRE_CORE.filter((c) => !dept.some((d) => d.dept === c && d.own));
-  if (openings.filter((o) => !o.partner).length >= 2 && gapCore.length) findings.push({ k: 'gap', t: `3년간 공고가 없는 핵심 부서: ${gapCore.join(' · ')}`, d: '인원이 안정적이거나, 소수가 겸직하거나, 외부(위탁 시험·외주 생산)에 맡기는 경우입니다 — 해당 기능의 담당 인원수와 수행 방식을 직접 확인하세요.' });
+  if (openings.filter((o) => !o.partner).length >= 4 && gapCore.length) findings.push({ k: 'gap', t: `3년간 공고가 없는 핵심 부서: ${gapCore.join(' · ')}`, d: '인원이 안정적이거나, 소수가 겸직하거나, 외부(위탁 시험·외주 생산)에 맡기는 경우입니다 — 해당 기능의 담당 인원수와 수행 방식을 직접 확인하세요.' });
   const sites = {}; items.forEach((x) => { sites[x.site] = (sites[x.site] || 0) + 1; });
   return { openings: openings.length, ownOpenings: openings.filter((o) => !o.partner).length, extOpenings: openings.filter((o) => o.partner).length, posts: items.length, notJob,
     dated: openings.filter((o) => o.n != null).length, est: openings.filter((o) => o.ymEst).length, dept, repeats: repeats.slice(0, 8), findings, sites,
@@ -3897,7 +3906,8 @@ function analyzeHireDepts(posts) {
 
 async function hiringTrace(nm) {
   if (!getProxy() || !nm) return null;
-  const boardsP = hireBoards(nm).catch((e) => ({ posts: [], diag: [{ site: '채용 사이트 목록', ok: false, why: (e && e.message) || String(e) }] }));
+  let csnResolve; const csnP = new Promise((r) => { csnResolve = r; });
+  const boardsP = hireBoards(nm, csnP).catch((e) => ({ posts: [], diag: [{ site: '채용 사이트 목록', ok: false, why: (e && e.message) || String(e) }] }));
   // ① 다각도 검색 — 한 질의로는 사이트별로 누락이 커서 여러 각도로 훑는다.
   //    연도 키워드를 섞어 과거 공고가 조금이라도 더 잡히게 한다(마감분은 상당수 사라진다).
   const y = new Date().getFullYear();
@@ -3936,6 +3946,9 @@ async function hiringTrace(nm) {
     });
   });
 
+  // 사람인 기업정보 링크의 csn — 채용 사이트 목록 수집(hireBoards)이 기업 채용 탭(마감 공고)을 여는 데 쓴다
+  { const sp = posts.find((p) => /saramin/.test(p.link) && /csn=/.test(p.link) && stripCorp(p.title).replace(/\s/g, '').startsWith(key));
+    csnResolve(sp ? (sp.link.match(/csn=([A-Za-z0-9%=]+)/) || [])[1] : null); }
   // ③ 검색 스니펫 먼저 훑는다.
   //    인크루트 스니펫에는 "사원수 8명 · 매출 44억"이 그대로 실려 오는데, 지금까지 재무만 보고
   //    사원수는 페이지에서만 찾았다. 그래서 눈앞에 있는 값을 놓쳤다(heads가 빈 채로 나왔다).
@@ -4093,12 +4106,15 @@ async function hiringTrace(nm) {
   const final = [];
   const seenN = new Set();
   const add = (p) => { const k = `${hireNorm(p.title)}|${(p.dates && p.dates[0]) || ''}`; if (seenN.has(k)) return; seenN.add(k); final.push(p); };
-  ((boards && boards.posts) || []).forEach((x) => add({
+  const affilKeys = [...affil].map((a2) => a2.replace(/\s/g, ''));
+  ((boards && boards.posts) || []).filter((x) => !(x.belong === 'partner' && affilKeys.some((a2) => stripCorp(x.title).replace(/\s/g, '').includes(a2)))).forEach((x) => add({
     title: x.title, link: x.link, host: HOSTN[x.site] || '', role: hireRole(`${x.title} ${(x.sectors || []).join(' ')}`), dates: x.ym ? [x.ym] : [],
     desc: [x.belong === 'partner' ? `${x.company}(협력사)` : '', x.region, ...(x.conds || []), (x.sectors || []).join(', '), x.deadline].filter(Boolean).join(' · '), board: x,
   }));
   posts.forEach((p) => {
-    if (NOTPOST.test(p.title)) {
+    // 회사 이름·연도·'채용'만 있는 제목('2026년 한국콜마 채용', '(주)에바스코스메틱')은 공고가 아니라 회사 채용 페이지다
+    const bare = hireNorm(p.title).replace(key, '').length < 2;
+    if (NOTPOST.test(p.title) || bare) {
       (String(p.desc).match(/\[[^\]]{2,20}\][^;·[]{4,70}?(?:채용|모집)/g) || []).filter((t) => stripCorp(t).replace(/\s/g, '').includes(key)).forEach((t) => {
         const ym = hbYmTitle(t);
         add({ title: t.trim(), desc: '', link: p.link, host: p.host, role: hireRole(t), dates: ym ? [ym] : [], board: { site: siteOf(p.host), belong: 'mine', ym, status: /진행\s*중/.test(p.title) ? 'open' : null, fromSnippet: true } });
@@ -5800,7 +5816,7 @@ function renderHiring(h) {
         + `<td>${d.status.length ? d.status.map(([s, t]) => `<span class="xtag t-${ST[s] || 'oth'}">${esc(t)}</span>`).join('') : '<span class="xtag t-oth">단발</span>'}</td></tr>`).join('')
       + '</tbody></table></div>';
     const missing = HIRE_CORE.filter((c) => !D.dept.some((d) => d.dept === c && d.own));
-    if (missing.length && D.ownOpenings >= 2) html += `<div class="hire-warn">3년간 공고가 없는 핵심 부서: <b>${esc(missing.join(' · '))}</b> — 인원이 안정적이거나 겸직·외부 위탁일 수 있습니다. 담당 인원수를 확인하세요.</div>`;
+    if (missing.length && D.ownOpenings >= 4) html += `<div class="hire-warn">3년간 공고가 없는 핵심 부서: <b>${esc(missing.join(' · '))}</b> — 인원이 안정적이거나 겸직·외부 위탁일 수 있습니다. 담당 인원수를 확인하세요.</div>`;
     if (D.repeats.length) {
       html += `<div class="hire-sec">같은 직책 반복 채용 <em>부서·직급·고용형태가 같은 채용이 다시 나온 경우</em></div><ul class="hire-rep">`
         + D.repeats.slice(0, 6).map((r) => `<li class="${r.avgGap <= 6 ? 'bad' : ''}"><b>${esc(r.dept)}</b> · ${esc(r.lvl)} · ${esc(r.emp)} — <b>${r.times}회</b>, 평균 ${r.avgGap}개월 간격(최단 ${r.minGap}개월)<small>${esc(r.yms.join(' → '))}</small></li>`).join('')
