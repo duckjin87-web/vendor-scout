@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 257;
+const BUILD = 258;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3868,7 +3868,8 @@ function analyzeHireDepts(posts) {
     if (ext.length) status.push(['ext', `외부 인력 공고 ${ext.length}`]);
     if (own.length >= 2 && temp / own.length >= 0.5) status.push(['temp', '비정규 위주']);
     return { dept: d, own: own.length, ext: ext.length, months: ms, med, last, lastYm: last != null ? `${Math.floor(last / 12)}-${String(last % 12 + 1).padStart(2, '0')}` : null,
-      since: last != null ? curYm - last : null, emp: empC, temp, openNow, status, sample: own.slice(-3).map((o) => o.title) };
+      // 대표 공고는 그 부서만 뽑은 공고를 앞세운다(여러 부서를 한꺼번에 뽑는 공채 제목은 부서를 설명하지 못한다)
+      since: last != null ? curYm - last : null, emp: empC, temp, openNow, status, sample: [...own].sort((x, y) => (y.depts.length === 1) - (x.depts.length === 1) || (x.n ?? 0) - (y.n ?? 0)).filter((o, i, arr) => o.depts.length === 1 || i === arr.length - 1).slice(-3).map((o) => o.title) };
   }).filter((d) => d.own || d.ext);
   // 같은 직책 반복 — 부서 + 직급 + 고용형태가 같은 채용이 다시 나온 경우
   const posMap = new Map();
