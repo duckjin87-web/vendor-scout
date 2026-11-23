@@ -3058,3 +3058,14 @@ details.s3-cov ul { margin: 8px 0 0; padding: 10px 12px 10px 26px; background: v
 .ww-out { margin-top: 12px; }
 .ww-out.ww-empty { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
 @media (max-width: 560px) { .ww-in label { width: 100%; } }
+
+/* ── 채용 · 부서별 현황 ── */
+.hire-dept td small { display: block; color: var(--muted); font-size: 11.5px; font-weight: 400; margin-top: 2px; }
+.hire-dept .xtag { margin: 0 4px 2px 0; }
+.hire-rep { list-style: none; margin: 6px 0 10px; padding: 0; font-size: 13px; }
+.hire-rep li { padding: 6px 10px; border-left: 3px solid var(--border); margin-bottom: 4px; }
+.hire-rep li.bad { border-left-color: #d9534f; }
+.hire-rep li small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.xtag.t-warn { background: #ffedd5; color: #9a3412; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .xtag.t-warn { background: #431407; color: #fed7aa; } }
+:root[data-theme="dark"] .xtag.t-warn { background: #431407; color: #fed7aa; }

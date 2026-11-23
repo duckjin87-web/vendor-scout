@@ -10,7 +10,7 @@ const el = (tag, cls, html) => {
 };
 // 이 파일에 박아 둔 빌드 번호. index.html의 ?v=와 반드시 같은 값으로 함께 올린다.
 // (배포 스크립트가 세 자산의 ?v=와 이 상수가 어긋나면 배포를 막는다)
-const BUILD = 254;
+const BUILD = 255;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 오류값을 사람이 읽을 수 있는 문자열로 — 오류는 문자열일 수도, Error일 수도,
@@ -3616,8 +3616,288 @@ function reconcileExtFin(rows) {
   return out.sort((a, b) => (b.year || 0) - (a.year || 0) || a.key.localeCompare(b.key));
 }
 
+// ── 채용 사이트 목록 직접 수집 ──
+// 네이버 검색으로 잡히는 '채용 사이트 결과'의 대부분은 공고가 아니라 기업정보·연봉·자소서 페이지였다
+// (2026-11 진단: 한국콜마 15건 중 실제 공고 4건, 날짜 확인 2건). 그래서 사이트의 공고 목록을 직접 읽는다.
+//   · 사람인 기업 채용 탭 — 진행 중 + 「마감된 공고」 목록(지난 공고의 거의 유일한 공개 출처)
+//   · 사람인 검색 · 인크루트 검색(공고번호 앞 6자리 = 등록일) · 잡코리아 검색 · 알바천국 검색(등록일·마감일)
+// 이 회사 이름으로 낸 공고와, 다른 회사(파견·도급·구내식당 업체)가 이 회사 사업장 이름을 걸고 낸 공고를 나눈다.
+// 고용24는 화면이 스크립트로 그려져 읽을 수 없고, 알바몬은 구조가 바뀌기 쉬워 넣지 않았다.
+const hbTxt = (s) => String(s || '').replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;|&#x27;/g, "'").replace(/&quot;/g, '"')
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+const hbPick = (s, re) => { const m = String(s || '').match(re); return m ? hbTxt(m[1]) : ''; };
+const hbAll = (s, re) => [...String(s || '').matchAll(re)].map((m) => hbTxt(m[1]).replace(/[,\s]+$/, '')).filter(Boolean);
+// 제목의 '26년 11월'·'2025년 3월' — 기업 공고 제목에 흔한, 공고 시점의 확실한 표기
+function hbYmTitle(t) {
+  const s = String(t || '');
+  const m = s.match(/(?:^|[^\d])(20\d{2}|\d{2})\s*년\s*(\d{1,2})\s*월/);
+  if (!m) return null;
+  const y = m[1].length === 2 ? 2000 + Number(m[1]) : Number(m[1]);
+  const mo = Number(m[2]);
+  if (mo < 1 || mo > 12 || y < 2015 || y > new Date().getFullYear() + 1) return null;
+  return `${y}-${String(mo).padStart(2, '0')}`;
+}
+const hbKey = (s) => stripCorp(s).replace(/\([^)]*\)|\s/g, '').replace(/[-_]?(본사|본점|지점|\d?공장)$/, '');
+function hbBelong(company, title, key) {
+  const c = hbKey(company);
+  if (c && c === key) return 'mine';
+  // 다른 회사가 낸 공고인데 제목에 이 회사 이름(사업장)이 있다 — 파견·도급·구내식당 등 협력사 공고
+  if (key && stripCorp(title).replace(/\s/g, '').includes(key)) return 'partner';
+  return null;
+}
+function hbSaraminItems(html, part) {
+  return String(html || '').split(/<div id="rec-/).slice(1).map((b) => ({
+    rec: Number((b.match(/^(\d+)/) || [])[1]) || null,
+    title: hbPick(b, /title="([^"]+)"/),
+    sectors: hbAll((b.match(/class="job_sector">([\s\S]*?)<\/span>\s*<\/div>/) || [])[1] || '', /<span>([\s\S]*?)<\/span>/g),
+    region: hbPick(b, /class="work_place">([\s\S]*?)<\/p>/),
+    career: hbPick(b, /class="career">([\s\S]*?)<\/p>/),
+    deadline: hbPick(b, /class="date">([\s\S]*?)<\/span>/),
+    part,
+  })).filter((x) => x.title);
+}
+function hbParseSaraminCompany(html) {
+  const h = String(html || '');
+  const cut = h.search(/<!--\s*마감된 채용 정보\s*-->|id="company_info_recruit_info_close"/);
+  const ing = hbSaraminItems(cut >= 0 ? h.slice(0, cut) : h, 'open');
+  const closed = cut >= 0 ? hbSaraminItems(h.slice(cut), 'closed') : [];
+  const closedTotal = Number((h.slice(Math.max(0, cut)).match(/마감된 공고\s*<span class="count"><strong class="num">(\d+)/) || [])[1]) || null;
+  return { ing, closed, closedTotal };
+}
+function hbParseSaraminSearch(html) {
+  return String(html || '').split(/<div class="item_recruit"/).slice(1).map((b) => {
+    const cond = (b.match(/class="job_condition">([\s\S]*?)<\/div>/) || [])[1] || '';
+    const day = hbPick(b, /class="job_day">([\s\S]*?)<\/span>/);
+    const dm = day.match(/(\d{2})\/(\d{2})\/(\d{2})/);
+    return {
+      rec: Number((b.match(/value="(\d+)"/) || [])[1]) || null,
+      title: hbPick(b, /title="([^"]+)"/),
+      company: hbPick(b, /class="corp_name">\s*<a[^>]*>([\s\S]*?)<\/a>/),
+      csn: (b.match(/csn=([A-Za-z0-9%=]+)/) || [])[1] || null,
+      deadline: hbPick(b, /class="date">([\s\S]*?)<\/span>/),
+      conds: hbAll(cond, /<span[^>]*>([\s\S]*?)<\/span>/g),
+      sectors: hbAll((b.match(/class="job_sector">([\s\S]*?)<\/div>/) || [])[1] || '', /<a[^>]*>([\s\S]*?)<\/a>/g),
+      regDate: dm ? `20${dm[1]}-${dm[2]}-${dm[3]}` : null,
+    };
+  }).filter((x) => x.title);
+}
+function hbParseIncruit(html) {
+  return String(html || '').split(/<ul class="c_row"/).slice(1).map((b) => {
+    const no = (b.match(/jobno="(\d{6,})"/) || [])[1] || '';
+    const mid = (b.match(/class="cell_mid">([\s\S]*?)<div class="cell_last">/) || [])[1] || '';
+    const last = (b.match(/class="cell_last">([\s\S]*?)<\/li>/) || [])[1] || '';
+    const d = no.slice(0, 6);
+    return {
+      no, title: hbPick(mid, /class="cl_top">\s*<a[^>]*>([\s\S]*?)<\/a>/),
+      company: hbPick(b, /class="cpname"[^>]*>([\s\S]*?)<\/a>/),
+      conds: hbAll((mid.match(/class="cl_md">([\s\S]*?)<\/div>/) || [])[1] || '', /<span>([\s\S]*?)<\/span>/g),
+      sectors: hbAll((mid.match(/class="cl_btm">([\s\S]*?)<\/div>/) || [])[1] || '', /<span>([\s\S]*?)<\/span>/g),
+      deadline: hbAll(last, /<span>([\s\S]*?)<\/span>/g)[0] || '',
+      regDate: /^\d{6}$/.test(d) && Number(d.slice(2, 4)) >= 1 && Number(d.slice(2, 4)) <= 12 ? `20${d.slice(0, 2)}-${d.slice(2, 4)}-${d.slice(4, 6)}` : null,
+      link: no ? `https://job.incruit.com/jobdb_info/jobpost.asp?job=${no}` : '',
+    };
+  }).filter((x) => x.title);
+}
+function hbParseJobkorea(html) {
+  return String(html || '').split(/<span class="truncate font-semibold text-typo-b1-18[^"]*">/).slice(1).map((seg) => {
+    const s = seg.slice(0, 4000);
+    const id = (s.match(/GI_Read\/(\d+)/) || [])[1] || '';
+    return {
+      title: hbTxt(seg.split('</span>')[0]),
+      company: hbPick(s, /text-gray700 text-typo-b2-16">([\s\S]*?)<\/span>/),
+      conds: hbAll(s, /text-gray900 text-typo-b4-14">([\s\S]*?)<\/span>/g).filter((x) => x !== 'My 검색'),
+      deadline: (hbTxt(s).match(/~\s?\d{1,2}\/\d{1,2}(?:\([^)]\))?|상시채용|채용시\s?마감/) || [''])[0],
+      today: /오늘 뜬|오늘 등록/.test(hbTxt(s)),
+      link: id ? `https://www.jobkorea.co.kr/Recruit/GI_Read/${id}` : '',
+    };
+  }).filter((x) => x.title && x.link);
+}
+function hbParseAlba(html) {
+  return String(html || '').split(/<li class="job-list__row/).slice(1).map((b) => {
+    const comp = (b.match(/class="job-list__company">([\s\S]*?)<span class="job-list__area">([\s\S]*?)<\/span>/) || []);
+    const reg = (b.match(/class="job-list__col regDate">\s*(\d{4})\.(\d{2})\.(\d{2})/) || []);
+    const id = (b.match(/adid=(\d+)/) || [])[1] || '';
+    return {
+      title: hbPick(b, /class="job-list__subject">([\s\S]*?)<\/span>\s*<\/p>/),
+      company: hbTxt(comp[1] || ''), region: hbTxt(comp[2] || ''),
+      deadline: hbPick(b, /class="job-list__deadline">([\s\S]*?)<\/span>/),
+      pay: hbPick(b, /class="job-list__col pay">([\s\S]*?)<\/div>/),
+      regDate: reg[1] ? `${reg[1]}-${reg[2]}-${reg[3]}` : null,
+      link: id ? `https://www.alba.co.kr/job/Detail?adid=${id}` : '',
+    };
+  }).filter((x) => x.title);
+}
+async function hireBoards(nm) {
+  const q = stripCorp(nm).trim();
+  const key = hbKey(nm);
+  const k = encodeURIComponent(q);
+  const get = async (u) => { try { const r = await proxyOnlyGet('fetchPage', { url: u }); return { html: (r && r.text) || '', status: r && r.status }; } catch (e) { return { html: '', err: (e && e.message) || String(e) }; } };
+  const [sr, ic, jk, al] = await Promise.all([
+    get(`https://www.saramin.co.kr/zf_user/search/recruit?searchword=${k}&recruitPageCount=40`),
+    get(`https://search.incruit.com/list/search.asp?col=job&kw=${k}&psize=60`),
+    get(`https://www.jobkorea.co.kr/Search/?stext=${k}&tabType=recruit`),
+    get(`https://www.alba.co.kr/search/Search.asp?WsSrchWord=${k}`),
+  ]);
+  const out = [], diag = [];
+  const push = (site, x, extra) => {
+    const belong = hbBelong(x.company, x.title, key);
+    if (!belong) return 0;
+    out.push({ site, title: x.title, company: x.company || q, belong, ym: hbYmTitle(x.title) || (x.regDate ? x.regDate.slice(0, 7) : null),
+      regDate: x.regDate || null, deadline: x.deadline || '', region: x.region || '', conds: x.conds || [], sectors: x.sectors || [], link: x.link || '', pay: x.pay || '', ...extra });
+    return 1;
+  };
+  // 사람인 — 검색 목록에서 이 회사의 csn을 얻어 기업 채용 탭(진행 + 마감)을 연다
+  const srItems = hbParseSaraminSearch(sr.html);
+  let csn = null, srN = 0;
+  srItems.forEach((x) => { if (hbBelong(x.company, x.title, key) === 'mine' && x.csn && !csn) csn = x.csn; });
+  let comp = null;
+  if (csn) { const c = await get(`https://www.saramin.co.kr/zf_user/company-info/view-inner-recruit?csn=${csn}`); comp = hbParseSaraminCompany(c.html); }
+  const recSeen = new Set();
+  if (comp) {
+    [...comp.ing, ...comp.closed].forEach((x) => {
+      if (!x.rec || recSeen.has(x.rec)) return; recSeen.add(x.rec);
+      out.push({ site: '사람인', title: x.title, company: q, belong: 'mine', ym: hbYmTitle(x.title), regDate: null, deadline: x.deadline, region: x.region,
+        conds: [x.career].filter(Boolean), sectors: x.sectors, link: `https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=${x.rec}`, rec: x.rec, status: x.part });
+      srN++;
+    });
+  }
+  srItems.forEach((x) => { if (x.rec && recSeen.has(x.rec)) return; if (x.rec) recSeen.add(x.rec); srN += push('사람인', { ...x, conds: x.conds, link: x.rec ? `https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=${x.rec}` : '' }, { rec: x.rec, status: 'open' }); });
+  diag.push({ site: '사람인', ok: !!sr.html, n: srN, why: sr.html ? (csn ? `기업 채용 탭 진행 ${comp ? comp.ing.length : 0} · 마감 ${comp ? comp.closed.length : 0}${comp && comp.closedTotal ? `/${comp.closedTotal}` : ''}건` : '검색 목록만(기업 채용 탭 못 찾음)') : (sr.err || `HTTP ${sr.status}`) });
+  const icItems = hbParseIncruit(ic.html);
+  diag.push({ site: '인크루트', ok: !!ic.html, n: icItems.reduce((a, x) => a + push('인크루트', x, { status: 'open' }), 0), why: ic.html ? `목록 ${icItems.length}건 중 일치` : (ic.err || `HTTP ${ic.status}`) });
+  const jkItems = hbParseJobkorea(jk.html);
+  diag.push({ site: '잡코리아', ok: !!jk.html, n: jkItems.reduce((a, x) => a + push('잡코리아', { ...x, regDate: x.today ? new Date().toISOString().slice(0, 10) : null }, { status: 'open' }), 0), why: jk.html ? `목록 ${jkItems.length}건 중 일치` : (jk.err || `HTTP ${jk.status}`) });
+  const alItems = hbParseAlba(al.html);
+  diag.push({ site: '알바천국', ok: !!al.html, n: alItems.reduce((a, x) => a + push('알바천국', x, { status: 'open', alba: true }), 0), why: al.html ? `목록 ${alItems.length}건 중 일치` : (al.err || `HTTP ${al.status}`) });
+  // 사람인 공고번호는 시간 순으로 커진다 — 날짜를 모르는 마감 공고는 날짜가 확인된 가까운 공고번호로 시점을 가늠한다
+  const anchors = out.filter((x) => x.rec && x.ym).map((x) => [x.rec, x.ym]).sort((a, b) => a[0] - b[0]);
+  if (anchors.length) out.forEach((x) => {
+    if (!x.rec || x.ym) return;
+    const lo = [...anchors].reverse().find((a) => a[0] <= x.rec), hi = anchors.find((a) => a[0] >= x.rec);
+    const pick = lo && hi ? (x.rec - lo[0] <= hi[0] - x.rec ? lo : hi) : (lo || hi);
+    if (pick && (!lo || !hi ? Math.abs(pick[0] - x.rec) < 400000 : true)) { x.ym = pick[1]; x.ymEst = true; }
+  });
+  return { posts: out, diag, csn };
+}
+window.hireBoards = hireBoards;
+
+// ── 부서·직책 단위 채용 분석 ──
+// 공고 건수는 같은 공고를 여러 사이트에 올린 만큼 부풀어 있다. 같은 제목(회사명·연월·'수시채용' 등을 뺀 핵심어)이
+// 두 달 안에 다시 보이면 한 번의 채용(채용 건)으로 묶은 뒤, 부서별·직책별로 몇 번, 얼마 간격으로 다시 뽑았는지 본다.
+// 화장품 제조사 기준 부서 — 한 공고가 여러 부서를 모집하면(경력사원 수시채용(생산, 전략구매)) 모두에 센다
+const HIRE_DEPTS = [
+  ['생산', /(생산직|생산\s*(?:신입|사원|인력|오퍼|보조)|제조(?!기술|업)|충전|충포장|포장|오퍼레이터|기계조작|설비\s?OP|조색|칭량|믹싱|제조가공|현장직|생산(?!관리|기술|설계|·공정))/i],
+  ['생산관리·공정기술', /(생산관리|공정|제조기술|생산기술|생산설계)/],
+  ['품질(QC·QA)', /(품질|\bQC\b|\bQA\b|시험분석|미생물|검사원)/i],
+  ['연구개발', /(연구|R&D|처방|제형|기술연구원)/i],
+  ['RA·인허가', /(\bRA\b|인허가|허가\s?담당|안전성\s?평가|변리사|특허)/i],
+  ['설비·공무', /(공무|설비(?!\s?OP)|보전|전기\s?기사|유틸리티|시설\s?관리)/i],
+  ['구매·자재·물류', /(구매|자재|물류|입출고|창고|지게차|SCM)/i],
+  ['영업·마케팅', /(영업|마케팅|해외|수출|무역|\bMD\b|\bBM\b|브랜드\s?매니저|상품기획)/i],
+  ['디자인', /(디자인|디자이너)/],
+  ['경영지원', /(인사|총무|회계|재무|경리|법무|컴플|전략기획|경영기획|\bIT\b|전산)/i],
+];
+const HIRE_CORE = ['생산', '품질(QC·QA)', '연구개발'];
+const HIRE_NOTJOB = /(인체적용시험|참여자\s*모집|임상\s*시험|체험단|패널\s*모집|모니터\s*요원)/;
+const HIRE_FAC = /(구내식당|조리원|조리사|미화|청소|경비원|보안요원|셔틀)/;
+function hireLevel(t) {
+  const s = String(t || '');
+  const emp = /파견|도급|아웃소싱/.test(s) ? '파견·도급' : /아르바이트|알바|단기\s?알바|일용/.test(s) ? '아르바이트'
+    : /단기\s?계약|계약직|기간제|대체\s?인력|육아휴직\s?대체/.test(s) ? '계약직' : /인턴/.test(s) ? '인턴' : /정규직|공채|공개채용/.test(s) ? '정규직' : '';
+  const lvl = /팀장|파트장|그룹장|책임|관리자|매니저급|과장|차장|부장/.test(s) ? '관리자급' : /전임직/.test(s) ? '전임직'
+    : /신입\s*[·/]\s*경력|경력\s*[·/]\s*신입|신입\/경력|경력\/신입/.test(s) ? '신입·경력' : /경력/.test(s) ? '경력' : /신입/.test(s) ? '신입' : '';
+  return { emp, lvl };
+}
+function hireNorm(t) {
+  return stripCorp(t).replace(/\[[^\]]*\]|\([^)]*\)|【[^】]*】/g, ' ')
+    .replace(/(20)?\d{2}\s*년\s*\d{1,2}\s*월|20\d{2}\s*년?|상반기|하반기|하계|동계/g, ' ')
+    .replace(/수시|채용|모집|공고|구인|신입사원|경력사원|신입|경력|사원|담당자?|및|를|을|합니다|모십니다|[/·,~!\-|:]/g, ' ')
+    .replace(/\s+/g, '').slice(0, 30);
+}
+function analyzeHireDepts(posts) {
+  const now = new Date();
+  const curYm = now.getFullYear() * 12 + now.getMonth();
+  const ymN = (ym) => (ym ? Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1 : null);
+  const items = (posts || []).map((p) => {
+    const b = p.board || {};
+    const text = `${p.title} ${(b.sectors || []).join(' ')} ${(b.conds || []).join(' ')}`;
+    const ym = b.ym || (p.dates && p.dates.length ? [...p.dates].map((d) => (d.length >= 7 ? d.slice(0, 7) : null)).filter(Boolean).sort().pop() || null : null) || hbYmTitle(p.title);
+    return { p, b, text, ym, n: ymN(ym), norm: hireNorm(p.title), site: b.site || (String(p.host || '').replace(/^www\.|^m\.|^job\./, '')), open: b.status === 'open', partner: b.belong === 'partner' };
+  }).filter((x) => x.norm.length >= 2);
+  const notJob = items.filter((x) => HIRE_NOTJOB.test(x.text)).length;
+  // 같은 공고 묶기 — 핵심어가 같고 두 달 이내(날짜 모르면 핵심어만)
+  const openings = [];
+  items.filter((x) => !HIRE_NOTJOB.test(x.text)).sort((a, b) => (a.n ?? 1e9) - (b.n ?? 1e9)).forEach((x) => {
+    const o = openings.find((y) => y.norm === x.norm && y.partner === x.partner && (x.n == null || y.n == null || Math.abs(x.n - y.n) <= 2));
+    if (o) { o.sites.add(x.site); o.posts.push(x.p); if (x.open) o.open = true; if (o.n == null && x.n != null) { o.n = x.n; o.ym = x.ym; } if (x.b.ymEst === false || (o.ymEst && x.ym && !x.b.ymEst)) o.ymEst = false; o.text += ` ${x.text}`; return; }
+    openings.push({ title: x.p.title, norm: x.norm, n: x.n, ym: x.ym, ymEst: !!x.b.ymEst, sites: new Set([x.site]), posts: [x.p], open: x.open, partner: x.partner, text: x.text, alba: !!x.b.alba });
+  });
+  openings.forEach((o) => {
+    const lv = hireLevel(o.text);
+    o.emp = o.alba && !lv.emp ? '아르바이트' : lv.emp; o.lvl = lv.lvl;
+    o.fac = HIRE_FAC.test(o.text);
+    o.depts = o.fac ? ['시설지원'] : HIRE_DEPTS.filter(([, re]) => re.test(o.text)).map(([d]) => d);
+    if (!o.depts.length) o.depts = ['기타·불명'];
+    if (o.n != null && curYm - o.n <= 1) o.recent = true;
+  });
+  // 부서별
+  const names = [...HIRE_DEPTS.map(([d]) => d), '시설지원', '기타·불명'];
+  const dept = names.map((d) => {
+    const os = openings.filter((o) => o.depts.includes(d));
+    const own = os.filter((o) => !o.partner), ext = os.filter((o) => o.partner);
+    const ms = [...new Set(own.filter((o) => o.n != null).map((o) => o.n))].sort((a, b) => a - b);
+    const gaps = ms.slice(1).map((m, i) => m - ms[i]);
+    const med = gaps.length ? [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : null;
+    const last = ms.length ? ms[ms.length - 1] : null;
+    const empC = {}; own.forEach((o) => { if (o.emp) empC[o.emp] = (empC[o.emp] || 0) + 1; });
+    const temp = own.filter((o) => /계약직|파견|아르바이트/.test(o.emp)).length;
+    const openNow = own.some((o) => o.open || o.recent);
+    const status = [];
+    if (openNow) status.push(['now', '지금 충원 중']);
+    if (own.length >= 3 && med != null && med <= 6) status.push(['repeat', `반복 충원 · 평균 ${med}개월`]);
+    else if (own.length >= 2 && med != null && med >= 9) status.push(['periodic', '정기 채용']);
+    if (ext.length) status.push(['ext', `외부 인력 공고 ${ext.length}`]);
+    if (own.length >= 2 && temp / own.length >= 0.5) status.push(['temp', '비정규 위주']);
+    return { dept: d, own: own.length, ext: ext.length, months: ms, med, last, lastYm: last != null ? `${Math.floor(last / 12)}-${String(last % 12 + 1).padStart(2, '0')}` : null,
+      since: last != null ? curYm - last : null, emp: empC, temp, openNow, status, sample: own.slice(-3).map((o) => o.title) };
+  }).filter((d) => d.own || d.ext);
+  // 같은 직책 반복 — 부서 + 직급 + 고용형태가 같은 채용이 다시 나온 경우
+  const posMap = new Map();
+  openings.filter((o) => !o.partner && o.n != null).forEach((o) => o.depts.forEach((d) => {
+    if (d === '기타·불명') return;
+    const k = `${d}|${o.lvl || '직급 미상'}|${o.emp || '형태 미상'}`;
+    if (!posMap.has(k)) posMap.set(k, []);
+    posMap.get(k).push(o);
+  }));
+  const repeats = [...posMap.entries()].map(([k, os]) => {
+    const ms = [...new Set(os.map((o) => o.n))].sort((a, b) => a - b);
+    if (ms.length < 2) return null;
+    const gaps = ms.slice(1).map((m, i) => m - ms[i]);
+    const [d, lvl, emp] = k.split('|');
+    return { dept: d, lvl, emp, times: ms.length, minGap: Math.min(...gaps), avgGap: Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length),
+      yms: ms.map((m) => `${Math.floor(m / 12)}-${String(m % 12 + 1).padStart(2, '0')}`), titles: os.map((o) => o.title).slice(-4) };
+  }).filter(Boolean).sort((a, b) => a.avgGap - b.avgGap || b.times - a.times);
+  // 해석
+  const findings = [];
+  const nowD = dept.filter((d) => d.openNow && d.dept !== '기타·불명');
+  if (nowD.length) findings.push({ k: 'now', t: `지금 채우는 부서: ${nowD.map((d) => d.dept).join(' · ')}`, d: '최근 2개월 안에 올렸거나 진행 중인 공고가 있는 부서입니다 — 해당 부서의 결원·증원 사유와 충원 완료 시점을 물어보세요.' });
+  const weak = dept.filter((d) => d.status.some(([s]) => s === 'repeat'));
+  const posWeak = repeats.filter((r) => r.avgGap <= 6);
+  if (weak.length || posWeak.length) findings.push({ k: 'weak', t: `반복 충원(취약): ${[...new Set([...weak.map((d) => d.dept), ...posWeak.map((r) => `${r.dept}(${r.lvl}·${r.emp})`)])].join(' · ')}`,
+    d: '같은 부서·직책을 짧은 간격으로 다시 뽑고 있습니다 — 이탈이 잦거나(업무 강도·처우) 사람을 못 구하는(입지) 자리입니다. 해당 인원의 근속연수와 최근 1년 퇴사 인원을 확인하세요.' });
+  const tempD = dept.filter((d) => d.status.some(([s]) => s === 'temp') || (d.ext && !d.own));
+  if (tempD.length) findings.push({ k: 'temp', t: `비정규·외부 인력으로 메우는 부서: ${tempD.map((d) => d.dept).join(' · ')}`, d: '계약직·아르바이트·파견(도급) 공고 비중이 큽니다 — 숙련 인력 비율과 라인별 정규직 반장 배치를 확인하세요. 품질 편차의 원인이 되는 경우가 많습니다.' });
+  const gapCore = HIRE_CORE.filter((c) => !dept.some((d) => d.dept === c && d.own));
+  if (openings.filter((o) => !o.partner).length >= 2 && gapCore.length) findings.push({ k: 'gap', t: `3년간 공고가 없는 핵심 부서: ${gapCore.join(' · ')}`, d: '인원이 안정적이거나, 소수가 겸직하거나, 외부(위탁 시험·외주 생산)에 맡기는 경우입니다 — 해당 기능의 담당 인원수와 수행 방식을 직접 확인하세요.' });
+  const sites = {}; items.forEach((x) => { sites[x.site] = (sites[x.site] || 0) + 1; });
+  return { openings: openings.length, ownOpenings: openings.filter((o) => !o.partner).length, extOpenings: openings.filter((o) => o.partner).length, posts: items.length, notJob,
+    dated: openings.filter((o) => o.n != null).length, est: openings.filter((o) => o.ymEst).length, dept, repeats: repeats.slice(0, 8), findings, sites,
+    ext: openings.filter((o) => o.partner).map((o) => ({ title: o.title, company: (o.posts[0].board || {}).company || '', ym: o.ym })).slice(0, 8) };
+}
+
 async function hiringTrace(nm) {
   if (!getProxy() || !nm) return null;
+  const boardsP = hireBoards(nm).catch((e) => ({ posts: [], diag: [{ site: '채용 사이트 목록', ok: false, why: (e && e.message) || String(e) }] }));
   // ① 다각도 검색 — 한 질의로는 사이트별로 누락이 커서 여러 각도로 훑는다.
   //    연도 키워드를 섞어 과거 공고가 조금이라도 더 잡히게 한다(마감분은 상당수 사라진다).
   const y = new Date().getFullYear();
@@ -3803,7 +4083,33 @@ async function hiringTrace(nm) {
   if (dropped.length) extDiag.push({ host: '—', kind: 'sanity', ok: true, found: `비정상 값 ${dropped.length}건 제외`, dropped });
   // 사원수는 기준일이 있는 값을 우선한다(페이지 > 스니펫)
   heads.sort((a, b) => (b.asOf ? 1 : 0) - (a.asOf ? 1 : 0) || (b.from === 'page' ? 1 : 0) - (a.from === 'page' ? 1 : 0));
-  return { posts, heads, extFin: finRows, extProfile: reconcileProfile(extProf),
+  // ── 공고 목록 합치기 ──
+  // 검색 결과 가운데 기업정보·연봉·자소서·'진행 중인 공고 N건' 같은 페이지는 공고가 아니다(정보 추출에만 썼다).
+  // 다만 그런 페이지의 요약문에 공고 제목이 '; '로 나열돼 오는 경우가 있어 그 제목만 살린다.
+  const boards = await boardsP;
+  const HOSTN = { 사람인: 'saramin.co.kr', 인크루트: 'incruit.com', 잡코리아: 'jobkorea.co.kr', 알바천국: 'alba.co.kr' };
+  const siteOf = (h) => (/saramin/.test(h) ? '사람인' : /incruit/.test(h) ? '인크루트' : /jobkorea/.test(h) ? '잡코리아' : /alba\.co/.test(h) ? '알바천국' : /albamon/.test(h) ? '알바몬' : /catch/.test(h) ? '캐치' : /jobplanet/.test(h) ? '잡플래닛' : /work24|worknet/.test(h) ? '고용24' : String(h || '').replace(/^www\.|^m\./, ''));
+  const NOTPOST = /(기업정보|연봉|자소서|자기소개서|기업\s?리뷰|면접\s?후기|직무리포트|채용\s*현황|진행\s*중(?:인)?\s*(?:채용)?\s*공고|최신\s*채용정보|채용정보\s*$|-\s*인크루트$|평균\s*연봉|통계|^\(?주?\)?[^\s]*\s*-\s*인크루트)/;
+  const final = [];
+  const seenN = new Set();
+  const add = (p) => { const k = `${hireNorm(p.title)}|${(p.dates && p.dates[0]) || ''}`; if (seenN.has(k)) return; seenN.add(k); final.push(p); };
+  ((boards && boards.posts) || []).forEach((x) => add({
+    title: x.title, link: x.link, host: HOSTN[x.site] || '', role: hireRole(`${x.title} ${(x.sectors || []).join(' ')}`), dates: x.ym ? [x.ym] : [],
+    desc: [x.belong === 'partner' ? `${x.company}(협력사)` : '', x.region, ...(x.conds || []), (x.sectors || []).join(', '), x.deadline].filter(Boolean).join(' · '), board: x,
+  }));
+  posts.forEach((p) => {
+    if (NOTPOST.test(p.title)) {
+      (String(p.desc).match(/\[[^\]]{2,20}\][^;·[]{4,70}?(?:채용|모집)/g) || []).filter((t) => stripCorp(t).replace(/\s/g, '').includes(key)).forEach((t) => {
+        const ym = hbYmTitle(t);
+        add({ title: t.trim(), desc: '', link: p.link, host: p.host, role: hireRole(t), dates: ym ? [ym] : [], board: { site: siteOf(p.host), belong: 'mine', ym, status: /진행\s*중/.test(p.title) ? 'open' : null, fromSnippet: true } });
+      });
+      return;
+    }
+    const ym = hbYmTitle(p.title);
+    add({ ...p, dates: ym && !p.dates.includes(ym) ? [ym, ...p.dates] : p.dates, board: { site: siteOf(p.host), belong: 'mine', ym: ym || null } });
+  });
+  ((boards && boards.diag) || []).forEach((d) => extDiag.push({ host: d.site, kind: 'board', ok: d.ok, found: d.ok ? `공고 ${d.n || 0}건 · ${d.why}` : undefined, why: d.ok ? undefined : d.why }));
+  return { posts: final, rawPostN: posts.length, boardN: ((boards && boards.posts) || []).length, heads, extFin: finRows, extProfile: reconcileProfile(extProf),
     hpHints: [...new Set(hpHints)], workAddrs: [...new Set(workAddrs)], extDiag, contacts, affil: [...affil].slice(0, 10) };
 }
 // 공고 조건 요약 — 공고 설명의 '근무형태·경력·급여'를 모아 이 회사가 어떤 사람을 어떤 조건으로 뽑는지 본다
@@ -3868,8 +4174,10 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile, hpH
       ask: '최근 1년 내 증설·라인 신설 계획이 있었는지, 현재 가동 라인 수와 교대 운영 형태를 확인하세요.',
     });
   }
-  // ㉡ 같은 직종 반복 → 이탈이 잦거나 충원이 안 됨
-  Object.entries(byRole).forEach(([role, n]) => {
+  // 부서·직책 분석(같은 공고의 여러 사이트 게시를 한 번으로 묶은 '채용 건' 기준)
+  const depts = analyzeHireDepts(posts);
+  // ㉡ 같은 직종 반복 → 이탈이 잦거나 충원이 안 됨 — 부서·직책 분석이 있으면 그쪽 판정으로 대신한다(사이트 중복 게시로 부풀지 않게)
+  if (!depts.dept.length) Object.entries(byRole).forEach(([role, n]) => {
     if (role === '기타·불명' || n < 3) return;
     const rd = dated.filter((p) => p.role === role);
     if (rd.length < 3) return;
@@ -3950,7 +4258,11 @@ function analyzeHiring(posts, heads, npsCount, npsAsOf, extDiag, extProfile, hpH
     hpHints: hpHints || [], workAddrs: workAddrs || [], byYear, byRole,
     dated: dated.length, undated: undated.length,
     recent, prior, spanYears, intensity, headTrend,
-    signals: signals.sort((a, b) => (b.level === 'high' ? 1 : 0) - (a.level === 'high' ? 1 : 0)),
+    depts,
+    signals: [...signals, ...depts.findings.filter((f) => f.k !== 'now').map((f) => ({
+      kind: f.k === 'weak' || f.k === 'temp' ? 'churn' : 'gap', level: f.k === 'weak' ? 'high' : f.k === 'temp' ? 'mid' : 'low',
+      title: f.t, detail: f.k === 'weak' ? depts.repeats.filter((r) => r.avgGap <= 6).slice(0, 3).map((r) => `${r.dept}(${r.lvl}·${r.emp}) ${r.times}회 · 평균 ${r.avgGap}개월 간격(${r.yms.join(', ')})`).join(' / ') || f.d : f.d,
+      ask: f.d }))].sort((a, b) => (b.level === 'high' ? 1 : 0) - (a.level === 'high' ? 1 : 0)),
   };
 }
 
@@ -5471,6 +5783,33 @@ function renderHiring(h) {
       + `<b>${esc(s.title)}</b><i>${esc(s.detail)}</i><em>▸ ${esc(s.ask)}</em></div>`).join('') + '</div>';
   } else {
     html += `<div class="hire-none">뚜렷한 신호 없음 — 반복 공고나 급증 패턴이 확인되지 않았습니다.</div>`;
+  }
+
+  // ── 부서별 채용 현황 — 어느 부서를 지금 채우고, 어디가 반복 충원(취약)이고, 어디가 비어 있나 ──
+  const D = h.depts;
+  if (D && D.dept && D.dept.length) {
+    const ST = { now: 'ok', repeat: 'bad', ext: 'warn', temp: 'warn', periodic: 'oth' };
+    const empTxt = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' · ');
+    const rows = [...D.dept].sort((a, b) => (b.openNow - a.openNow) || (b.own - a.own));
+    html += `<div class="hire-sec">부서별 채용 현황 <em>최근 3년 · 같은 공고를 여러 사이트에 올린 것은 1건으로 · 채용 ${D.ownOpenings}건${D.extOpenings ? ` + 협력사 공고 ${D.extOpenings}건` : ''}</em></div>`
+      + '<div class="xt-wrap"><table class="xt hire-dept"><thead><tr><th>부서</th><th class="n">채용 건</th><th>최근 공고</th><th class="n hide-m">재공고 간격</th><th class="hide-m">고용형태</th><th>상태</th></tr></thead><tbody>'
+      + rows.map((d) => `<tr class="${d.status.some(([s]) => s === 'repeat') ? 'main' : ''}"><td><b>${esc(d.dept)}</b>${d.sample.length ? `<small>${esc(d.sample[d.sample.length - 1].slice(0, 44))}</small>` : ''}</td>`
+        + `<td class="n">${d.own}${d.ext ? `<small>협력사 ${d.ext}</small>` : ''}</td>`
+        + `<td>${d.lastYm ? `${esc(d.lastYm)}<small>${d.since === 0 ? '이번 달' : `${d.since}개월 전`}</small>` : '—'}</td>`
+        + `<td class="n hide-m">${d.med != null ? `${d.med}개월` : '—'}</td><td class="hide-m">${esc(empTxt(d.emp) || '—')}</td>`
+        + `<td>${d.status.length ? d.status.map(([s, t]) => `<span class="xtag t-${ST[s] || 'oth'}">${esc(t)}</span>`).join('') : '<span class="xtag t-oth">단발</span>'}</td></tr>`).join('')
+      + '</tbody></table></div>';
+    const missing = HIRE_CORE.filter((c) => !D.dept.some((d) => d.dept === c && d.own));
+    if (missing.length && D.ownOpenings >= 2) html += `<div class="hire-warn">3년간 공고가 없는 핵심 부서: <b>${esc(missing.join(' · '))}</b> — 인원이 안정적이거나 겸직·외부 위탁일 수 있습니다. 담당 인원수를 확인하세요.</div>`;
+    if (D.repeats.length) {
+      html += `<div class="hire-sec">같은 직책 반복 채용 <em>부서·직급·고용형태가 같은 채용이 다시 나온 경우</em></div><ul class="hire-rep">`
+        + D.repeats.slice(0, 6).map((r) => `<li class="${r.avgGap <= 6 ? 'bad' : ''}"><b>${esc(r.dept)}</b> · ${esc(r.lvl)} · ${esc(r.emp)} — <b>${r.times}회</b>, 평균 ${r.avgGap}개월 간격(최단 ${r.minGap}개월)<small>${esc(r.yms.join(' → '))}</small></li>`).join('')
+        + '</ul>';
+    }
+    if (D.ext.length) html += `<div class="hire-sec">이 회사 사업장 이름을 건 협력사 공고 <em>파견·도급·구내식당 등</em></div><ul class="hire-rep">`
+      + D.ext.slice(0, 5).map((x) => `<li>${esc(x.company)} — ${esc(x.title.slice(0, 60))}${x.ym ? `<small>${esc(x.ym)}</small>` : ''}</li>`).join('') + '</ul>';
+    const srcs = Object.entries(D.sites).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' · ');
+    html += `<div class="hire-warn">수집: ${esc(srcs)}${D.est ? ` · 마감 공고 ${D.est}건은 사람인 공고번호 순서로 시점을 가늠했습니다` : ''}${D.notJob ? ` · 임상·인체적용시험 참여자 모집 ${D.notJob}건 제외` : ''}. 사람인 마감 공고 목록은 사이트가 보관하는 범위까지만 보입니다.</div>`;
   }
 
   // ── 좌우 2단 ──
