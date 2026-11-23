@@ -1,0 +1,75 @@
+name: Diagnose hiring collection
+
+# 채용공고 수집 품질 점검 — 배포 사이트의 hiringTrace를 돌려 사이트 분포·날짜 확보율·직종·같은 공고 중복 게시를 본다.
+# 함께 채용 사이트의 '지난 공고' 목록 페이지가 프록시 fetchPage로 열리는지 시험한다. 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      names: { description: '상호(| 구분)', required: true, type: string, default: '한국콜마|에바스코스메틱|코스맥스' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Check
+        env:
+          SITE: ${{ inputs.site }}
+          NAMES: ${{ inputs.names }}
+        run: |
+          npm i -s playwright@1.56.1 2>&1 | tail -2
+          npx -y playwright@1.56.1 install --with-deps chromium 2>&1 | tail -1
+          cat > d.mjs <<'JS'
+          import { chromium } from 'playwright';
+          const n = (t) => console.log('::notice::' + String(t).replace(/\r?\n/g, ' ').slice(0, 3800));
+          const b = await chromium.launch();
+          const page = await b.newPage();
+          page.on('pageerror', (e) => n('pageerror ' + e.message));
+          await page.goto(process.env.SITE.replace(/\/$/, '') + '/');
+          await page.evaluate((s) => { localStorage.clear(); localStorage.setItem('vs_proxy', s.replace(/\/$/, '') + '/api/proxy'); }, process.env.SITE);
+          await page.reload(); await page.waitForTimeout(2500);
+          n('build ' + await page.evaluate(() => BUILD));
+          for (const nm of process.env.NAMES.split('|')) {
+            const r = await page.evaluate(async (q) => {
+              const t0 = Date.now();
+              const h = await hiringTrace(q).catch((e) => ({ err: e.message }));
+              if (!h || h.err) return { err: h && h.err };
+              const host = {}; h.posts.forEach((p) => { const k = p.host.replace(/^www\.|^m\./, ''); host[k] = (host[k] || 0) + 1; });
+              const dated = h.posts.filter((p) => p.dates.length).length;
+              const role = {}; h.posts.forEach((p) => { role[p.role] = (role[p.role] || 0) + 1; });
+              return { ms: Date.now() - t0, n: h.posts.length, dated, host, role, affil: h.affil,
+                diag: (h.extDiag || []).map((x) => `${x.host}/${x.kind}:${x.ok ? x.found : x.why}`).slice(0, 14),
+                posts: h.posts.map((p) => `${(p.dates[0] || '----')}|${p.host.replace(/^www\./, '')}|${p.role}|${p.title.slice(0, 70)}|${p.desc.slice(0, 120)}`) };
+            }, nm);
+            if (r.err) { n(`[${nm}] 실패 ${r.err}`); continue; }
+            n(`[${nm}] ${r.ms}ms · 공고 ${r.n}건 · 날짜 확보 ${r.dated}건 · 사이트 ${JSON.stringify(r.host)} · 직종 ${JSON.stringify(r.role)} · 계열 제외 ${(r.affil || []).join(',')}`);
+            n(`[${nm} 페이지] ${r.diag.join(' ‖ ')}`);
+            for (let i = 0; i < r.posts.length; i += 6) n(`[${nm} 공고 ${i + 1}~] ${r.posts.slice(i, i + 6).join(' ‖ ')}`);
+          }
+          // 채용 사이트 '지난 공고' 목록이 열리는지 — fetchPage 프록시로
+          const urls = [
+            'https://www.saramin.co.kr/zf_user/search/recruit?searchword=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88&recruitPage=1',
+            'https://www.saramin.co.kr/zf_user/company-info/view-inner-recruit?csn=a1BxcHFOVkxBNm1xZkMyc0JlYzZUQT09',
+            'https://www.jobkorea.co.kr/Search/?stext=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
+            'https://search.incruit.com/list/search.asp?col=job&kw=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
+            'https://www.alba.co.kr/search/Search.asp?WsSrchWord=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
+            'https://www.albamon.com/total-search?keyword=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
+            'https://www.work24.go.kr/wk/a/b/1200/retriveDtlEmpSrchList.do?srcKeyword=%ED%95%9C%EA%B5%AD%EC%BD%9C%EB%A7%88',
+          ];
+          for (const u of urls) {
+            const r = await page.evaluate(async (url) => {
+              try { const x = await proxyOnlyGet('fetchPage', { url }); const t = String((x && x.text) || ''); const txt = t.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+                const dates = (txt.match(/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}|\d{2}\/\d{2}\(.\)|~\s?\d{2}\/\d{2}/g) || []).slice(0, 12);
+                return `HTTP ${x && x.status} · ${t.length}자 · 날짜 ${dates.join(',')} :: ${txt.slice(0, 500)}`; }
+              catch (e) { return '실패 ' + e.message; }
+            }, u);
+            n(`[페이지 ${u.split('/')[2]}] ${r}`);
+          }
+          await b.close();
+          JS
+          node d.mjs
