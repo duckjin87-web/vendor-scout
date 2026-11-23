@@ -3869,7 +3869,7 @@ function analyzeHireDepts(posts) {
     if (own.length >= 2 && temp / own.length >= 0.5) status.push(['temp', '비정규 위주']);
     return { dept: d, own: own.length, ext: ext.length, months: ms, med, last, lastYm: last != null ? `${Math.floor(last / 12)}-${String(last % 12 + 1).padStart(2, '0')}` : null,
       // 대표 공고는 그 부서만 뽑은 공고를 앞세운다(여러 부서를 한꺼번에 뽑는 공채 제목은 부서를 설명하지 못한다)
-      since: last != null ? curYm - last : null, emp: empC, temp, openNow, status, sample: [...own].sort((x, y) => (y.depts.length === 1) - (x.depts.length === 1) || (x.n ?? 0) - (y.n ?? 0)).filter((o, i, arr) => o.depts.length === 1 || i === arr.length - 1).slice(-3).map((o) => o.title) };
+      since: last != null ? curYm - last : null, emp: empC, temp, openNow, status, sample: [...own].sort((x, y) => (x.depts.length === 1) - (y.depts.length === 1) || (x.n ?? 0) - (y.n ?? 0)).slice(-3).map((o) => o.title) };   // 화면은 마지막(= 가장 최근 단독 공고)을 쓴다
   }).filter((d) => d.own || d.ext);
   // 같은 직책 반복 — 부서 + 직급 + 고용형태가 같은 채용이 다시 나온 경우
   const posMap = new Map();
