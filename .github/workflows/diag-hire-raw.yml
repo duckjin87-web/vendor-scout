@@ -1,0 +1,58 @@
+name: Collect hiring page samples
+
+# 채용 사이트 목록·기업 채용 탭 HTML 표본을 받아 diag-samples 브랜치에 올린다(파서 작성용). main에는 커밋하지 않는다.
+on:
+  workflow_dispatch:
+    inputs:
+      names: { description: '상호(| 구분)', required: true, type: string, default: '한국콜마|에바스코스메틱' }
+
+permissions:
+  contents: write
+
+jobs:
+  grab:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Fetch
+        env:
+          NAMES: ${{ inputs.names }}
+        run: |
+          mkdir -p out
+          cat > g.mjs <<'JS'
+          import fs from 'node:fs';
+          const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', 'Accept-Language': 'ko-KR,ko;q=0.9' };
+          const get = async (u) => { try { const r = await fetch(u, { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(25000) }); const b = Buffer.from(await r.arrayBuffer()); const cs = /euc-?kr/i.test(r.headers.get('content-type') || '') || /charset=["']?euc-kr/i.test(b.slice(0, 3000).toString('latin1')) ? 'euc-kr' : 'utf-8'; return { s: r.status, t: new TextDecoder(cs).decode(b), u: r.url }; } catch (e) { return { s: 0, t: '', err: e.message }; } };
+          const save = (f, x) => { fs.writeFileSync(`out/${f}`, x.t || ''); console.log(`::notice::${f} ${x.s} ${x.t ? x.t.length : 0}자 ${x.err || ''} ${x.u || ''}`); return x; };
+          let i = 0;
+          for (const nm of process.env.NAMES.split('|')) {
+            const k = encodeURIComponent(nm); i++;
+            const sr = save(`${i}-saramin-search.html`, await get(`https://www.saramin.co.kr/zf_user/search/recruit?searchword=${k}&recruitPageCount=100`));
+            const csn = (sr.t.match(/csn=([A-Za-z0-9%=]+)/) || [])[1];
+            if (csn) {
+              save(`${i}-saramin-company.html`, await get(`https://www.saramin.co.kr/zf_user/company-info/view?csn=${csn}`));
+              save(`${i}-saramin-recruit.html`, await get(`https://www.saramin.co.kr/zf_user/company-info/view-inner-recruit?csn=${csn}`));
+              save(`${i}-saramin-recruit-end.html`, await get(`https://www.saramin.co.kr/zf_user/company-info/view-inner-recruit?csn=${csn}&type=end`));
+            }
+            const jk = save(`${i}-jobkorea-search.html`, await get(`https://www.jobkorea.co.kr/Search/?stext=${k}&tabType=recruit`));
+            const jco = (jk.t.match(/\/Recruit\/Co_Read\/C\/([A-Za-z0-9_-]+)/) || jk.t.match(/\/company\/(\d+)/) || [])[1];
+            if (jco) {
+              save(`${i}-jobkorea-company.html`, await get(/^\d+$/.test(jco) ? `https://www.jobkorea.co.kr/company/${jco}` : `https://www.jobkorea.co.kr/Recruit/Co_Read/C/${jco}`));
+              if (/^\d+$/.test(jco)) save(`${i}-jobkorea-company-recruit.html`, await get(`https://www.jobkorea.co.kr/company/${jco}/Recruit`));
+            }
+            const ic = save(`${i}-incruit-search.html`, await get(`https://search.incruit.com/list/search.asp?col=job&kw=${k}`));
+            const icc = (ic.t.match(/job\.incruit\.com\/company\/(\d+)/) || [])[1];
+            if (icc) { save(`${i}-incruit-company.html`, await get(`https://job.incruit.com/company/${icc}/`)); save(`${i}-incruit-company-job.html`, await get(`https://job.incruit.com/company/${icc}/job/`)); }
+            save(`${i}-alba-search.html`, await get(`https://www.alba.co.kr/search/Search.asp?WsSrchWord=${k}`));
+            save(`${i}-albamon-search.html`, await get(`https://www.albamon.com/total-search?keyword=${k}`));
+          }
+          JS
+          node g.mjs
+      - name: Push samples
+        run: |
+          cd out
+          git init -q -b diag-samples
+          git config user.name "github-actions[bot]"; git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -qm "hiring page samples $(date -u +%F)"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" diag-samples
