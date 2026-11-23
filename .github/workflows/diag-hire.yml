@@ -44,19 +44,20 @@ jobs:
               const role = {}; h.posts.forEach((p) => { role[p.role] = (role[p.role] || 0) + 1; });
               const A = analyzeHiring(h.posts, h.heads, 0, null, h.extDiag, h.extProfile, h.hpHints, h.workAddrs);
               const D = A.depts || {};
+              let ui = ''; try { const box = renderHiring({ ...A, affil: h.affil }); const t = box.querySelector('.hire-dept'); ui = `표 ${t ? t.querySelectorAll('tbody tr').length + '행' : '없음'} :: ${(box.textContent || '').replace(/\s+/g, ' ').slice(0, 900)}`; } catch (e) { ui = '렌더 오류 ' + e.message; }
               const dep = (D.dept || []).map((d) => `${d.dept}:${d.own}${d.ext ? `+협${d.ext}` : ''}/최근 ${d.lastYm || '-'}/간격 ${d.med ?? '-'}/${d.status.map((x) => x[1]).join(',') || '단발'}`).join(' ; ');
               const rep = (D.repeats || []).map((r) => `${r.dept}|${r.lvl}|${r.emp} ${r.times}회 ${r.avgGap}개월 ${r.yms.join('>')}`).join(' ; ');
               return { ms: Date.now() - t0, n: h.posts.length, raw: h.rawPostN, board: h.boardN, dated, host, role, affil: h.affil,
                 dept: `채용 ${D.ownOpenings}건(+협력사 ${D.extOpenings}) · 날짜 ${D.dated}(추정 ${D.est}) · 제외 ${D.notJob} :: ${dep}`, rep, find: (D.findings || []).map((f) => f.t).join(' / '),
-                sig: (A.signals || []).map((x) => `[${x.level}] ${x.title}`).join(' / '),
+                sig: (A.signals || []).map((x) => `[${x.level}] ${x.title}`).join(' / '), ui,
                 diag: (h.extDiag || []).map((x) => `${x.host}/${x.kind}:${x.ok ? x.found : x.why}`).slice(0, 14),
                 posts: h.posts.map((p) => `${(p.dates[0] || '----')}${p.board && p.board.ymEst ? '~' : ''}|${(p.board && p.board.site) || p.host}|${p.board && p.board.belong === 'partner' ? '협력사|' : ''}${p.board && p.board.status ? p.board.status + '|' : ''}${p.title.slice(0, 60)}|${p.desc.slice(0, 80)}`) };
             }, nm);
             if (r.err) { n(`[${nm}] 실패 ${r.err}`); continue; }
             n(`[${nm}] ${r.ms}ms · 공고 ${r.n}건(목록 ${r.board} · 검색 원본 ${r.raw}) · 날짜 확보 ${r.dated}건 · 사이트 ${JSON.stringify(r.host)} · 직종 ${JSON.stringify(r.role)} · 계열 제외 ${(r.affil || []).join(',')}`);
             n(`[${nm} 페이지] ${r.diag.join(' ‖ ')}`);
-            for (let i = 0; i < r.posts.length; i += 6) n(`[${nm} 공고 ${i + 1}~] ${r.posts.slice(i, i + 6).join(' ‖ ')}`);
-            n(`[${nm} 부서] ${r.dept}`); n(`[${nm} 직책 반복] ${r.rep || '-'}`); n(`[${nm} 해석] ${r.find || '-'} ‖ 신호 ${r.sig || '-'}`);
+            if (process.env.POSTS === '1') for (let i = 0; i < r.posts.length; i += 6) n(`[${nm} 공고 ${i + 1}~] ${r.posts.slice(i, i + 6).join(' ‖ ')}`);
+            n(`[${nm} 부서] ${r.dept}`); n(`[${nm} 직책 반복] ${r.rep || '-'}`); n(`[${nm} 해석] ${r.find || '-'} ‖ 신호 ${r.sig || '-'}`); n(`[${nm} 화면] ${r.ui}`);
           }
           await b.close();
           JS
