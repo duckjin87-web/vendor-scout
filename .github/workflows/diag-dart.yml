@@ -1,0 +1,26 @@
+name: Diagnose DART connection
+
+# 배포된 프록시의 DART 키 상태와 기본 조회를 확인한다(키 값은 출력하지 않는다). 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+      corp: { description: '시험 corp_code(한국콜마 등)', required: false, type: string, default: '00126380' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Probe
+        env:
+          SITE: ${{ inputs.site }}
+          CORP: ${{ inputs.corp }}
+        run: |
+          P="$SITE/api/proxy?service=dart"
+          echo "::notice::[status] $(curl -s "$P&op=status" | head -c 600)"
+          echo "::notice::[company] $(curl -s "$P&op=company&corp_code=$CORP" | head -c 900)"
+          echo "::notice::[acnt 2025 사업] $(curl -s "$P&op=acnt&corp_code=$CORP&bsns_year=2025&reprt_code=11011" | head -c 1200)"
+          echo "::notice::[list] $(curl -s "$P&op=list&corp_code=$CORP&bgn_de=20260101&page_count=5" | head -c 1200)"
