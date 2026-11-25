@@ -480,50 +480,13 @@ async function handleGrowth(env, op) {
 }
 
 
-// ── OpenDART(금융감독원 전자공시) ──
-// 키는 Vercel 환경변수에만 둔다. 이름이 DART_API_KEY가 아닐 수도 있어 DART로 시작하고 KEY로 끝나는 변수를 찾는다(값은 내보내지 않는다).
-// 허용한 조회만 중계한다 — 기업개황·공시검색·주요계정·전체재무제표·타법인출자·직원현황.
-const DART_OPS = {
-  company: 'company.json',                     // 기업개황(corp_code)
-  list: 'list.json',                           // 공시검색(corp_code·기간·종류)
-  acnt: 'fnlttSinglAcnt.json',                 // 단일회사 주요계정(corp_code·bsns_year·reprt_code)
-  acntAll: 'fnlttSinglAcntAll.json',           // 단일회사 전체 재무제표(+fs_div)
-  invest: 'otrCprInvstmntSttus.json',          // 타법인 출자현황 — 비상장 자회사 재무
-  emp: 'empSttus.json',                        // 직원 현황
-};
-const DART_PARAMS = ['corp_code', 'bgn_de', 'end_de', 'last_reprt_at', 'pblntf_ty', 'pblntf_detail_ty', 'corp_cls', 'sort', 'sort_mth', 'page_no', 'page_count', 'bsns_year', 'reprt_code', 'fs_div'];
-function dartKey(env) {
-  const name = ['DART_API_KEY', 'DART_KEY', 'OPENDART_API_KEY', 'OPENDART_KEY'].find((k) => env[k])
-    || Object.keys(env).find((k) => /^(OPEN)?DART.*KEY$/i.test(k) && env[k]);
-  return name ? { name, key: String(env[name]).trim() } : null;
-}
-async function handleDart(url, env) {
-  const k = dartKey(env);
-  if (!k) return jsonRes({ error: 'DART 키 환경변수 없음(DART_API_KEY)' }, 500);
-  const op = url.searchParams.get('op') || 'company';
-  if (op === 'status') {
-    // 키가 살아 있는지만 본다 — 삼성전자(00126380) 기업개황으로 시험. 키 값은 돌려주지 않는다.
-    // 연결 실패 원인을 보려고 relay 대신 직접 부르고 오류(원인 포함)를 그대로 남긴다 — http/https 둘 다 시험
-    const tries = [];
-    for (const base of ['https://opendart.fss.or.kr', 'http://opendart.fss.or.kr']) {
-      const t0 = Date.now();
-      try {
-        const r = await fetch(`${base}/api/company.json?crtfc_key=${encodeURIComponent(k.key)}&corp_code=00126380`, { signal: AbortSignal.timeout(12000), headers: { 'User-Agent': 'Mozilla/5.0 vendor-scout' } });
-        const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch { /* 무시 */ }
-        tries.push({ base, http: r.status, ms: Date.now() - t0, status: j && j.status, message: j && j.message, sample: j && j.corp_name, body: j ? undefined : t.slice(0, 160) });
-        if (j && j.status === '000') break;
-      } catch (e) {
-        tries.push({ base, ms: Date.now() - t0, err: String(e && e.message || e), cause: String((e && e.cause && (e.cause.code || e.cause.message)) || '') });
-      }
-    }
-    const ok = tries.some((x) => x.status === '000');
-    return jsonRes({ env: k.name, keyLen: k.key.length, ok, tries });
-  }
-  const file = DART_OPS[op];
-  if (!file) return jsonRes({ error: `지원하지 않는 DART 조회: ${op}` }, 400);
-  const q = new URLSearchParams({ crtfc_key: k.key });
-  for (const p of DART_PARAMS) { const v = url.searchParams.get(p); if (v) q.set(p, v); }
-  return relay(`https://opendart.fss.or.kr/api/${file}?${q}`, `DART(${op})`);
+// ── OpenDART — Edge에서는 opendart 호출이 'internal error'로 끊겨 Node.js 함수(api/dart.js)로 넘긴다 ──
+async function handleDart(req, url) {
+  const q = new URLSearchParams(url.searchParams); q.delete('service');
+  try {
+    const r = await fetch(new URL(`/api/dart?${q}`, req.url), { signal: AbortSignal.timeout(24000) });
+    return new Response(await r.text(), { status: r.status, headers: JSON_HDR });
+  } catch (e) { return jsonRes({ error: 'DART 중계 함수 호출 실패', detail: String(e && e.message || e) }, 502); }
 }
 
 export default async function handler(req) {
@@ -544,7 +507,7 @@ export default async function handler(req) {
     if (service === 'naverNews')       return handleNaver(url, env, 'news');
     if (service === 'naverWeb')        return handleNaver(url, env, 'webkr');
     if (service === 'naverLocal')      return handleNaver(url, env, 'local');
-    if (service === 'dart')            return handleDart(url, env);
+    if (service === 'dart')            return handleDart(req, url);
     if (service === 'fetchPage')       return handleFetchPage(url);
     if (service === 'img')             return handleImg(url);
     if (service === 'doc')             return handleImg(url, 'doc');   // 회사소개서·카탈로그 PDF(심층분석)

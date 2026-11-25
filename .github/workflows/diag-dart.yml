@@ -21,7 +21,8 @@ jobs:
         run: |
           P="$SITE/api/proxy?service=dart"
           echo "::notice::[GitHub 서버 → DART 직접(키 없이)] $(curl -s -m 15 -w ' HTTP %{http_code}' 'https://opendart.fss.or.kr/api/company.json?crtfc_key=x&corp_code=00126380' | head -c 400)"
-          echo "::notice::[status] $(curl -s "$P&op=status" | head -c 600)"
+          echo "::notice::[Node 함수 직접 status] $(curl -s "$SITE/api/dart?op=status" | head -c 600)"
+          echo "::notice::[proxy 경유 status] $(curl -s "$P&op=status" | head -c 600)"
           echo "::notice::[company] $(curl -s "$P&op=company&corp_code=$CORP" | head -c 900)"
           echo "::notice::[acnt 2025 사업] $(curl -s "$P&op=acnt&corp_code=$CORP&bsns_year=2025&reprt_code=11011" | head -c 1200)"
           echo "::notice::[list] $(curl -s "$P&op=list&corp_code=$CORP&bgn_de=20260101&page_count=5" | head -c 1200)"
