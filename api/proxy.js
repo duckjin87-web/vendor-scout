@@ -503,9 +503,21 @@ async function handleDart(url, env) {
   const op = url.searchParams.get('op') || 'company';
   if (op === 'status') {
     // 키가 살아 있는지만 본다 — 삼성전자(00126380) 기업개황으로 시험. 키 값은 돌려주지 않는다.
-    const r = await relay(`https://opendart.fss.or.kr/api/company.json?crtfc_key=${encodeURIComponent(k.key)}&corp_code=00126380`, 'DART(status)');
-    let j = null; try { j = await r.json(); } catch { /* 무시 */ }
-    return jsonRes({ env: k.name, keyLen: k.key.length, status: j && j.status, message: j && j.message, ok: !!(j && j.status === '000'), sample: j && j.corp_name });
+    // 연결 실패 원인을 보려고 relay 대신 직접 부르고 오류(원인 포함)를 그대로 남긴다 — http/https 둘 다 시험
+    const tries = [];
+    for (const base of ['https://opendart.fss.or.kr', 'http://opendart.fss.or.kr']) {
+      const t0 = Date.now();
+      try {
+        const r = await fetch(`${base}/api/company.json?crtfc_key=${encodeURIComponent(k.key)}&corp_code=00126380`, { signal: AbortSignal.timeout(12000), headers: { 'User-Agent': 'Mozilla/5.0 vendor-scout' } });
+        const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch { /* 무시 */ }
+        tries.push({ base, http: r.status, ms: Date.now() - t0, status: j && j.status, message: j && j.message, sample: j && j.corp_name, body: j ? undefined : t.slice(0, 160) });
+        if (j && j.status === '000') break;
+      } catch (e) {
+        tries.push({ base, ms: Date.now() - t0, err: String(e && e.message || e), cause: String((e && e.cause && (e.cause.code || e.cause.message)) || '') });
+      }
+    }
+    const ok = tries.some((x) => x.status === '000');
+    return jsonRes({ env: k.name, keyLen: k.key.length, ok, tries });
   }
   const file = DART_OPS[op];
   if (!file) return jsonRes({ error: `지원하지 않는 DART 조회: ${op}` }, 400);
