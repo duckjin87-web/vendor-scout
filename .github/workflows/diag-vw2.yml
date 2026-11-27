@@ -1,0 +1,27 @@
+name: Diagnose vworld endpoints
+
+# 브이월드 API가 JSON 대신 홈페이지 HTML을 줄 때 — 리다이렉트·상태·엔드포인트별 응답을 본다(키 없이). 커밋 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      site: { description: '사이트 주소', required: true, type: string, default: 'https://vendor-scout-gilt.vercel.app' }
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Probe
+        env:
+          SITE: ${{ inputs.site }}
+        run: |
+          for u in 'https://api.vworld.kr/req/address?service=address&request=getcoord&type=road&format=json&address=x&key=x' \
+                   'https://api.vworld.kr/req/data?service=data&request=GetFeature&format=json&data=LP_PA_CBND_BUBUN&key=x' \
+                   'https://api.vworld.kr/ned/data/getLandUseAttr?format=json&pnu=1&key=x' \
+                   'https://api.vworld.kr/' 'http://api.vworld.kr/req/address?service=address&key=x'; do
+            echo "::notice::[$u] $(curl -s -m 15 -o /tmp/b -w 'HTTP %{http_code} → %{redirect_url} · %{size_download}B' "$u") :: $(head -c 300 /tmp/b | tr '\n' ' ')"
+            echo "::notice::[헤더] $(curl -sI -m 15 "$u" | tr '\r\n' '  ' | head -c 500)"
+          done
+          echo "::notice::[프록시 address] $(curl -s "$SITE/api/proxy?service=vworld&op=address&request=getcoord&type=road&address=%EC%84%B8%EC%A2%85%ED%8A%B9%EB%B3%84%EC%9E%90%EC%B9%98%EC%8B%9C%20%EC%A0%84%EC%9D%98%EB%A9%B4%20%EB%8D%95%EA%B3%A0%EA%B0%9C%EA%B8%B8%2012-11" | head -c 300)"
