@@ -25,3 +25,5 @@ jobs:
             echo "::notice::[헤더] $(curl -sI -m 15 "$u" | tr '\r\n' '  ' | head -c 500)"
           done
           echo "::notice::[프록시 address] $(curl -s "$SITE/api/proxy?service=vworld&op=address&request=getcoord&type=road&address=%EC%84%B8%EC%A2%85%ED%8A%B9%EB%B3%84%EC%9E%90%EC%B9%98%EC%8B%9C%20%EC%A0%84%EC%9D%98%EB%A9%B4%20%EB%8D%95%EA%B3%A0%EA%B0%9C%EA%B8%B8%2012-11" | head -c 300)"
+          curl -s -m 20 https://www.vworld.kr/notice/serviceNotice.html -o /tmp/n.html
+          python3 -c "import re,html;t=open('/tmp/n.html',encoding='utf-8',errors='ignore').read();t=re.sub(r'<(script|style)[\\s\\S]*?</\\1>',' ',t);t=html.unescape(re.sub(r'<[^>]+>',' ',t));t=re.sub(r'\\s+',' ',t);print('::notice::[공지] '+t[:2500])"
