@@ -7,7 +7,9 @@ const SG_REF_KEY = 'vs_sg_ref1';
 const SG_TTL = 30 * 864e5;
 const _sgBusy = new Set();
 
-const sgVw = (p) => proxyOnlyGet('vworld', p);
+// 브이월드 점검(프록시가 503 '서비스 점검 중'으로 알린다)이면 표시해 둔다 — 좌표 변환 실패를 점검 탓으로 알리기 위해
+let _sgMaint = false;
+const sgVw = (p) => proxyOnlyGet('vworld', p).catch((e) => { if (/점검/.test(String(e && e.message))) _sgMaint = true; throw e; });
 const sgFeats = (j) => (j && j.response && j.response.result && j.response.result.featureCollection && j.response.result.featureCollection.features) || [];
 // 좌표는 소수 6자리(약 10cm)까지만 — 저장 리포트 크기를 줄인다
 const sgR6 = (v) => Math.round(v * 1e6) / 1e6;
@@ -182,6 +184,8 @@ const sgFmtM = (m) => (m == null ? '—' : m < 1000 ? `${m}m` : `${(m / 1000).to
 // 리포트를 그릴 때 부른다 — 이미 있으면 그대로, 없으면 받아서 meta.geo에 담고 다시 그린다
 function sgEnsure(report) {
   const M = report && report.meta;
+  // 실패한 결과(점검·장애)는 10분이 지나면 다시 받는다 — 예전엔 실패가 리포트에 저장돼 복구 뒤에도 계속 오류로 남았다
+  if (M && M.geo && M.geo.err && Date.now() - (M.geo.at || 0) > 10 * 60 * 1000) delete M.geo;
   if (!M || !M.live || M.geo || !getProxy()) return;
   const key = M.vendor_id || M.vendor_name;
   if (_sgBusy.has(key)) return;
@@ -190,11 +194,12 @@ function sgEnsure(report) {
     const addr = (M.bld && M.bld.queried) || M.visit_addr || '';
     let pt = await sgGeocode(addr).catch(() => null);
     if (!pt && M.visit_coord) pt = { lng: M.visit_coord.lng, lat: M.visit_coord.lat, src: '카카오' };
-    if (!pt) { M.geo = { err: '공장 주소를 좌표로 바꾸지 못했습니다', at: Date.now() }; return; }
+    if (!pt) { M.geo = { err: _sgMaint ? '브이월드 서비스 점검 중' : '공장 주소를 좌표로 바꾸지 못했습니다', at: Date.now() }; return; }
     const [site, ref, addrs] = await Promise.all([
       sgSiteAt(pt), sgRefSite(M.ref_point).catch(() => null), sgAddrCheck(M, pt, addr).catch(() => []),
     ]);
     M.geo = { at: Date.now(), addr, src: pt.src, site, ref, addrs };
+    if (!site && _sgMaint) M.geo = { err: '브이월드 서비스 점검 중', at: Date.now() };
   })().catch((e) => {
     // 키 미설정·차단은 조용히 넘어간다(탭은 예전처럼 동작)
     M.geo = { err: e && e.message ? e.message.slice(0, 120) : '공간정보 조회 실패', at: Date.now() };
@@ -246,7 +251,7 @@ function sgPlace(report, B) {
   const M = report.meta || {}, G = M.geo;
   if (!M.live) return null;
   if (!G) return getProxy() ? { html: '<p class="at-wait">브이월드에서 용도지역·부지 경계·건물 윤곽을 불러오는 중…</p>', src: [], badge: '' } : null;
-  if (G.err) return { html: `<p class="at-wait">공간정보를 불러오지 못했습니다 — ${esc(G.err)}</p>`, src: [], badge: '' };
+  if (G.err) return { html: `<p class="at-wait">${/점검/.test(G.err) ? `브이월드(국토부 공간정보) 서비스가 점검 중이라 입지·부지 정보를 받지 못했습니다. 점검이 끝나면 다시 열 때 자동으로 조회합니다.` : `공간정보를 불러오지 못했습니다 — ${esc(G.err)} (10분 뒤 다시 열면 재조회)`}</p>`, src: [], badge: '' };
   const S = G.site || {}, Z = sgZone(S.uses || []), road = sgRoad(S.uses || []);
   const unit = B && B.unit, plat = B && B.plat;
   const facts = [];

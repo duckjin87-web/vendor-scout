@@ -431,7 +431,16 @@ async function handleVworld(url, env) {
   }
   q.set('key', env.VWORLD_KEY);
   q.set('domain', env.VWORLD_DOMAIN || 'https://vendor-scout-gilt.vercel.app');
-  return relay(`${base}?${q}`, '브이월드');
+  // 브이월드는 점검·장애 때 모든 API를 서비스 공지 페이지로 302 보낸다(2026-11-27 확인). 따라가면 홈페이지 HTML이 와서
+  // 화면에서 알 수 없는 파싱 오류가 났다 — 리다이렉트를 따라가지 않고 '점검 중'으로 알린다.
+  const r = await relay(`${base}?${q}`, '브이월드', { redirect: 'manual' });
+  if (r.status === 502) {
+    const j = await r.clone().json().catch(() => null);
+    if (j && [301, 302, 303, 307, 308].includes(j.upstreamStatus)) return jsonRes({ error: '브이월드 서비스 점검 중', detail: '브이월드가 API 요청을 서비스 공지 페이지로 돌리고 있습니다 — 점검이 끝나면 다시 조회됩니다', maintenance: true }, 503);
+  }
+  const t = await r.clone().text().catch(() => '');
+  if (/^\s*<!DOCTYPE|^\s*<html/i.test(t)) return jsonRes({ error: '브이월드 서비스 점검 중', detail: 'JSON 대신 안내 페이지가 왔습니다', maintenance: true }, 503);
+  return r;
 }
 
 // 브이월드 위성영상 타일(3D 규모 비교의 지붕·마당 질감) — 키는 서버에서만 붙이고 이미지만 돌려준다
